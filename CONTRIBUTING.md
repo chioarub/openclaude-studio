@@ -43,6 +43,15 @@ Use the existing TypeScript, React, and Fastify patterns in the repository. Pref
 
 The local API package is published from GitHub Actions when a `v*` tag is pushed. The npm package should use trusted publishing for `.github/workflows/release.yml`; do not add long-lived npm tokens to repository secrets.
 
+The same release workflow deploys the web app to Cloudflare Pages after validation and npm publishing succeed. Cloudflare Pages Git integration should keep automatic production deployments disabled and preview branch deployments set to `None`; production deploys are handled by the release workflow.
+
+The release workflow needs these repository secrets:
+
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN`
+
+The Cloudflare API token should grant the account-level `Cloudflare Pages:Edit` permission.
+
 ## Security
 
 Do not include real OpenClaude data, provider credentials, local session contents, debug logs, or screenshots containing private data in issues or pull requests.
