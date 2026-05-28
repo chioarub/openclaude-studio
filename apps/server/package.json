@@ -1,12 +1,12 @@
 {
   "name": "openclaude-studio",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Read-only local API bridge for the OpenClaude Studio dashboard.",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/chioarub/openclaude-studio.git",
+    "url": "git+https://github.com/chioarub/openclaude-studio.git",
     "directory": "apps/server"
   },
   "bugs": {
