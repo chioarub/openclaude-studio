@@ -132,6 +132,52 @@ describe('session summaries', () => {
     await expect(readSessionSummaries(paths, projectSummary(projectPath))).resolves.toEqual([]);
   });
 
+  test('does not use command wrapper payloads as titles', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-sessions-'));
+    const projectPath = join(home, 'project-a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'session-4.jsonl'),
+      jsonl({
+        type: 'user',
+        sessionId: 'session-4',
+        timestamp: '2026-05-28T09:00:00.000Z',
+        cwd: projectPath,
+        message: { role: 'user', content: '<command-message>internal command payload' },
+      }),
+      'utf8',
+    );
+
+    const sessions = await readSessionSummaries(paths, projectSummary(projectPath));
+
+    expect(sessions[0]?.title).toBe('Session session-4');
+  });
+
+  test('does not use slash command payloads as titles', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-sessions-'));
+    const projectPath = join(home, 'project-a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'session-5.jsonl'),
+      jsonl({
+        type: 'user',
+        sessionId: 'session-5',
+        timestamp: '2026-05-28T09:00:00.000Z',
+        cwd: projectPath,
+        message: { role: 'user', content: '/internal-command with payload' },
+      }),
+      'utf8',
+    );
+
+    const sessions = await readSessionSummaries(paths, projectSummary(projectPath));
+
+    expect(sessions[0]?.title).toBe('Session session-5');
+  });
+
   test('does not traverse symlinked transcript directories', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-sessions-'));
     const projectPath = join(home, 'project-a');

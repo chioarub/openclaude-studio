@@ -188,7 +188,7 @@ function summarizeSession(
 
   return {
     id: sessionId,
-    title: truncateText(explicitTitle ?? userTitle ?? `Session ${sessionId.slice(0, 8)}`, 80),
+    title: truncateText(explicitTitle ?? userTitle ?? `Session ${sessionId}`, 80),
     status: sortedRows.some((row) => row.failed) ? 'failed' : 'completed',
     firstTimestamp,
     lastTimestamp,
@@ -281,7 +281,15 @@ function extractToolUses(content: unknown): Array<{ name: string; filePath: stri
 }
 
 function cleanTitle(value: string): string {
-  return redactTextSecrets(value).replace(/\s+/g, ' ').trim();
+  const normalized = redactTextSecrets(
+    value
+      .replace(/<command-message>[\s\S]*?(?:<\/command-message>|$)/gi, ' ')
+      .replace(/<[^>]+>/g, ' '),
+  )
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return normalized.startsWith('/') ? '' : normalized;
 }
 
 function truncateText(value: string, maxLength: number): string {
