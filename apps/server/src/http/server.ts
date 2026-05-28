@@ -7,17 +7,23 @@ import type {
   HealthResponse,
   LogEntry,
   OverviewResponse,
+  ProjectsResponse,
   ProjectSummary,
 } from '@openclaude-studio/shared';
 
-import { readActiveProvider, readProjectSummaries } from '../services/openclaudeData.js';
-import { listLogFiles, readLogWindow, searchLogs, type LogSearchRequest } from '../services/logs.js';
+import {
+  readActiveProvider,
+  readProjectSummaries,
+  readProjectSummariesWithDiagnostics,
+} from '../services/openclaudeData.js';
+import { listLogFiles, readLogWindow, searchLogs, type LogFileScope, type LogSearchRequest } from '../services/logs.js';
 import { createOpenClaudePaths, type PathOptions } from '../services/paths.js';
 import { readSessionSummaries } from '../services/sessions.js';
 import { ApiError } from './errors.js';
 
 export type ServerOptions = PathOptions & {
   authToken?: string;
+  allowedOrigins?: string[];
   version?: string;
 };
 
@@ -31,11 +37,21 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
   if (options.home !== undefined) pathOptions.home = options.home;
   if (options.env !== undefined) pathOptions.env = options.env;
   const paths = createOpenClaudePaths(pathOptions);
+  const env = options.env ?? process.env;
   const authToken = options.authToken;
-  const version = options.version ?? process.env.npm_package_version ?? '0.0.1';
+  const version = options.version ?? env.npm_package_version ?? '0.0.1';
+  const configuredAllowedOrigins = new Set([
+    ...(options.allowedOrigins ?? []),
+    ...(env.OPENCLAUDE_STUDIO_ALLOWED_ORIGINS ?? '')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+  ]);
 
   await app.register(cors, {
-    origin: true,
+    origin: (origin, callback) => {
+      callback(null, !origin || configuredAllowedOrigins.has(origin) || isLoopbackBrowserOrigin(origin));
+    },
     methods: ['GET', 'OPTIONS'],
     allowedHeaders: ['content-type', 'x-openclaude-studio-token'],
   });
@@ -77,9 +93,9 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
     uptime: process.uptime(),
   }));
 
-  app.get('/api/projects', async () => ({
-    projects: await readProjectSummaries(paths),
-  }));
+  app.get('/api/projects', async (): Promise<ProjectsResponse> => {
+    return readProjectSummariesWithDiagnostics(paths);
+  });
 
   app.get('/api/provider/active', async () => readActiveProvider(paths));
 
@@ -90,24 +106,26 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
 
   app.get<{ Params: ProjectParams }>('/api/projects/:projectId/overview', async (request) => {
     const project = await resolveProject(paths, request.params.projectId);
-    const [provider, sessions, logs] = await Promise.all([
+    const [provider, sessions] = await Promise.all([
       readActiveProvider(paths),
       readSessionSummaries(paths, project),
-      readLogWindow(paths, undefined, { count: 250 }),
     ]);
+    const logs = await readLogWindow(paths, undefined, { count: 250 }, logScopeFromSessions(sessions));
 
     return buildOverviewResponse(project, provider, sessions, logs);
   });
 
   app.get('/api/logs/files', async () => listLogFiles(paths));
 
-  app.get('/api/logs/window', async (request) =>
-    readLogWindow(paths, queryString(request, 'fileName'), logWindowRequest(request)),
-  );
+  app.get('/api/logs/window', async (request) => {
+    const scope = await logScopeFromRequest(paths, request);
+    return readLogWindow(paths, queryString(request, 'fileName'), logWindowRequest(request), scope);
+  });
 
-  app.get('/api/logs/search', async (request) =>
-    searchLogs(paths, queryString(request, 'fileName'), logSearchRequest(request)),
-  );
+  app.get('/api/logs/search', async (request) => {
+    const scope = await logScopeFromRequest(paths, request);
+    return searchLogs(paths, queryString(request, 'fileName'), logSearchRequest(request), scope);
+  });
 
   return app;
 }
@@ -164,6 +182,24 @@ function buildOverviewResponse(
   };
 }
 
+async function logScopeFromRequest(
+  paths: ReturnType<typeof createOpenClaudePaths>,
+  request: FastifyRequest,
+): Promise<LogFileScope> {
+  const projectId = queryString(request, 'projectId');
+  if (!projectId) {
+    return {};
+  }
+
+  const project = await resolveProject(paths, projectId);
+  const sessions = await readSessionSummaries(paths, project);
+  return logScopeFromSessions(sessions);
+}
+
+function logScopeFromSessions(sessions: Awaited<ReturnType<typeof readSessionSummaries>>): LogFileScope {
+  return { sessionIds: new Set(sessions.map((session) => session.id)) };
+}
+
 function queryString(request: FastifyRequest, key: string): string | undefined {
   const value = queryValue(request, key);
   return typeof value === 'string' && value.length > 0 ? value : undefined;
@@ -211,4 +247,17 @@ function queryValue(request: FastifyRequest, key: string): unknown {
     return undefined;
   }
   return (query as Record<string, unknown>)[key];
+}
+
+function isLoopbackBrowserOrigin(origin: string): boolean {
+  try {
+    const parsed = new URL(origin);
+    const hostname = parsed.hostname.toLowerCase();
+    return (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1')
+    );
+  } catch {
+    return false;
+  }
 }

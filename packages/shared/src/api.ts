@@ -30,6 +30,11 @@ export type ProjectSummary = {
   };
 };
 
+export type ProjectsResponse = {
+  projects: ProjectSummary[];
+  diagnostics: Diagnostic[];
+};
+
 export type ProviderSummary = {
   id: string;
   name: string;

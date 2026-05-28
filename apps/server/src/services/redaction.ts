@@ -22,12 +22,16 @@ export function redactSecrets<T>(value: T): T {
 export function redactTextSecrets(content: string): string {
   return content
     .replace(
+      /([?&][A-Za-z0-9_-]*(?:api[_-]?key|token|secret|password|authorization|auth[_-]?header[_-]?value|credential)[A-Za-z0-9_-]*=)([^&\s"']+)/gi,
+      `$1${redactedValue}`,
+    )
+    .replace(
       /\b(sk-[A-Za-z0-9_-]{8,}|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|AIza[0-9A-Za-z_-]{20,})\b/g,
       redactedValue,
     )
     .replace(
-      /\b((?:OPENAI|ANTHROPIC|GEMINI|MISTRAL|MIMO|CODEX|XAI|GITHUB)[A-Z0-9_]*KEY\s*=\s*)([^\s"']+)/gi,
-      `$1${redactedValue}`,
+      /\b(((?:OPENAI|ANTHROPIC|GEMINI|MISTRAL|MIMO|CODEX|XAI|GITHUB)[A-Z0-9_]*KEY|token)\s*=\s*)(["']?)([^\s"']+)/gi,
+      `$1$3${redactedValue}`,
     )
     .replace(/\b(bearer\s+)([A-Za-z0-9._~+/=-]{8,})\b/gi, `$1${redactedValue}`);
 }

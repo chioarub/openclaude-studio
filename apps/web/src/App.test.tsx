@@ -1,135 +1,345 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import type { ProjectSummary } from '@openclaude-studio/shared';
 
 import App from './App';
 
-const connectionStorageKey = 'openclaude-studio.connection';
-let storage: Record<string, string>;
+const serverUrlStorageKey = 'openclaude-studio:server-url';
+const legacyConnectionStorageKey = 'openclaude-studio.connection';
+
+let localStorageData: Record<string, string>;
+let sessionStorageData: Record<string, string>;
 
 beforeEach(() => {
-  storage = {};
-  Object.defineProperty(window, 'localStorage', {
-    configurable: true,
-    value: {
-      clear: vi.fn(() => {
-        storage = {};
-      }),
-      getItem: vi.fn((key: string) => storage[key] ?? null),
-      removeItem: vi.fn((key: string) => {
-        delete storage[key];
-      }),
-      setItem: vi.fn((key: string, value: string) => {
-        storage[key] = value;
-      }),
-    },
-  });
+  localStorageData = {};
+  sessionStorageData = {};
+  window.history.pushState(null, '', '/');
+  Object.defineProperty(window, 'localStorage', { configurable: true, value: storageStub('local') });
+  Object.defineProperty(window, 'sessionStorage', { configurable: true, value: storageStub('session') });
 });
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe('App', () => {
-  test('loads the read-only workspace from the local API', async () => {
-    window.localStorage.setItem(
-      connectionStorageKey,
-      JSON.stringify({ baseUrl: 'http://127.0.0.1:43110', token: 'test-token' }),
-    );
+  test('loads the read-only workspace from the local API without a token prompt', async () => {
     const fetchMock = mockApi();
     vi.stubGlobal('fetch', fetchMock);
 
     render(<App />);
 
-    expect(await screen.findByText('project-a')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /project-a main/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText('API token')).not.toBeInTheDocument();
+    expect(screen.queryByText('Selected project')).not.toBeInTheDocument();
     expect(screen.getByText('Anthropic')).toBeInTheDocument();
     expect(screen.getByText('Build the API')).toBeInTheDocument();
-    expect(screen.getByText('OPENAI_API_KEY=<redacted> slow')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       'http://127.0.0.1:43110/api/projects',
-      expect.objectContaining({ headers: { 'x-openclaude-studio-token': 'test-token' } }),
+      expect.objectContaining({ headers: { accept: 'application/json' } }),
     );
   });
 
-  test('keeps the workspace idle until a token is provided', () => {
-    vi.stubGlobal('fetch', vi.fn());
+  test('uses the saved server URL without reusing a stale persistent token', async () => {
+    window.localStorage.setItem(
+      legacyConnectionStorageKey,
+      JSON.stringify({ baseUrl: 'http://127.0.0.1:43112/', token: 'stale-token' }),
+    );
+    const fetchMock = mockApi({ baseUrl: 'http://127.0.0.1:43112' });
+    vi.stubGlobal('fetch', fetchMock);
 
     render(<App />);
 
-    expect(screen.getByText('Connect to local server')).toBeInTheDocument();
-    expect(screen.getByLabelText('API token')).toHaveValue('');
+    await screen.findByRole('button', { name: /project-a main/i });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:43112/api/projects',
+      expect.objectContaining({ headers: { accept: 'application/json' } }),
+    );
+    expect(window.localStorage.getItem(serverUrlStorageKey)).toBe('http://127.0.0.1:43112');
+    expect(window.localStorage.getItem(legacyConnectionStorageKey)).toBeNull();
   });
 
-  test('saves connection settings from the header form', async () => {
-    const fetchMock = mockApi();
+  test('keeps logs and sessions on their own routes', async () => {
+    vi.stubGlobal('fetch', mockApi());
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    const logsLink = screen.getAllByRole('link', { name: /^Logs$/i })[0];
+    expect(logsLink).toBeDefined();
+    await user.click(logsLink!);
+    expect(await screen.findByText('OPENAI_API_KEY=<redacted> slow')).toBeInTheDocument();
+    await user.hover(screen.getByText('OPENAI_API_KEY=<redacted> slow'));
+    const copyButton = screen.getByRole('button', { name: /copy log message/i });
+    await user.click(copyButton);
+    expect(writeText).toHaveBeenCalledWith('OPENAI_API_KEY=<redacted> slow');
+    expect(document.activeElement).not.toBe(copyButton);
+    expect(screen.queryByRole('combobox', { name: /debug log file/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /debug log file/i }));
+    expect(screen.getByRole('listbox', { name: /debug log file/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /session-1\.txt/i })).toBeInTheDocument();
+
+    const sessionsLink = screen.getAllByRole('link', { name: /^Sessions$/i })[0];
+    expect(sessionsLink).toBeDefined();
+    await user.click(sessionsLink!);
+    expect(screen.getByRole('table')).toBeInTheDocument();
+    expect(screen.getByText('Build the API')).toBeInTheDocument();
+  });
+
+  test('debounces additional log window requests as the log view scrolls', async () => {
+    const fetchMock = mockApi({ logTotalLines: 1200 });
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
 
     render(<App />);
 
-    await user.clear(screen.getByLabelText('Server URL'));
-    await user.type(screen.getByLabelText('Server URL'), 'http://127.0.0.1:43110/');
-    await user.type(screen.getByLabelText('API token'), 'test-token');
-    await user.click(screen.getByRole('button', { name: /refresh/i }));
+    await screen.findByRole('button', { name: /project-a main/i });
+    const logsLink = screen.getAllByRole('link', { name: /^Logs$/i })[0];
+    expect(logsLink).toBeDefined();
+    await user.click(logsLink!);
+    await screen.findByText('line-1');
+    const initialLogRequests = fetchCountByPath(fetchMock, '/api/logs/window');
 
-    await screen.findByText('project-a');
+    const logView = screen.getByRole('region', { name: /log entries/i });
+    Object.defineProperty(logView, 'clientHeight', { configurable: true, value: 320 });
+    logView.scrollTop = 18_000;
+    fireEvent.scroll(logView);
+    logView.scrollTop = 24_000;
+    fireEvent.scroll(logView);
+    logView.scrollTop = 30_000;
+    fireEvent.scroll(logView);
+
     await waitFor(() => {
-      expect(JSON.parse(window.localStorage.getItem(connectionStorageKey) ?? '{}')).toEqual({
-        baseUrl: 'http://127.0.0.1:43110',
-        token: 'test-token',
-      });
+      expect(wasFetchedWithQuery(fetchMock, '/api/logs/window', 'start', '750')).toBe(true);
     });
+    expect(fetchCountByPath(fetchMock, '/api/logs/window')).toBe(initialLogRequests + 1);
+  });
+
+  test('recovers lazy log loading after a failed range request', async () => {
+    const fetchMock = mockApi({ failLogWindowStartOnce: 750, logTotalLines: 1200 });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    const logsLink = screen.getAllByRole('link', { name: /^Logs$/i })[0];
+    expect(logsLink).toBeDefined();
+    await user.click(logsLink!);
+    await screen.findByText('line-1');
+    const initialLogRequests = fetchCountByPath(fetchMock, '/api/logs/window');
+
+    const logView = screen.getByRole('region', { name: /log entries/i });
+    Object.defineProperty(logView, 'clientHeight', { configurable: true, value: 320 });
+    logView.scrollTop = 30_000;
+    fireEvent.scroll(logView);
+
+    expect(await screen.findByText('Injected log failure')).toBeInTheDocument();
+    expect(fetchCountByPath(fetchMock, '/api/logs/window')).toBe(initialLogRequests + 1);
+
+    logView.scrollTop = 31_500;
+    fireEvent.scroll(logView);
+
+    await waitFor(() => {
+      expect(wasFetchedWithQuery(fetchMock, '/api/logs/window', 'start', '800')).toBe(true);
+    });
+    expect(fetchCountByPath(fetchMock, '/api/logs/window')).toBe(initialLogRequests + 2);
+    await waitFor(() => expect(screen.queryByText('Injected log failure')).not.toBeInTheDocument());
+  });
+
+  test('surfaces API diagnostics on the diagnostics route', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockApi({
+        projectDiagnostics: [
+          {
+            level: 'error',
+            message: 'Unable to parse global config.',
+            path: '/tmp/.openclaude.json',
+          },
+        ],
+        projects: [],
+      }),
+    );
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByText('No projects loaded');
+    await user.click(screen.getByRole('link', { name: /diagnostics/i }));
+    expect(await screen.findByText('Unable to parse global config.')).toBeInTheDocument();
+    expect(screen.getByText('error')).toBeInTheDocument();
+    expect(screen.getByLabelText('1 diagnostic error')).toBeInTheDocument();
+  });
+
+  test('scopes log and project diagnostics to the selected project', async () => {
+    const fetchMock = mockApi({
+      projects: [
+        projectFixture({
+          diagnostics: [{ level: 'warn', message: 'Selected project warning.' }],
+        }),
+        projectFixture({
+          id: 'project-2',
+          name: 'project-b',
+          path: '/tmp/project-b',
+          active: false,
+          branch: 'feature',
+          diagnostics: [{ level: 'error', message: 'Other project warning.' }],
+        }),
+      ],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    expect(wasFetchedWithQuery(fetchMock, '/api/logs/window', 'projectId', 'project-1')).toBe(true);
+
+    await user.click(screen.getByRole('link', { name: /diagnostics/i }));
+    expect(await screen.findByText('Selected project warning.')).toBeInTheDocument();
+    expect(screen.queryByText('Other project warning.')).not.toBeInTheDocument();
+  });
+
+  test('filters projects in the header selector and toggles theme', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockApi({
+        projects: [
+            projectFixture({ id: 'project-1', name: 'project-a', path: '/tmp/project-a', active: true }),
+            projectFixture({
+              id: 'project-2',
+              name: 'archived',
+              path: '/tmp/archived',
+              exists: false,
+              branch: 'legacy',
+              diagnostics: [
+                { level: 'error', message: 'Missing project.' },
+                { level: 'warn', message: 'Config is stale.' },
+              ],
+            }),
+          ],
+        }),
+      );
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.click(await screen.findByRole('button', { name: /project-a main/i }));
+    await user.type(screen.getByPlaceholderText('Search projects, paths, branches...'), 'arch');
+    const menu = screen.getByRole('dialog', { name: /project selector/i });
+    expect(within(menu).getByRole('button', { name: /archived.*legacy/i })).toBeInTheDocument();
+    expect(within(menu).queryByRole('button', { name: /project-a main/i })).not.toBeInTheDocument();
+    expect(within(menu).getByLabelText('1 diagnostic error')).toHaveAttribute('title', '1 diagnostic error');
+    expect(within(menu).getByLabelText('1 diagnostic warning')).toHaveAttribute('title', '1 diagnostic warning');
+
+    await user.click(screen.getByRole('button', { name: /switch to dark mode/i }));
+    await waitFor(() => expect(document.documentElement).toHaveClass('dark'));
+  });
+
+  test('ignores stale workspace responses from superseded project loads', async () => {
+    const slowOverview = deferred<Response>();
+    const slowSessions = deferred<Response>();
+    const fetchMock = mockApiWithSlowProjectTwo(slowOverview.promise, slowSessions.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getByRole('button', { name: /project-a main/i }));
+    await user.click(
+      within(screen.getByRole('dialog', { name: /project selector/i })).getByRole('button', {
+        name: /project-b feature/i,
+      }),
+    );
+    await waitFor(() => expect(wasFetched(fetchMock, '/api/projects/project-2/overview')).toBe(true));
+
+    await user.click(screen.getByRole('button', { name: /project-a main/i }));
+    await user.click(
+      within(screen.getByRole('dialog', { name: /project selector/i })).getByRole('button', {
+        name: /project-a main/i,
+      }),
+    );
+    await waitFor(() => expect(fetchCount(fetchMock, '/api/projects/project-1/overview')).toBe(2));
+
+    await act(async () => {
+      slowOverview.resolve(jsonResponse(projectTwoOverviewFixture()));
+      slowSessions.resolve(jsonResponse({ sessions: [projectTwoSessionFixture()] }));
+      await slowOverview.promise;
+      await slowSessions.promise;
+    });
+
+    expect(screen.getByRole('button', { name: /project-a main/i })).toBeInTheDocument();
+    expect(screen.queryByText('OpenAI')).not.toBeInTheDocument();
+    expect(screen.queryByText('Project B stale session')).not.toBeInTheDocument();
   });
 });
 
-function mockApi() {
+function storageStub(kind: 'local' | 'session'): Storage {
+  const data = () => (kind === 'local' ? localStorageData : sessionStorageData);
+  return {
+    clear: vi.fn(() => {
+      if (kind === 'local') {
+        localStorageData = {};
+      } else {
+        sessionStorageData = {};
+      }
+    }),
+    getItem: vi.fn((key: string) => data()[key] ?? null),
+    key: vi.fn((index: number) => Object.keys(data())[index] ?? null),
+    removeItem: vi.fn((key: string) => {
+      delete data()[key];
+    }),
+    setItem: vi.fn((key: string, value: string) => {
+      data()[key] = value;
+    }),
+    get length() {
+      return Object.keys(data()).length;
+    },
+  };
+}
+
+type MockApiOptions = {
+  baseUrl?: string;
+  failLogWindowStartOnce?: number;
+  logTotalLines?: number;
+  projectDiagnostics?: unknown[];
+  projects?: unknown[];
+};
+
+function mockApi(options: MockApiOptions = {}) {
+  const baseUrl = options.baseUrl ?? 'http://127.0.0.1:43110';
+  let failedLogWindowStart = false;
+
   return vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
-    if (url.endsWith('/api/projects')) {
+    const requestUrl = new URL(String(input), baseUrl);
+    const path = requestUrl.pathname;
+
+    if (path === '/api/health') {
       return jsonResponse({
-        projects: [
-          {
-            id: 'project-1',
-            name: 'project-a',
-            path: '/tmp/project-a',
-            exists: true,
-            active: true,
-            branch: 'main',
-            lastUpdated: 'just now',
-            diagnostics: [],
-            usage: {
-              inputTokens: 0,
-              outputTokens: 0,
-              cacheReadTokens: 0,
-              cacheWriteTokens: 0,
-              costUsd: 0.25,
-              lastSessionId: 'session-1',
-            },
-          },
-        ],
+        status: 'ok',
+        version: '0.0.1-test',
+        serverTime: '2026-05-28T08:00:00.000Z',
+        uptime: 1,
       });
     }
-    if (url.endsWith('/api/projects/project-1/overview')) {
+
+    if (path === '/api/projects') {
       return jsonResponse({
-        project: {
-          id: 'project-1',
-          name: 'project-a',
-          path: '/tmp/project-a',
-          exists: true,
-          active: true,
-          branch: 'main',
-          lastUpdated: 'just now',
-          diagnostics: [],
-          usage: {
-            inputTokens: 0,
-            outputTokens: 0,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
-            costUsd: 0.25,
-            lastSessionId: 'session-1',
-          },
-        },
+        diagnostics: options.projectDiagnostics ?? [],
+        projects: options.projects ?? [projectFixture()],
+      });
+    }
+
+    if (path === '/api/projects/project-1/overview') {
+      return jsonResponse({
+        project: projectFixture(),
         provider: {
           id: 'provider-1',
           name: 'Anthropic',
@@ -153,7 +363,8 @@ function mockApi() {
         diagnostics: [],
       });
     }
-    if (url.endsWith('/api/projects/project-1/sessions')) {
+
+    if (path === '/api/projects/project-1/sessions') {
       return jsonResponse({
         sessions: [
           {
@@ -172,32 +383,276 @@ function mockApi() {
         ],
       });
     }
-    if (url.endsWith('/api/logs/window?count=250')) {
-      return jsonResponse({
-        files: [{ name: 'session-1.txt', sizeBytes: 72, modifiedAt: '2026-05-28T08:00:00.000Z', sessionId: 'session-1' }],
-        selectedFile: { name: 'session-1.txt', sizeBytes: 72, modifiedAt: '2026-05-28T08:00:00.000Z', sessionId: 'session-1' },
-        entries: [
-          {
-            id: 'session-1.txt:1',
-            lineNumber: 1,
-            timestamp: '2026-05-28T08:00:00.000Z',
-            level: 'warn',
-            message: 'OPENAI_API_KEY=<redacted> slow',
-          },
-        ],
-        start: 0,
-        count: 250,
-        totalLines: 1,
-        diagnostics: [],
-      });
+
+    if (path === '/api/logs/window') {
+      const projectId = requestUrl.searchParams.get('projectId');
+      const start = Number(requestUrl.searchParams.get('start') ?? 0);
+      if (options.failLogWindowStartOnce === start && !failedLogWindowStart) {
+        failedLogWindowStart = true;
+        return jsonResponse({ error: 'Injected log failure' }, 500);
+      }
+      if (projectId && projectId !== 'project-1') {
+        return jsonResponse({ ...logsFixture(), files: [], selectedFile: null, entries: [], totalLines: 0 });
+      }
+      return jsonResponse(logsFixture({
+        count: Number(requestUrl.searchParams.get('count') ?? 250),
+        start,
+        totalLines: options.logTotalLines ?? 1,
+      }));
     }
+
     return jsonResponse({ error: 'Not found' }, 404);
   });
+}
+
+function projectFixture(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
+  return {
+    id: 'project-1',
+    name: 'project-a',
+    path: '/tmp/project-a',
+    exists: true,
+    active: true,
+    branch: 'main',
+    lastUpdated: 'just now',
+    diagnostics: [],
+    usage: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 0.25,
+      lastSessionId: 'session-1',
+    },
+    ...overrides,
+  };
+}
+
+function logsFixture(options: { count?: number; start?: number; totalLines?: number } = {}) {
+  const start = options.start ?? 0;
+  const totalLines = options.totalLines ?? 1;
+  const count = Math.max(0, Math.min(options.count ?? 250, totalLines - start));
+  const entries = totalLines === 1
+    ? [
+        {
+          id: 'session-1.txt:1',
+          lineNumber: 1,
+          timestamp: '2026-05-28T08:00:00.000Z',
+          level: 'warn' as const,
+          message: 'OPENAI_API_KEY=<redacted> slow',
+        },
+      ]
+    : Array.from({ length: count }, (_, index) => {
+        const lineNumber = start + index + 1;
+        return {
+          id: `session-1.txt:${lineNumber}`,
+          lineNumber,
+          timestamp: '2026-05-28T08:00:00.000Z',
+          level: 'info' as const,
+          message: `line-${lineNumber}`,
+        };
+      });
+
+  return {
+    files: [
+      {
+        name: 'session-1.txt',
+        sizeBytes: 72,
+        modifiedAt: '2026-05-28T08:00:00.000Z',
+        sessionId: 'session-1',
+      },
+    ],
+    selectedFile: {
+      name: 'session-1.txt',
+      sizeBytes: 72,
+      modifiedAt: '2026-05-28T08:00:00.000Z',
+      sessionId: 'session-1',
+    },
+    entries,
+    start,
+    count: options.count ?? 250,
+    totalLines,
+    diagnostics: [],
+  };
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     headers: { 'content-type': 'application/json' },
     status,
+  });
+}
+
+function mockApiWithSlowProjectTwo(slowOverview: Promise<Response>, slowSessions: Promise<Response>) {
+  const baseUrl = 'http://127.0.0.1:43110';
+  const projectTwo = projectFixture({
+    id: 'project-2',
+    name: 'project-b',
+    path: '/tmp/project-b',
+    active: false,
+    branch: 'feature',
+  });
+
+  return vi.fn((input: RequestInfo | URL) => {
+    const requestUrl = new URL(String(input), baseUrl);
+    const path = requestUrl.pathname;
+
+    if (path === '/api/health') {
+      return Promise.resolve(
+        jsonResponse({
+          status: 'ok',
+          version: '0.0.1-test',
+          serverTime: '2026-05-28T08:00:00.000Z',
+          uptime: 1,
+        }),
+      );
+    }
+
+    if (path === '/api/projects') {
+      return Promise.resolve(jsonResponse({ diagnostics: [], projects: [projectFixture(), projectTwo] }));
+    }
+
+    if (path === '/api/projects/project-1/overview') {
+      return Promise.resolve(
+        jsonResponse({
+          project: projectFixture(),
+          provider: {
+            id: 'provider-1',
+            name: 'Anthropic',
+            provider: 'anthropic',
+            model: 'claude-sonnet',
+            baseUrl: 'https://example.com/v1',
+            active: true,
+            apiKeySet: true,
+            authHeaderValueSet: false,
+          },
+          cards: {
+            sessionCount: 1,
+            failedSessionCount: 0,
+            changedFileCount: 1,
+            totalTokens: 30,
+            totalCostUsd: 0.25,
+            logWarningCount: 1,
+            logErrorCount: 0,
+          },
+          recentSessions: [],
+          diagnostics: [],
+        }),
+      );
+    }
+
+    if (path === '/api/projects/project-1/sessions') {
+      return Promise.resolve(jsonResponse({ sessions: [projectOneSessionFixture()] }));
+    }
+
+    if (path === '/api/projects/project-2/overview') {
+      return slowOverview;
+    }
+
+    if (path === '/api/projects/project-2/sessions') {
+      return slowSessions;
+    }
+
+    if (path === '/api/logs/window') {
+      return Promise.resolve(jsonResponse(logsFixture()));
+    }
+
+    return Promise.resolve(jsonResponse({ error: 'Not found' }, 404));
+  });
+}
+
+function projectOneSessionFixture() {
+  return {
+    id: 'session-1',
+    title: 'Build the API',
+    status: 'completed',
+    firstTimestamp: '2026-05-28T08:00:00.000Z',
+    lastTimestamp: '2026-05-28T08:01:00.000Z',
+    modelSet: ['claude-sonnet'],
+    changedFiles: ['src/api.ts'],
+    tokens: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
+    costUsd: 0.25,
+    linkedPlanCount: 0,
+    linkedTaskCount: 0,
+  };
+}
+
+function projectTwoOverviewFixture() {
+  return {
+    project: projectFixture({
+      id: 'project-2',
+      name: 'project-b',
+      path: '/tmp/project-b',
+      active: false,
+      branch: 'feature',
+    }),
+    provider: {
+      id: 'provider-2',
+      name: 'OpenAI',
+      provider: 'openai',
+      model: 'gpt-5',
+      baseUrl: 'https://example.com/v1',
+      active: true,
+      apiKeySet: true,
+      authHeaderValueSet: false,
+    },
+    cards: {
+      sessionCount: 1,
+      failedSessionCount: 0,
+      changedFileCount: 1,
+      totalTokens: 20,
+      totalCostUsd: 0.1,
+      logWarningCount: 0,
+      logErrorCount: 0,
+    },
+    recentSessions: [],
+    diagnostics: [],
+  };
+}
+
+function projectTwoSessionFixture() {
+  return {
+    id: 'session-2',
+    title: 'Project B stale session',
+    status: 'completed',
+    firstTimestamp: '2026-05-28T08:02:00.000Z',
+    lastTimestamp: '2026-05-28T08:03:00.000Z',
+    modelSet: ['gpt-5'],
+    changedFiles: ['src/other.ts'],
+    tokens: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0 },
+    costUsd: 0.1,
+    linkedPlanCount: 0,
+    linkedTaskCount: 0,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function wasFetched(fetchMock: ReturnType<typeof vi.fn>, path: string): boolean {
+  return fetchMock.mock.calls.some(([input]) => String(input).endsWith(path));
+}
+
+function fetchCount(fetchMock: ReturnType<typeof vi.fn>, path: string): number {
+  return fetchMock.mock.calls.filter(([input]) => String(input).endsWith(path)).length;
+}
+
+function fetchCountByPath(fetchMock: ReturnType<typeof vi.fn>, path: string): number {
+  return fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname === path).length;
+}
+
+function wasFetchedWithQuery(
+  fetchMock: ReturnType<typeof vi.fn>,
+  path: string,
+  key: string,
+  value: string,
+): boolean {
+  return fetchMock.mock.calls.some(([input]) => {
+    const url = new URL(String(input));
+    return url.pathname === path && url.searchParams.get(key) === value;
   });
 }

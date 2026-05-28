@@ -33,6 +33,85 @@ describe('HTTP server', () => {
     expect(response.json()).toMatchObject({ code: 'UNAUTHORIZED' });
   });
 
+  test('serves data endpoints without a token when auth is not configured', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
+    const server = await buildServer({ env: {}, home, version: '0.0.1-test' });
+    servers.push(server);
+
+    const response = await server.inject({ method: 'GET', url: '/api/projects' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ projects: [] });
+  });
+
+  test('allows loopback browser origins on any local dev port', async () => {
+    const server = await testServer();
+
+    const ipv4Response = await server.inject({
+      method: 'GET',
+      url: '/api/health',
+      headers: { origin: 'http://127.0.0.1:5174' },
+    });
+    const ipv6Response = await server.inject({
+      method: 'GET',
+      url: '/api/health',
+      headers: { origin: 'http://[::1]:5174' },
+    });
+
+    expect(ipv4Response.statusCode).toBe(200);
+    expect(ipv4Response.headers['access-control-allow-origin']).toBe('http://127.0.0.1:5174');
+    expect(ipv6Response.statusCode).toBe(200);
+    expect(ipv6Response.headers['access-control-allow-origin']).toBe('http://[::1]:5174');
+  });
+
+  test('does not allow public browser origins unless explicitly configured', async () => {
+    const server = await testServer();
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/health',
+      headers: { origin: 'https://example.com' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['access-control-allow-origin']).toBeUndefined();
+  });
+
+  test('allows configured hosted browser origins from server environment', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
+    const server = await buildServer({
+      authToken: 'test-token',
+      env: { OPENCLAUDE_STUDIO_ALLOWED_ORIGINS: 'https://studio.example.com' },
+      home,
+      version: '0.0.1-test',
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/health',
+      headers: { origin: 'https://studio.example.com' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['access-control-allow-origin']).toBe('https://studio.example.com');
+  });
+
+  test('returns project discovery diagnostics with the projects response', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await writeFile(paths.openClaudeConfig, '{not-json', 'utf8');
+    const server = await testServer(home);
+
+    const response = await server.inject({ method: 'GET', url: '/api/projects', headers: tokenHeaders() });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      projects: [],
+      diagnostics: [{ level: 'error', message: expect.stringContaining('Unable to parse global config') }],
+    });
+  });
+
   test('returns projects, overview, sessions, and logs through read-only endpoints', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
     const projectPath = join(home, 'project-a');
@@ -96,6 +175,11 @@ describe('HTTP server', () => {
       '2026-05-28T08:00:00.000Z WARN OPENAI_API_KEY=secret-value slow\n',
       'utf8',
     );
+    await writeFile(
+      join(paths.debugDir, 'session-other.txt'),
+      '2026-05-28T08:00:00.000Z ERROR other project log\n',
+      'utf8',
+    );
     const server = await testServer(home);
     const headers = tokenHeaders();
 
@@ -113,7 +197,7 @@ describe('HTTP server', () => {
     });
     const logs = await server.inject({
       method: 'GET',
-      url: '/api/logs/window?fileName=session-1.txt',
+      url: `/api/logs/window?projectId=${projectId}`,
       headers,
     });
 
@@ -128,6 +212,7 @@ describe('HTTP server', () => {
       level: 'warn',
       message: 'OPENAI_API_KEY=<redacted> slow',
     });
+    expect(logs.json().files.map((file: { name: string }) => file.name)).toEqual(['session-1.txt']);
   });
 });
 

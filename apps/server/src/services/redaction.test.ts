@@ -16,8 +16,16 @@ describe('redaction', () => {
   });
 
   test('redacts likely secrets in text', () => {
-    expect(redactTextSecrets('OPENAI_API_KEY=example-api-key bearer abcdefghijk')).toBe(
-      'OPENAI_API_KEY=<redacted> bearer <redacted>',
+    expect(redactTextSecrets('OPENAI_API_KEY="example-api-key" token=plain bearer abcdefghijk')).toBe(
+      'OPENAI_API_KEY="<redacted>" token=<redacted> bearer <redacted>',
+    );
+  });
+
+  test('redacts query parameter secrets in text logs', () => {
+    expect(
+      redactTextSecrets('GET https://api.example.test/v1?api_key=secret-value&access_token=secret&model=x token=plain'),
+    ).toBe(
+      'GET https://api.example.test/v1?api_key=<redacted>&access_token=<redacted>&model=x token=<redacted>',
     );
   });
 

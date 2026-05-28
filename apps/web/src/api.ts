@@ -3,17 +3,12 @@ import type {
   LogsSearchResponse,
   LogsWindowResponse,
   OverviewResponse,
-  ProjectSummary,
+  ProjectsResponse,
   SessionSummary,
 } from '@openclaude-studio/shared';
 
 export type ConnectionSettings = {
   baseUrl: string;
-  token: string;
-};
-
-export type ProjectsResponse = {
-  projects: ProjectSummary[];
 };
 
 export type SessionsResponse = {
@@ -34,7 +29,7 @@ export function createApiClient(settings: ConnectionSettings) {
 
   async function request<T>(path: string): Promise<T> {
     const response = await fetch(`${baseUrl}${path}`, {
-      headers: settings.token ? { 'x-openclaude-studio-token': settings.token } : {},
+      headers: { accept: 'application/json' },
     });
     const payload = (await response.json().catch(() => null)) as unknown;
 
@@ -56,10 +51,10 @@ export function createApiClient(settings: ConnectionSettings) {
       request<OverviewResponse>(`/api/projects/${encodeURIComponent(projectId)}/overview`),
     sessions: (projectId: string) =>
       request<SessionsResponse>(`/api/projects/${encodeURIComponent(projectId)}/sessions`),
-    logWindow: (input: { fileName?: string; start?: number; count?: number } = {}) =>
+    logWindow: (input: { fileName?: string; projectId?: string; start?: number; count?: number } = {}) =>
       request<LogsWindowResponse>(`/api/logs/window${queryString(input)}`),
     logSearch: (
-      input: { fileName?: string; query?: string; level?: string; start?: number; count?: number } = {},
+      input: { fileName?: string; projectId?: string; query?: string; level?: string; start?: number; count?: number } = {},
     ) => request<LogsSearchResponse>(`/api/logs/search${queryString(input)}`),
   };
 }

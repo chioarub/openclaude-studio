@@ -1,5 +1,5 @@
-import { lstat, readdir } from 'node:fs/promises';
-import type { Stats } from 'node:fs';
+import { constants, type Stats } from 'node:fs';
+import { lstat, open, readdir, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type {
@@ -13,10 +13,29 @@ import type {
 
 import type { OpenClaudePaths } from './paths.js';
 import { redactTextSecrets } from './redaction.js';
-import { readContainedBoundedTextFile } from './safeFile.js';
 
 type InternalLogFile = LogFileSummary & {
   path: string;
+};
+
+type LogFileIdentity = Pick<Stats, 'dev' | 'ino' | 'mtimeMs' | 'size'>;
+
+type LogFileRevision = LogFileIdentity & {
+  key: string;
+};
+
+type LogLineIndex = {
+  cacheKey: string;
+  file: InternalLogFile;
+  lineOffsets: number[];
+  lineCount: number;
+  revision: LogFileRevision;
+  sizeBytes: number;
+  modifiedAt: string;
+};
+
+export type LogFileScope = {
+  sessionIds?: ReadonlySet<string>;
 };
 
 export type LogWindowRequest = {
@@ -29,11 +48,12 @@ export type LogSearchRequest = LogWindowRequest & {
   level?: LogEntry['level'] | 'all';
 };
 
-const maxLogBytes = 1024 * 1024;
 const defaultWindowCount = 250;
 const maxWindowCount = 1000;
+const maxLogIndexCacheEntries = 16;
 const timestampPattern = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z)\s+(.*)$/;
 const leadingLevelPattern = /^(?:\[(info|warn|warning|error|debug)\]|(info|warn|warning|error|debug))[:\s-]+/i;
+const logIndexCache = new Map<string, LogLineIndex>();
 
 export async function listLogFiles(paths: OpenClaudePaths): Promise<LogsFilesResponse> {
   const result = await listInternalLogFiles(paths.debugDir);
@@ -47,35 +67,34 @@ export async function readLogWindow(
   paths: OpenClaudePaths,
   fileName?: string,
   request: LogWindowRequest = {},
+  scope: LogFileScope = {},
 ): Promise<LogsWindowResponse> {
   const listed = await listInternalLogFiles(paths.debugDir);
+  const files = scopeLogFiles(listed.files, scope);
   const diagnostics = [...listed.diagnostics];
   const start = normalizeStart(request.start);
   const count = normalizeCount(request.count);
 
-  const selected = selectLogFile(listed.files, fileName, diagnostics);
+  const selected = selectLogFile(files, fileName, diagnostics);
   if (!selected) {
-    return emptyWindow(listed.files, null, diagnostics, start, count);
+    return emptyWindow(files, null, diagnostics, start, count);
   }
 
-  const read = await readSelectedLog(paths.debugDir, selected, diagnostics);
-  if (!read) {
-    return emptyWindow(listed.files, selected, diagnostics, start, count);
+  const index = await getOrBuildLogIndex(selected, diagnostics);
+  if (!index) {
+    return emptyWindow(files, selected, diagnostics, start, count);
   }
 
-  const lines = splitLogLines(read);
-  const safeStart = Math.min(start, lines.length);
-  const entries = lines
-    .slice(safeStart, safeStart + count)
-    .map((line, index) => parseLogLine(line, selected.name, safeStart + index + 1));
+  const entries = await readIndexedEntries(index, start, count, diagnostics);
+  const safeStart = Math.min(start, index.lineCount);
 
   return {
-    files: listed.files.map(toPublicLogFile),
+    files: files.map(toPublicLogFile),
     selectedFile: toPublicLogFile(selected),
     entries,
     start: safeStart,
     count,
-    totalLines: lines.length,
+    totalLines: index.lineCount,
     diagnostics,
   };
 }
@@ -84,49 +103,79 @@ export async function searchLogs(
   paths: OpenClaudePaths,
   fileName?: string,
   request: LogSearchRequest = {},
+  scope: LogFileScope = {},
 ): Promise<LogsSearchResponse> {
   const listed = await listInternalLogFiles(paths.debugDir);
+  const files = scopeLogFiles(listed.files, scope);
   const diagnostics = [...listed.diagnostics];
   const start = normalizeStart(request.start);
   const count = normalizeCount(request.count);
   const query = (request.query ?? '').trim();
   const level = request.level ?? 'all';
 
-  const selected = selectLogFile(listed.files, fileName, diagnostics);
+  const selected = selectLogFile(files, fileName, diagnostics);
   if (!selected) {
     return {
-      ...emptyWindow(listed.files, null, diagnostics, start, count),
+      ...emptyWindow(files, null, diagnostics, start, count),
       query,
       totalMatches: 0,
     };
   }
 
-  const read = await readSelectedLog(paths.debugDir, selected, diagnostics);
-  if (!read) {
+  const index = await getOrBuildLogIndex(selected, diagnostics);
+  if (!index) {
     return {
-      ...emptyWindow(listed.files, selected, diagnostics, start, count),
+      ...emptyWindow(files, selected, diagnostics, start, count),
       query,
       totalMatches: 0,
     };
   }
 
-  const allEntries = splitLogLines(read).map((line, index) =>
-    parseLogLine(line, selected.name, index + 1),
-  );
-  const matches = allEntries.filter((entry) => matchesSearch(entry, query, level));
-  const safeStart = Math.min(start, matches.length);
+  let totalMatches = 0;
+  const entries: LogEntry[] = [];
+  const handle = await openIndexedLogHandle(index, diagnostics);
+  if (handle) {
+    try {
+      for (let line = 0; line < index.lineCount; line += maxWindowCount) {
+        const windowEntries = await readIndexedEntriesFromHandle(
+          handle,
+          index,
+          line,
+          Math.min(maxWindowCount, index.lineCount - line),
+        );
+        for (const entry of windowEntries) {
+          if (!matchesSearch(entry, query, level)) continue;
+          if (totalMatches >= start && entries.length < count) {
+            entries.push(entry);
+          }
+          totalMatches += 1;
+        }
+      }
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+  }
+  const safeStart = Math.min(start, totalMatches);
 
   return {
-    files: listed.files.map(toPublicLogFile),
+    files: files.map(toPublicLogFile),
     selectedFile: toPublicLogFile(selected),
-    entries: matches.slice(safeStart, safeStart + count),
+    entries,
     start: safeStart,
     count,
-    totalLines: allEntries.length,
+    totalLines: index.lineCount,
     diagnostics,
     query,
-    totalMatches: matches.length,
+    totalMatches,
   };
+}
+
+function scopeLogFiles(files: InternalLogFile[], scope: LogFileScope): InternalLogFile[] {
+  if (!scope.sessionIds) {
+    return files;
+  }
+
+  return files.filter((file) => file.sessionId !== null && scope.sessionIds?.has(file.sessionId));
 }
 
 async function listInternalLogFiles(debugDir: string): Promise<{
@@ -167,8 +216,10 @@ async function listInternalLogFiles(debugDir: string): Promise<{
     });
   }
 
+  const sortedFiles = files.sort((left, right) => right.modifiedAt.localeCompare(left.modifiedAt));
+
   return {
-    files: files.sort((left, right) => right.modifiedAt.localeCompare(left.modifiedAt)),
+    files: sortedFiles,
     diagnostics: [],
   };
 }
@@ -183,21 +234,193 @@ function selectLogFile(
     return null;
   }
 
-  const selected = fileName ? files.find((file) => file.name === fileName) : files[0];
+  const selected = fileName ? files.find((file) => file.name === fileName) : files.find((file) => file.name === 'latest') ?? files[0];
   if (!selected && fileName) {
     diagnostics.push({ level: 'warn', message: `Log file "${fileName}" was not found.` });
   }
   return selected ?? null;
 }
 
-async function readSelectedLog(
-  debugDir: string,
+async function getOrBuildLogIndex(
   selected: InternalLogFile,
   diagnostics: Diagnostic[],
-): Promise<string | null> {
-  const result = await readContainedBoundedTextFile(debugDir, selected.path, { maxBytes: maxLogBytes });
-  diagnostics.push(...result.diagnostics);
-  return result.exists ? result.content : null;
+): Promise<LogLineIndex | null> {
+  const opened = await openLogFile(selected, diagnostics);
+  if (!opened.handle || !opened.identity) {
+    return null;
+  }
+
+  try {
+    const revision = toLogFileRevision(opened.identity);
+    const cacheKey = `${selected.path}:${revision.dev}:${revision.ino}`;
+    const cached = logIndexCache.get(cacheKey);
+    if (cached && cached.revision.size === revision.size && cached.revision.mtimeMs === revision.mtimeMs) {
+      return cached;
+    }
+
+    const index = await buildLogLineIndex(opened.handle, selected, cacheKey, revision);
+    logIndexCache.set(cacheKey, index);
+    pruneLogIndexCache();
+    return index;
+  } finally {
+    await opened.handle.close().catch(() => undefined);
+  }
+}
+
+async function openLogFile(
+  selected: InternalLogFile,
+  diagnostics: Diagnostic[],
+): Promise<{
+  handle: FileHandle | null;
+  identity: LogFileIdentity | null;
+}> {
+  let beforeOpen;
+  try {
+    beforeOpen = await lstat(selected.path);
+  } catch (error) {
+    diagnostics.push({
+      level: 'warn',
+      message: `Unable to inspect log file "${selected.name}": ${errorMessage(error)}`,
+      path: selected.path,
+    });
+    return { handle: null, identity: null };
+  }
+
+  if (beforeOpen.isSymbolicLink() || !beforeOpen.isFile()) {
+    diagnostics.push({
+      level: 'warn',
+      message: `Log file "${selected.name}" is not a regular file.`,
+      path: selected.path,
+    });
+    return { handle: null, identity: null };
+  }
+
+  const noFollowFlag = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
+  let handle: FileHandle | null = null;
+  try {
+    handle = await open(selected.path, constants.O_RDONLY | noFollowFlag);
+    const afterOpen = await handle.stat();
+    if (!sameLogFileIdentity(beforeOpen, afterOpen)) {
+      await handle.close();
+      return { handle: null, identity: null };
+    }
+    return { handle, identity: toLogFileIdentity(afterOpen) };
+  } catch (error) {
+    if (handle) {
+      await handle.close().catch(() => undefined);
+    }
+    diagnostics.push({
+      level: 'warn',
+      message: `Unable to safely open log file "${selected.name}": ${errorMessage(error)}`,
+      path: selected.path,
+    });
+    return { handle: null, identity: null };
+  }
+}
+
+async function buildLogLineIndex(
+  handle: FileHandle,
+  selected: InternalLogFile,
+  cacheKey: string,
+  revision: LogFileRevision,
+): Promise<LogLineIndex> {
+  const lineOffsets: number[] = revision.size > 0 ? [0] : [];
+  const chunkSize = 64 * 1024;
+  const buffer = Buffer.allocUnsafe(chunkSize);
+  let position = 0;
+
+  while (position < revision.size) {
+    const length = Math.min(chunkSize, revision.size - position);
+    const { bytesRead } = await handle.read(buffer, 0, length, position);
+    if (bytesRead === 0) break;
+
+    for (let index = 0; index < bytesRead; index += 1) {
+      if (buffer[index] !== 10) continue;
+      const nextLineOffset = position + index + 1;
+      if (nextLineOffset < revision.size) {
+        lineOffsets.push(nextLineOffset);
+      }
+    }
+    position += bytesRead;
+  }
+
+  return {
+    cacheKey,
+    file: selected,
+    lineOffsets,
+    lineCount: lineOffsets.length,
+    revision,
+    sizeBytes: revision.size,
+    modifiedAt: new Date(revision.mtimeMs).toISOString(),
+  };
+}
+
+async function readIndexedEntries(
+  index: LogLineIndex,
+  requestedStart: number,
+  requestedCount: number,
+  diagnostics: Diagnostic[],
+): Promise<LogEntry[]> {
+  const handle = await openIndexedLogHandle(index, diagnostics);
+  if (!handle) {
+    return [];
+  }
+
+  try {
+    return await readIndexedEntriesFromHandle(handle, index, requestedStart, requestedCount);
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+async function openIndexedLogHandle(
+  index: LogLineIndex,
+  diagnostics: Diagnostic[],
+): Promise<FileHandle | null> {
+  const opened = await openLogFile(index.file, diagnostics);
+  if (!opened.handle || !opened.identity) {
+    return null;
+  }
+
+  const revision = toLogFileRevision(opened.identity);
+  if (revision.dev !== index.revision.dev || revision.ino !== index.revision.ino || revision.size < index.revision.size) {
+    await opened.handle.close().catch(() => undefined);
+    diagnostics.push({
+      level: 'warn',
+      message: `Log file "${index.file.name}" changed before the requested window could be read.`,
+      path: index.file.path,
+    });
+    return null;
+  }
+
+  return opened.handle;
+}
+
+async function readIndexedEntriesFromHandle(
+  handle: FileHandle,
+  index: LogLineIndex,
+  requestedStart: number,
+  requestedCount: number,
+): Promise<LogEntry[]> {
+  const start = Math.min(normalizeStart(requestedStart), index.lineCount);
+  const count = normalizeCount(requestedCount);
+  const end = Math.min(index.lineCount, start + count);
+  if (start >= end) {
+    return [];
+  }
+
+  const startByte = index.lineOffsets[start] ?? 0;
+  const endByte = end < index.lineCount ? index.lineOffsets[end] ?? index.revision.size : index.revision.size;
+  const length = Math.max(0, endByte - startByte);
+  if (length === 0) {
+    return [];
+  }
+  const buffer = Buffer.alloc(length);
+  const { bytesRead } = await handle.read(buffer, 0, length, startByte);
+  const raw = buffer.subarray(0, bytesRead).toString('utf8');
+  return splitLogLines(raw)
+    .slice(0, end - start)
+    .map((line, offset) => parseLogLine(line, index.file.name, start + offset + 1));
 }
 
 function parseLogLine(line: string, fileName: string, lineNumber: number): LogEntry {
@@ -226,7 +449,11 @@ function matchesSearch(entry: LogEntry, query: string, level: LogSearchRequest['
   if (!query) {
     return true;
   }
-  return entry.message.toLowerCase().includes(query.toLowerCase());
+  const normalizedQuery = query.toLowerCase();
+  return (
+    entry.message.toLowerCase().includes(normalizedQuery) ||
+    entry.level.toLowerCase().includes(normalizedQuery)
+  );
 }
 
 function emptyWindow(
@@ -253,6 +480,16 @@ function splitLogLines(content: string): string[] {
     lines.pop();
   }
   return lines;
+}
+
+function pruneLogIndexCache() {
+  while (logIndexCache.size > maxLogIndexCacheEntries) {
+    const oldestKey = logIndexCache.keys().next().value;
+    if (!oldestKey) {
+      return;
+    }
+    logIndexCache.delete(oldestKey);
+  }
 }
 
 function normalizeStart(value: number | undefined): number {
@@ -310,6 +547,31 @@ function toPublicLogFile(file: InternalLogFile): LogFileSummary {
   };
 }
 
+function sameLogFileIdentity(before: LogFileIdentity, after: LogFileIdentity): boolean {
+  return (
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.size === after.size &&
+    before.mtimeMs === after.mtimeMs
+  );
+}
+
+function toLogFileIdentity(stats: Stats): LogFileIdentity {
+  return {
+    dev: stats.dev,
+    ino: stats.ino,
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+  };
+}
+
+function toLogFileRevision(identity: LogFileIdentity): LogFileRevision {
+  return {
+    ...identity,
+    key: `${identity.dev}:${identity.ino}:${identity.size}:${identity.mtimeMs}`,
+  };
+}
+
 async function safeLstat(path: string): Promise<Stats | null> {
   try {
     return await lstat(path);
@@ -323,4 +585,8 @@ async function safeLstat(path: string): Promise<Stats | null> {
 
 function isNodeFileError(error: unknown, code: string): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error && error.code === code;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'unknown error';
 }

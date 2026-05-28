@@ -23,6 +23,20 @@ describe('logs', () => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  test('lists every log file so project scoping does not hide older session logs', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-logs-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(paths.debugDir, { recursive: true });
+    for (let index = 0; index < 205; index += 1) {
+      await writeFile(join(paths.debugDir, `session-${String(index).padStart(3, '0')}.txt`), 'line\n', 'utf8');
+    }
+
+    const result = await listLogFiles(paths);
+
+    expect(result.files).toHaveLength(205);
+    expect(result.diagnostics).toEqual([]);
+  });
+
   test('reads a bounded parsed log window with redacted messages', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-logs-'));
     const paths = createOpenClaudePaths({ home, env: {} });
@@ -59,6 +73,37 @@ describe('logs', () => {
         message: 'plain debug line',
       },
     ]);
+  });
+
+  test('scopes log windows to selected project session ids', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-logs-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(paths.debugDir, { recursive: true });
+    await writeFile(join(paths.debugDir, 'session-a.txt'), '2026-05-28T08:00:00.000Z INFO selected\n', 'utf8');
+    await writeFile(join(paths.debugDir, 'session-b.txt'), '2026-05-28T08:00:00.000Z INFO other\n', 'utf8');
+
+    const result = await readLogWindow(paths, undefined, { count: 10 }, { sessionIds: new Set(['session-a']) });
+
+    expect(result.files.map((file) => file.name)).toEqual(['session-a.txt']);
+    expect(result.selectedFile?.name).toBe('session-a.txt');
+    expect(result.entries[0]?.message).toBe('selected');
+  });
+
+  test('returns arbitrary windows from large logs without truncating to the first preview', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-logs-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(paths.debugDir, { recursive: true });
+    const lines = Array.from(
+      { length: 1200 },
+      (_, index) => `2026-05-28T08:00:00.000Z INFO line-${index}`,
+    );
+    await writeFile(join(paths.debugDir, 'session-large.txt'), `${lines.join('\n')}\n`, 'utf8');
+
+    const result = await readLogWindow(paths, 'session-large.txt', { start: 1050, count: 3 });
+
+    expect(result.totalLines).toBe(1200);
+    expect(result.start).toBe(1050);
+    expect(result.entries.map((entry) => entry.message)).toEqual(['line-1050', 'line-1051', 'line-1052']);
   });
 
   test('rejects unsafe log file names', async () => {

@@ -74,7 +74,7 @@ test.beforeAll(async () => {
     'utf8',
   );
 
-  server = await buildServer({ authToken: 'test-token', env: {}, home, version: '0.0.1-test' });
+  server = await buildServer({ env: {}, home, version: '0.0.1-test' });
   await server.listen({ host: '127.0.0.1', port: 43111 });
 });
 
@@ -83,13 +83,15 @@ test.afterAll(async () => {
 });
 
 test('loads project overview, sessions, provider, and logs', async ({ page }) => {
-  await page.goto('/');
-  await page.getByLabel('Server URL').fill('http://127.0.0.1:43111');
-  await page.getByLabel('API token').fill('test-token');
-  await page.getByRole('button', { name: /refresh/i }).click();
+  await page.addInitScript((serverUrl) => {
+    window.localStorage.setItem('openclaude-studio:server-url', serverUrl);
+  }, 'http://127.0.0.1:43111');
 
-  await expect(page.getByRole('button', { name: 'project-a main' })).toBeVisible();
+  await page.goto('/');
+
+  await expect(page.getByRole('button', { name: /project-a.*main/i })).toBeVisible();
   await expect(page.getByText('Anthropic')).toBeVisible();
   await expect(page.getByText('Build the API')).toBeVisible();
+  await page.getByRole('link', { name: /^Logs$/ }).click();
   await expect(page.getByText('OPENAI_API_KEY=<redacted> slow')).toBeVisible();
 });

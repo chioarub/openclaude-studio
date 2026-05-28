@@ -35,6 +35,11 @@ export type OpenClaudeConfigResponse = {
   sensitiveFieldsRedacted: true;
 };
 
+export type ProjectSummariesResponse = {
+  projects: ProjectSummary[];
+  diagnostics: Diagnostic[];
+};
+
 type RawConfigRead = {
   path: string;
   exists: boolean;
@@ -60,7 +65,24 @@ export async function readProjectSummaries(
   paths: OpenClaudePaths,
   now = new Date(),
 ): Promise<ProjectSummary[]> {
-  const { config } = await readRawOpenClaudeConfig(paths);
+  return (await readProjectSummariesWithDiagnostics(paths, now)).projects;
+}
+
+export async function readProjectSummariesWithDiagnostics(
+  paths: OpenClaudePaths,
+  now = new Date(),
+): Promise<ProjectSummariesResponse> {
+  const { config, diagnostics } = await readRawOpenClaudeConfig(paths);
+  return {
+    projects: await projectSummariesFromConfig(config, now),
+    diagnostics,
+  };
+}
+
+async function projectSummariesFromConfig(
+  config: OpenClaudeConfig,
+  now: Date,
+): Promise<ProjectSummary[]> {
   const entries = getProjectEntries(config);
   const latestTimestamp = Math.max(
     0,

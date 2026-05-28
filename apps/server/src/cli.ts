@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 
-import { randomBytes } from 'node:crypto';
-
 import { buildServer } from './http/server.js';
 
 const port = readPort(process.argv) ?? Number.parseInt(process.env.OPENCLAUDE_STUDIO_PORT ?? '43110', 10);
 const host = process.env.OPENCLAUDE_STUDIO_HOST ?? '127.0.0.1';
-const authToken = process.env.OPENCLAUDE_STUDIO_TOKEN ?? randomBytes(24).toString('base64url');
+const authToken = process.env.OPENCLAUDE_STUDIO_TOKEN;
 
-const server = await buildServer({ authToken });
+const server = await buildServer(authToken ? { authToken } : {});
 await server.listen({ host, port });
 
 console.log(`OpenClaude Studio server listening at http://${host}:${port}`);
-console.log(`OpenClaude Studio API token: ${authToken}`);
+if (authToken) {
+  console.log('OpenClaude Studio API token protection enabled.');
+}
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
