@@ -47,16 +47,29 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
       .map((origin) => origin.trim())
       .filter(Boolean),
   ]);
+  const isAllowedOrigin = (origin: string | undefined) => isAllowedBrowserOrigin(origin, configuredAllowedOrigins);
 
   await app.register(cors, {
     origin: (origin, callback) => {
-      callback(null, !origin || configuredAllowedOrigins.has(origin) || isLoopbackBrowserOrigin(origin));
+      callback(null, isAllowedOrigin(origin));
     },
     methods: ['GET', 'OPTIONS'],
     allowedHeaders: ['content-type', 'x-openclaude-studio-token'],
+    maxAge: 600,
+    preflightContinue: true,
   });
 
   app.addHook('onRequest', async (request, reply) => {
+    if (request.method === 'OPTIONS') {
+      if (
+        request.headers['access-control-request-private-network'] === 'true' &&
+        isAllowedOrigin(request.headers.origin)
+      ) {
+        reply.header('Access-Control-Allow-Private-Network', 'true');
+      }
+      return reply.code(204).header('Content-Length', '0').send();
+    }
+
     if (!authToken || request.url.startsWith('/api/health')) {
       return;
     }
@@ -260,4 +273,8 @@ function isLoopbackBrowserOrigin(origin: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isAllowedBrowserOrigin(origin: string | undefined, configuredAllowedOrigins: ReadonlySet<string>): boolean {
+  return !origin || configuredAllowedOrigins.has(origin) || isLoopbackBrowserOrigin(origin);
 }

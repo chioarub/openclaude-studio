@@ -97,6 +97,50 @@ describe('HTTP server', () => {
     expect(response.headers['access-control-allow-origin']).toBe('https://studio.example.com');
   });
 
+  test('allows private network preflights for configured hosted browser origins', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
+    const server = await buildServer({
+      authToken: 'test-token',
+      allowedOrigins: ['https://studio.example.com'],
+      env: {},
+      home,
+      version: '0.0.1-test',
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'OPTIONS',
+      url: '/api/projects',
+      headers: {
+        'access-control-request-method': 'GET',
+        'access-control-request-private-network': 'true',
+        origin: 'https://studio.example.com',
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers['access-control-allow-origin']).toBe('https://studio.example.com');
+    expect(response.headers['access-control-allow-private-network']).toBe('true');
+  });
+
+  test('does not allow private network preflights for unconfigured public origins', async () => {
+    const server = await testServer();
+
+    const response = await server.inject({
+      method: 'OPTIONS',
+      url: '/api/projects',
+      headers: {
+        'access-control-request-method': 'GET',
+        'access-control-request-private-network': 'true',
+        origin: 'https://example.com',
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers['access-control-allow-origin']).toBeUndefined();
+    expect(response.headers['access-control-allow-private-network']).toBeUndefined();
+  });
+
   test('returns project discovery diagnostics with the projects response', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
     const paths = createOpenClaudePaths({ home, env: {} });

@@ -45,6 +45,16 @@ The web UI can run locally during development or be hosted as static assets. The
 
 ## Quick Start
 
+For normal use, run the local API with npm and open the hosted frontend once it has been deployed:
+
+```bash
+npx openclaude-studio --allowed-origin https://your-project.pages.dev
+```
+
+The `--allowed-origin` value must match the exact Cloudflare Pages origin that serves the frontend. After the official hosted URL is finalized, this documentation will be updated with that URL.
+
+## Local Development
+
 Install dependencies:
 
 ```bash
@@ -80,7 +90,7 @@ npm run build
 Start the local API:
 
 ```bash
-npm run start -w @openclaude-studio/server
+npm run start -w openclaude-studio
 ```
 
 By default, the server binds to `127.0.0.1` and listens on port `43110`.
@@ -98,7 +108,7 @@ By default, the server binds to `127.0.0.1` and listens on port `43110`.
 If you host the web UI somewhere other than localhost, add that origin:
 
 ```bash
-OPENCLAUDE_STUDIO_ALLOWED_ORIGINS=https://studio.example.com npm run start -w @openclaude-studio/server
+OPENCLAUDE_STUDIO_ALLOWED_ORIGINS=https://studio.example.com npm run start -w openclaude-studio
 ```
 
 ## Development

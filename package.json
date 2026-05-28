@@ -1,5 +1,5 @@
 {
-  "name": "openclaude-studio",
+  "name": "openclaude-studio-workspace",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -8,10 +8,10 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @openclaude-studio/shared && npm run build -w @openclaude-studio/server && npm run build -w @openclaude-studio/web",
-    "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w @openclaude-studio/server\" \"npm run dev -w @openclaude-studio/web\"",
-    "lint": "npm run lint -w @openclaude-studio/shared && npm run lint -w @openclaude-studio/server && npm run lint -w @openclaude-studio/web",
-    "test": "npm run test -w @openclaude-studio/server && npm run test -w @openclaude-studio/web",
+    "build": "npm run build -w @openclaude-studio/shared && npm run build -w openclaude-studio && npm run build -w @openclaude-studio/web",
+    "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w openclaude-studio\" \"npm run dev -w @openclaude-studio/web\"",
+    "lint": "npm run lint -w @openclaude-studio/shared && npm run lint -w openclaude-studio && npm run lint -w @openclaude-studio/web",
+    "test": "npm run test -w openclaude-studio && npm run test -w @openclaude-studio/web",
     "test:e2e": "playwright test"
   },
   "devDependencies": {

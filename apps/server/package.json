@@ -1,20 +1,50 @@
 {
-  "name": "@openclaude-studio/server",
+  "name": "openclaude-studio",
   "version": "0.0.1",
+  "description": "Read-only local API server for OpenClaude Studio.",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/chioarub/openclaude-studio.git",
+    "directory": "apps/server"
+  },
+  "bugs": {
+    "url": "https://github.com/chioarub/openclaude-studio/issues"
+  },
+  "homepage": "https://github.com/chioarub/openclaude-studio#readme",
+  "keywords": [
+    "openclaude",
+    "studio",
+    "local",
+    "dashboard",
+    "logs",
+    "diagnostics"
+  ],
   "bin": {
+    "openclaude-studio": "dist/cli.js",
     "openclaude-studio-server": "dist/cli.js"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && chmod +x dist/cli.js",
     "dev": "tsx watch src/cli.ts --port 43110",
     "lint": "npm run build -w @openclaude-studio/shared && tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run build",
     "start": "node dist/cli.js",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",
-    "@openclaude-studio/shared": "file:../../packages/shared",
     "fastify": "^5.0.0"
   },
   "devDependencies": {
