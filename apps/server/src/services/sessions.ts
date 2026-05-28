@@ -1,4 +1,5 @@
 import { lstat, readdir } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import type { ProjectSummary, SessionSummary } from '@openclaude-studio/shared';
@@ -327,7 +328,7 @@ function isRecord(value: unknown): value is UnknownRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-async function safeLstat(path: string): Promise<Awaited<ReturnType<typeof lstat>> | null> {
+async function safeLstat(path: string): Promise<Stats | null> {
   try {
     return await lstat(path);
   } catch (error) {
