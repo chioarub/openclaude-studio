@@ -1,56 +1,163 @@
 # OpenClaude Studio
 
-OpenClaude Studio is a read-only local companion for OpenClaude. The web UI can be hosted anywhere, while the local server runs on your machine and reads OpenClaude's local files over a token-protected localhost API.
+OpenClaude Studio is a read-only local companion for OpenClaude. It gives you a clean browser UI for inspecting OpenClaude projects, sessions, provider status, diagnostics, and debug logs without editing your local OpenClaude data.
 
-Version `0.0.1` keeps the scope deliberately small:
+The project is intentionally small in `0.0.1`: a hosted or local web app talks to a local server running on your machine. The server reads OpenClaude files from disk, redacts likely secrets, and exposes only read-only HTTP endpoints.
 
-- Project selector from `~/.openclaude.json`
-- Active provider diagnostics with secret fields redacted
-- Recent session summaries without full transcript views
-- Bounded, redacted log viewing and search
+## Current Scope
+
+OpenClaude Studio `0.0.1` includes:
+
+- Project selector backed by `~/.openclaude.json`
+- Project overview with recent sessions, usage, log issue counts, and provider status
+- Session summaries for the selected project
+- Active provider inspection with secret fields redacted
+- Project-scoped diagnostics
+- Project-scoped debug log viewing, filtering, search, virtualized scrolling, and copy-to-clipboard for log messages
+- Dark and light themes
 - Read-only local API with no write endpoints
+
+It does not currently edit OpenClaude settings, provider profiles, sessions, logs, project files, tasks, or plans.
+
+## How It Works
+
+```text
+Browser UI
+  |
+  | HTTP JSON
+  v
+Local server on 127.0.0.1:43110
+  |
+  | read-only file access
+  v
+~/.openclaude.json
+~/.openclaude/projects/
+~/.openclaude/debug/
+```
+
+The web UI can run locally during development or be hosted as static assets. The server should run on the same machine as OpenClaude because it reads local OpenClaude files.
+
+## Requirements
+
+- Node.js 22 or newer
+- npm
+- OpenClaude installed and used at least once, so local config/session files exist
 
 ## Quick Start
 
+Install dependencies:
+
 ```bash
 npm install
+```
+
+Run the local server and web app:
+
+```bash
 npm run dev
 ```
 
-The server prints a local URL and API token. Open the web UI at `http://127.0.0.1:5173`, paste the token, and refresh.
+Open the web UI at:
 
-For a production-style local run:
+```text
+http://127.0.0.1:5173
+```
+
+The local API listens at:
+
+```text
+http://127.0.0.1:43110
+```
+
+## Production-Style Local Run
+
+Build all workspaces:
 
 ```bash
 npm run build
-OPENCLAUDE_STUDIO_TOKEN="$(openssl rand -base64 24)" npm run start -w @openclaude-studio/server
 ```
 
-## Scripts
+Start the local API:
 
 ```bash
-npm test
+npm run start -w @openclaude-studio/server
+```
+
+By default, the server binds to `127.0.0.1` and listens on port `43110`.
+
+## Configuration
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `OPENCLAUDE_STUDIO_HOST` | `127.0.0.1` | Host for the local API server. Keep this on loopback unless you provide your own trusted access control. |
+| `OPENCLAUDE_STUDIO_PORT` | `43110` | Port for the local API server. |
+| `OPENCLAUDE_STUDIO_ALLOWED_ORIGINS` | loopback browser origins | Comma-separated hosted web origins allowed to call the local API. |
+| `OPENCLAUDE_STUDIO_TOKEN` | unset | Optional API token for custom callers or deployments with their own access flow. The bundled web UI does not prompt for tokens. |
+| `CLAUDE_CONFIG_DIR` | `~/.openclaude` | OpenClaude config directory override, useful for testing alternate local data roots. |
+
+If you host the web UI somewhere other than localhost, add that origin:
+
+```bash
+OPENCLAUDE_STUDIO_ALLOWED_ORIGINS=https://studio.example.com npm run start -w @openclaude-studio/server
+```
+
+## Development
+
+Useful commands:
+
+```bash
 npm run lint
+npm test
 npm run build
 npm run test:e2e
 ```
 
-## Architecture
+Workspace layout:
 
 - `apps/server`: Fastify local API and CLI binary
-- `apps/web`: Vite + React dashboard
+- `apps/web`: Vite, React, Tailwind CSS dashboard
 - `packages/shared`: API response types shared by server and web
-
-The server reads:
-
-- `~/.openclaude.json`
-- `~/.openclaude/projects`
-- `~/.openclaude/debug`
-
-It refuses unsafe paths, avoids symlink traversal for file reads, bounds log/transcript reads, and redacts likely secrets before returning provider URLs, log lines, and session titles.
+- `tests/e2e`: Playwright coverage for the integrated app
 
 ## Safety Model
 
-OpenClaude Studio `0.0.1` is read-only. It does not modify OpenClaude settings, sessions, logs, project files, provider profiles, or tasks.
+OpenClaude Studio is designed to be conservative by default:
 
-The local API binds to `127.0.0.1` by default and requires `x-openclaude-studio-token` for data endpoints. Keep that token private.
+- The `0.0.1` API is read-only.
+- The server binds to loopback by default.
+- Browser origins are restricted to loopback unless explicitly configured.
+- File reads are bounded.
+- Symlink traversal is avoided for sensitive local file reads.
+- Provider URLs, auth fields, bearer tokens, common API key formats, and log messages are redacted where possible.
+
+Redaction is defense in depth, not a guarantee for every possible secret format. Avoid sharing screenshots or logs without reviewing them.
+
+## Roadmap
+
+The current release focuses on a useful read-only foundation. Future work will be prioritized by real user feedback. Valuable next areas include:
+
+- Rich session timeline with transcript, tool call, file change, and error details
+- Global project search across sessions, logs, config, prompt assets, plans, and tasks
+- Plans and tasks views linked back to the sessions that created them
+- File history and backup inspection for selected projects
+- Config source explorer for user settings, project settings, local settings, and managed config
+- Prompt asset inventory for instructions, agents, commands, skills, workflows, and output styles
+- Hooks and permissions diagnostics
+- Provider profile management with safe templates and validation
+- Live log streaming with pause, filtering, and retention controls
+- Hosted web deployment guidance and an installable local server package
+- Optional write workflows after the write model, review UX, backups, and security boundaries are designed explicitly
+
+Ideas, bug reports, and focused pull requests are welcome. If you propose a write-capable feature, please include the expected safety model and rollback behavior.
+
+## Contributing
+
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Keep changes focused, include tests for behavior changes, and avoid committing local data, generated output, logs, secrets, or machine-specific paths.
+
+## Security
+
+Please read [SECURITY.md](SECURITY.md) for the local data access model and vulnerability reporting guidance.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -10,7 +10,7 @@ Please report vulnerabilities through GitHub private vulnerability reporting whe
 
 ## Local Data Access
 
-OpenClaude Studio reads local OpenClaude files through a localhost server. Data endpoints require an API token, and the server binds to `127.0.0.1` by default.
+OpenClaude Studio reads local OpenClaude files through a localhost server. The server binds to `127.0.0.1` by default and allows loopback browser origins. Hosted web origins must be explicitly configured with `OPENCLAUDE_STUDIO_ALLOWED_ORIGINS`.
 
 Do not expose the local server to a public network. If you override `OPENCLAUDE_STUDIO_HOST`, make sure the network is trusted.
 

@@ -1,6 +1,8 @@
 # Contributing
 
-Thanks for considering a contribution.
+Thanks for considering a contribution to OpenClaude Studio.
+
+The project is early and deliberately scoped. The best contributions are small, well-tested improvements that keep the local data access model understandable.
 
 ## Development
 
@@ -22,13 +24,21 @@ npm run test:e2e
 
 The `0.0.1` line is intentionally read-only. Changes that write OpenClaude settings, sessions, logs, provider profiles, or project files should wait until the write model has explicit design and security review.
 
+Roadmap discussions are welcome. For larger features, open an issue first so the data access model, UI scope, and testing plan can be discussed before implementation.
+
 ## Pull Requests
 
 - Keep changes focused and small.
 - Include tests for behavior changes.
 - Avoid committing generated output, local environment files, secrets, logs, or machine-specific paths.
 - Keep API responses typed through `packages/shared`.
+- Document user-visible changes in `README.md` when behavior, setup, or scope changes.
+- Keep the local server read-only unless the change has an explicit safety design.
 
 ## Code Style
 
 Use the existing TypeScript, React, and Fastify patterns in the repository. Prefer small services with focused tests over broad cross-cutting changes.
+
+## Security
+
+Do not include real OpenClaude data, provider credentials, local session contents, debug logs, or screenshots containing private data in issues or pull requests.
