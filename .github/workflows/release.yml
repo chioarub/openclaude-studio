@@ -37,6 +37,20 @@ jobs:
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 
+      - name: Read package version
+        id: package
+        run: |
+          version="$(node -p "require('./apps/server/package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check tag matches package version
+        run: |
+          expected="refs/tags/v${{ steps.package.outputs.version }}"
+          if [ "$GITHUB_REF" != "$expected" ]; then
+            echo "Release tag $GITHUB_REF does not match package version $expected."
+            exit 1
+          fi
+
       - name: Lint
         run: npm run lint
 
@@ -52,6 +66,15 @@ jobs:
       - name: End-to-end tests
         run: npm run test:e2e -- --project=chromium
 
+      - name: Check npm publication status
+        id: npm
+        run: |
+          if npm view "openclaude-studio@${{ steps.package.outputs.version }}" version > /dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check Cloudflare credentials
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -61,7 +84,12 @@ jobs:
           test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN repository secret."; exit 1; }
 
       - name: Publish to npm
+        if: steps.npm.outputs.published == 'false'
         run: npm publish -w openclaude-studio
+
+      - name: Skip npm publish
+        if: steps.npm.outputs.published == 'true'
+        run: echo "openclaude-studio@${{ steps.package.outputs.version }} is already published."
 
       - name: Deploy web to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
