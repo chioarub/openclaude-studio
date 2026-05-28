@@ -92,9 +92,7 @@ jobs:
         run: echo "openclaude-studio@${{ steps.package.outputs.version }} is already published."
 
       - name: Deploy web to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy apps/web/dist --project-name=openclaude-studio --branch=main --commit-hash=${{ github.sha }}
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx --yes wrangler@4.95.0 pages deploy apps/web/dist --project-name=openclaude-studio --branch=main --commit-hash=${{ github.sha }}
