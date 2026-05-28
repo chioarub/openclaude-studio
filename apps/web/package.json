@@ -5,7 +5,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "dev": "vite --host 127.0.0.1 --port 5173",
-    "lint": "tsc -p tsconfig.json --noEmit",
+    "lint": "npm run build -w @openclaude-studio/shared && tsc -p tsconfig.json --noEmit",
     "test": "vitest run --environment jsdom --passWithNoTests"
   },
   "dependencies": {

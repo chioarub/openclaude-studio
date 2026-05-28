@@ -32,7 +32,7 @@ export function redactTextSecrets(content: string): string {
     .replace(/\b(bearer\s+)([A-Za-z0-9._~+/=-]{8,})\b/gi, `$1${redactedValue}`);
 }
 
-export function redactUrl(value: string | undefined): string | null {
+export function redactUrl(value: string | null | undefined): string | null {
   if (!value) {
     return null;
   }
