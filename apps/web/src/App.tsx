@@ -349,7 +349,7 @@ function StudioApp() {
           }}
         />
         <main className="mx-auto w-full max-w-[1420px] px-4 py-5 md:px-6 lg:px-8">
-          {error ? <StatusBanner baseUrl={baseUrl} error={error} /> : null}
+          {error ? <StatusBanner baseUrl={baseUrl} error={error} isConnected={health?.status === 'ok'} /> : null}
           <Routes>
             <Route
               path="/"
@@ -1606,13 +1606,40 @@ function PageStack({ children }: { children: ReactNode }) {
   return <div className="space-y-5">{children}</div>;
 }
 
-function StatusBanner({ baseUrl, error }: { baseUrl: string; error: string }) {
+function StatusBanner({ baseUrl, error, isConnected }: { baseUrl: string; error: string; isConnected: boolean }) {
+  const likelyConnectionError = !isConnected || /failed to fetch|load failed|networkerror/i.test(error);
+
   return (
-    <div className="status-banner mb-5">
-      <AlertTriangle className="h-4 w-4" />
-      <span className="min-w-0 flex-1 truncate" title={`${error} (${baseUrl})`}>
-        {error}
-      </span>
+    <div aria-live="polite" className="status-banner mb-5" role="status">
+      <div className="status-banner-icon">
+        <AlertTriangle className="h-4 w-4" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="status-banner-title">
+          {likelyConnectionError ? 'Start the local OpenClaude Studio server' : 'Unable to load data'}
+        </div>
+        {likelyConnectionError ? (
+          <>
+            <p className="status-banner-copy">
+              The hosted UI reads OpenClaude through a small read-only server on your machine. Run this command locally,
+              then refresh the page.
+            </p>
+            <div className="status-banner-command" aria-label="Local server command">
+              <Terminal className="h-3.5 w-3.5" aria-hidden="true" />
+              <code>npx openclaude-studio</code>
+            </div>
+          </>
+        ) : (
+          <p className="status-banner-copy">
+            The local server is reachable, but the last request failed. Refresh the app or check the local server terminal
+            for details.
+          </p>
+        )}
+        <div className="status-banner-meta">
+          <span>Expected API: {baseUrl}</span>
+          <span title={error}>Last error: {error}</span>
+        </div>
+      </div>
     </div>
   );
 }

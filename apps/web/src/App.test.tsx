@@ -26,6 +26,19 @@ afterEach(() => {
 });
 
 describe('App', () => {
+  test('explains how to start the local server when the hosted UI cannot reach the API', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    const status = await screen.findByRole('status');
+    expect(within(status).getByText('Start the local OpenClaude Studio server')).toBeInTheDocument();
+    expect(within(status).getByText('npx openclaude-studio')).toBeInTheDocument();
+    expect(within(status).getByText('Expected API: http://127.0.0.1:43110')).toBeInTheDocument();
+    expect(within(status).getByText('Last error: Failed to fetch')).toBeInTheDocument();
+  });
+
   test('loads the read-only workspace from the local API without a token prompt', async () => {
     const fetchMock = mockApi();
     vi.stubGlobal('fetch', fetchMock);
@@ -139,7 +152,9 @@ describe('App', () => {
     logView.scrollTop = 30_000;
     fireEvent.scroll(logView);
 
-    expect(await screen.findByText('Injected log failure')).toBeInTheDocument();
+    expect(await screen.findByText('Unable to load data')).toBeInTheDocument();
+    expect(screen.getByText('Last error: Injected log failure')).toBeInTheDocument();
+    expect(screen.queryByText('npx openclaude-studio')).not.toBeInTheDocument();
     expect(fetchCountByPath(fetchMock, '/api/logs/window')).toBe(initialLogRequests + 1);
 
     logView.scrollTop = 31_500;
@@ -149,7 +164,7 @@ describe('App', () => {
       expect(wasFetchedWithQuery(fetchMock, '/api/logs/window', 'start', '800')).toBe(true);
     });
     expect(fetchCountByPath(fetchMock, '/api/logs/window')).toBe(initialLogRequests + 2);
-    await waitFor(() => expect(screen.queryByText('Injected log failure')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/Injected log failure/i)).not.toBeInTheDocument());
   });
 
   test('surfaces API diagnostics on the diagnostics route', async () => {

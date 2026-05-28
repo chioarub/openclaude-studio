@@ -891,13 +891,70 @@ body {
 
 .status-banner {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 12px;
   border: 1px solid rgb(198 69 69 / 25%);
   border-radius: 8px;
-  background: rgb(198 69 69 / 10%);
+  background: linear-gradient(180deg, rgb(198 69 69 / 10%), rgb(198 69 69 / 7%));
+  color: var(--text-ink);
+  padding: 14px 16px;
+}
+
+.status-banner-icon {
+  display: inline-flex;
+  height: 28px;
+  width: 28px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(198 69 69 / 28%);
+  border-radius: 8px;
+  background: rgb(198 69 69 / 12%);
   color: #c64545;
-  padding: 10px 12px;
+}
+
+.status-banner-title {
+  color: var(--text-ink);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.status-banner-copy {
+  margin: 3px 0 0;
+  max-width: 760px;
+  color: var(--text-body);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.status-banner-command {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  border: 1px solid var(--code-panel-border);
+  border-radius: 6px;
+  background: var(--code-panel-bg);
+  color: var(--code-panel-text);
+  padding: 7px 10px;
+}
+
+.status-banner-command code {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status-banner-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 9px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .diagnostics-list {

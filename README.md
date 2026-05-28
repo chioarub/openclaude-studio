@@ -1,6 +1,11 @@
 # OpenClaude Studio
 
-OpenClaude Studio is a read-only local companion for OpenClaude. It gives you a clean browser UI for inspecting OpenClaude projects, sessions, provider status, diagnostics, and debug logs without editing your local OpenClaude data.
+[![CI](https://github.com/chioarub/openclaude-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/chioarub/openclaude-studio/actions/workflows/ci.yml)
+[![Release](https://github.com/chioarub/openclaude-studio/actions/workflows/release.yml/badge.svg)](https://github.com/chioarub/openclaude-studio/actions/workflows/release.yml)
+[![npm version](https://img.shields.io/npm/v/openclaude-studio.svg)](https://www.npmjs.com/package/openclaude-studio)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+OpenClaude Studio is a read-only companion dashboard for OpenClaude. Run a small local API on your machine, open the hosted web app, and inspect projects, sessions, provider status, diagnostics, and debug logs without editing local OpenClaude data.
 
 The project is intentionally small in `0.0.1`: a hosted or local web app talks to a local server running on your machine. The server reads OpenClaude files from disk, redacts likely secrets, and exposes only read-only HTTP endpoints.
 
@@ -45,17 +50,19 @@ The web UI can run locally during development or be hosted as static assets. The
 
 ## Quick Start
 
-For normal use, run the local API with npm:
+For normal use, start the local read-only API:
 
 ```bash
 npx openclaude-studio
 ```
 
-Then open the hosted frontend:
+Then open the hosted dashboard:
 
 ```text
 https://openclaude-studio.pages.dev/
 ```
+
+The browser UI connects to `http://127.0.0.1:43110` by default. If the local server is not running, the app will show the command above and the API URL it expected to reach.
 
 ## Local Development
 
@@ -150,17 +157,30 @@ Redaction is defense in depth, not a guarantee for every possible secret format.
 
 The current release focuses on a useful read-only foundation. Future work will be prioritized by real user feedback. Valuable next areas include:
 
-- Rich session timeline with transcript, tool call, file change, and error details
-- Global project search across sessions, logs, config, prompt assets, plans, and tasks
-- Plans and tasks views linked back to the sessions that created them
-- File history and backup inspection for selected projects
-- Config source explorer for user settings, project settings, local settings, and managed config
-- Prompt asset inventory for instructions, agents, commands, skills, workflows, and output styles
-- Hooks and permissions diagnostics
-- Provider profile management with safe templates and validation
-- Live log streaming with pause, filtering, and retention controls
-- Hosted web deployment guidance and an installable local server package
-- Optional write workflows after the write model, review UX, backups, and security boundaries are designed explicitly
+Shipped in `0.0.1`:
+
+- [x] Hosted web dashboard
+- [x] Installable local API package through npm
+- [x] Project selector and project overview
+- [x] Session summaries for the selected project
+- [x] Active provider inspection with secret fields redacted
+- [x] Project-scoped diagnostics
+- [x] Debug log viewing, filtering, search, virtualized scrolling, and log-message copy
+- [x] Dark and light themes
+- [x] Conservative read-only local API
+
+Planned and open for discussion:
+
+- [ ] Rich session timeline with transcript, tool call, file change, and error details
+- [ ] Global project search across sessions, logs, config, prompt assets, plans, and tasks
+- [ ] Plans and tasks views linked back to the sessions that created them
+- [ ] File history and backup inspection for selected projects
+- [ ] Config source explorer for user settings, project settings, local settings, and managed config
+- [ ] Prompt asset inventory for instructions, agents, commands, workflows, and output styles
+- [ ] Hooks and permissions diagnostics
+- [ ] Provider profile management with safe templates and validation
+- [ ] Live log streaming with pause, filtering, and retention controls
+- [ ] Optional write workflows after the write model, review UX, backups, and security boundaries are designed explicitly
 
 Ideas, bug reports, and focused pull requests are welcome. If you propose a write-capable feature, please include the expected safety model and rollback behavior.
 
