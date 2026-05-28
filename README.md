@@ -45,13 +45,17 @@ The web UI can run locally during development or be hosted as static assets. The
 
 ## Quick Start
 
-For normal use, run the local API with npm and open the hosted frontend once it has been deployed:
+For normal use, run the local API with npm:
 
 ```bash
-npx openclaude-studio --allowed-origin https://your-project.pages.dev
+npx openclaude-studio
 ```
 
-The `--allowed-origin` value must match the exact Cloudflare Pages origin that serves the frontend. After the official hosted URL is finalized, this documentation will be updated with that URL.
+Then open the hosted frontend:
+
+```text
+https://openclaude-studio.pages.dev/
+```
 
 ## Local Development
 
@@ -101,11 +105,11 @@ By default, the server binds to `127.0.0.1` and listens on port `43110`.
 | --- | --- | --- |
 | `OPENCLAUDE_STUDIO_HOST` | `127.0.0.1` | Host for the local API server. Keep this on loopback unless you provide your own trusted access control. |
 | `OPENCLAUDE_STUDIO_PORT` | `43110` | Port for the local API server. |
-| `OPENCLAUDE_STUDIO_ALLOWED_ORIGINS` | loopback browser origins | Comma-separated hosted web origins allowed to call the local API. |
+| `OPENCLAUDE_STUDIO_ALLOWED_ORIGINS` | official hosted app plus loopback browser origins | Comma-separated additional hosted web origins allowed to call the local API. |
 | `OPENCLAUDE_STUDIO_TOKEN` | unset | Optional API token for custom callers or deployments with their own access flow. The bundled web UI does not prompt for tokens. |
 | `CLAUDE_CONFIG_DIR` | `~/.openclaude` | OpenClaude config directory override, useful for testing alternate local data roots. |
 
-If you host the web UI somewhere other than localhost, add that origin:
+The official hosted app at `https://openclaude-studio.pages.dev` is allowed by default. If you host the web UI somewhere else, add that origin:
 
 ```bash
 OPENCLAUDE_STUDIO_ALLOWED_ORIGINS=https://studio.example.com npm run start -w openclaude-studio
@@ -135,7 +139,7 @@ OpenClaude Studio is designed to be conservative by default:
 
 - The `0.0.1` API is read-only.
 - The server binds to loopback by default.
-- Browser origins are restricted to loopback unless explicitly configured.
+- Browser origins are restricted to loopback, the official hosted app, and any origins explicitly configured by the user.
 - File reads are bounded.
 - Symlink traversal is avoided for sensitive local file reads.
 - Provider URLs, auth fields, bearer tokens, common API key formats, and log messages are redacted where possible.

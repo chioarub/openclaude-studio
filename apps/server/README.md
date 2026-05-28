@@ -2,7 +2,11 @@
 
 This package runs the read-only local API used by OpenClaude Studio.
 
-The hosted frontend cannot read OpenClaude files directly from a browser. Run this server on the same machine as OpenClaude, then open the OpenClaude Studio frontend in your browser.
+The hosted frontend cannot read OpenClaude files directly from a browser. Run this server on the same machine as OpenClaude, then open the OpenClaude Studio frontend in your browser:
+
+```text
+https://openclaude-studio.pages.dev/
+```
 
 ## Usage
 
@@ -16,18 +20,20 @@ The server binds to `127.0.0.1:43110` by default and reads:
 - `~/.openclaude/projects/`
 - `~/.openclaude/debug/`
 
-## Hosted Frontend Origin
+## Hosted Frontend Origins
 
-When using a hosted frontend, allow its exact origin:
+The official hosted frontend at `https://openclaude-studio.pages.dev` is allowed by default.
+
+When using a custom hosted frontend, allow its exact origin:
 
 ```bash
-npx openclaude-studio --allowed-origin https://your-project.pages.dev
+npx openclaude-studio --allowed-origin https://studio.example.com
 ```
 
 You can also use an environment variable:
 
 ```bash
-OPENCLAUDE_STUDIO_ALLOWED_ORIGINS=https://your-project.pages.dev npx openclaude-studio
+OPENCLAUDE_STUDIO_ALLOWED_ORIGINS=https://studio.example.com npx openclaude-studio
 ```
 
 ## Options
@@ -35,7 +41,7 @@ OPENCLAUDE_STUDIO_ALLOWED_ORIGINS=https://your-project.pages.dev npx openclaude-
 ```text
 --host <host>                 Host to bind. Defaults to 127.0.0.1.
 --port <port>                 Port to listen on. Defaults to 43110.
---allowed-origin <origin>     Hosted frontend origin to allow. Repeat or comma-separate values.
+--allowed-origin <origin>     Additional hosted frontend origin to allow. Repeat or comma-separate values.
 --version, -v                 Print version.
 --help, -h                    Print help.
 ```
