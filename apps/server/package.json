@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
     "dev": "tsx watch src/cli.ts --port 43110",
     "lint": "npm run build -w @openclaude-studio/shared && tsc -p tsconfig.json --noEmit",
+    "start": "node dist/cli.js",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
