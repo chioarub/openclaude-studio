@@ -77,6 +77,19 @@ describe('HTTP server', () => {
     expect(response.headers['access-control-allow-origin']).toBeUndefined();
   });
 
+  test('allows the official hosted browser origin by default', async () => {
+    const server = await testServer();
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/health',
+      headers: { origin: 'https://openclaude-studio.pages.dev' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['access-control-allow-origin']).toBe('https://openclaude-studio.pages.dev');
+  });
+
   test('allows configured hosted browser origins from server environment', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
     const server = await buildServer({
@@ -95,6 +108,24 @@ describe('HTTP server', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers['access-control-allow-origin']).toBe('https://studio.example.com');
+  });
+
+  test('allows private network preflights for the official hosted browser origin by default', async () => {
+    const server = await testServer();
+
+    const response = await server.inject({
+      method: 'OPTIONS',
+      url: '/api/projects',
+      headers: {
+        'access-control-request-method': 'GET',
+        'access-control-request-private-network': 'true',
+        origin: 'https://openclaude-studio.pages.dev',
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers['access-control-allow-origin']).toBe('https://openclaude-studio.pages.dev');
+    expect(response.headers['access-control-allow-private-network']).toBe('true');
   });
 
   test('allows private network preflights for configured hosted browser origins', async () => {

@@ -27,6 +27,8 @@ export type ServerOptions = PathOptions & {
   version?: string;
 };
 
+export const defaultAllowedOrigins = ['https://openclaude-studio.pages.dev'] as const;
+
 type ProjectParams = {
   projectId: string;
 };
@@ -41,6 +43,7 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
   const authToken = options.authToken;
   const version = options.version ?? env.npm_package_version ?? '0.0.1';
   const configuredAllowedOrigins = new Set([
+    ...defaultAllowedOrigins,
     ...(options.allowedOrigins ?? []),
     ...(env.OPENCLAUDE_STUDIO_ALLOWED_ORIGINS ?? '')
       .split(',')

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { buildServer } from './http/server.js';
+import { buildServer, defaultAllowedOrigins } from './http/server.js';
 
 const version = '0.0.1';
 const options = readCliOptions(process.argv.slice(2));
@@ -24,6 +24,8 @@ if (!Number.isInteger(port) || port < 1 || port > 65_535) {
 const host = options.host ?? process.env.OPENCLAUDE_STUDIO_HOST ?? '127.0.0.1';
 const authToken = process.env.OPENCLAUDE_STUDIO_TOKEN;
 const allowedOrigins = options.allowedOrigins;
+const envAllowedOrigins = splitOrigins(process.env.OPENCLAUDE_STUDIO_ALLOWED_ORIGINS ?? '');
+const displayedAllowedOrigins = [...new Set([...defaultAllowedOrigins, ...envAllowedOrigins, ...allowedOrigins])];
 
 const server = await buildServer({
   ...(authToken ? { authToken } : {}),
@@ -35,13 +37,7 @@ await server.listen({ host, port });
 console.log('OpenClaude Studio local API');
 console.log(`  URL: http://${host}:${port}`);
 console.log('  Mode: read-only');
-if (allowedOrigins.length > 0) {
-  console.log(`  Allowed hosted origins: ${allowedOrigins.join(', ')}`);
-} else if (process.env.OPENCLAUDE_STUDIO_ALLOWED_ORIGINS) {
-  console.log(`  Allowed hosted origins: ${process.env.OPENCLAUDE_STUDIO_ALLOWED_ORIGINS}`);
-} else {
-  console.log('  Allowed hosted origins: loopback browser origins only');
-}
+console.log(`  Allowed browser origins: loopback plus ${displayedAllowedOrigins.join(', ')}`);
 if (authToken) {
   console.log('  API token protection: enabled');
 }
@@ -128,12 +124,12 @@ Usage:
 Options:
   --host <host>                 Host to bind. Defaults to OPENCLAUDE_STUDIO_HOST or 127.0.0.1.
   --port <port>                 Port to listen on. Defaults to OPENCLAUDE_STUDIO_PORT or 43110.
-  --allowed-origin <origin>     Hosted frontend origin to allow. Repeat or comma-separate values.
+  --allowed-origin <origin>     Additional hosted frontend origin to allow. Repeat or comma-separate values.
   --version, -v                 Print version.
   --help, -h                    Print help.
 
 Environment:
-  OPENCLAUDE_STUDIO_ALLOWED_ORIGINS   Comma-separated hosted frontend origins.
+  OPENCLAUDE_STUDIO_ALLOWED_ORIGINS   Comma-separated additional hosted frontend origins.
   OPENCLAUDE_STUDIO_TOKEN             Optional API token for custom clients.
   CLAUDE_CONFIG_DIR                   Override OpenClaude config directory.
 `);
