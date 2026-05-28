@@ -39,6 +39,10 @@ Roadmap discussions are welcome. For larger features, open an issue first so the
 
 Use the existing TypeScript, React, and Fastify patterns in the repository. Prefer small services with focused tests over broad cross-cutting changes.
 
+## Releases
+
+The local API package is published from GitHub Actions when a `v*` tag is pushed. The npm package should use trusted publishing for `.github/workflows/release.yml`; do not add long-lived npm tokens to repository secrets.
+
 ## Security
 
 Do not include real OpenClaude data, provider credentials, local session contents, debug logs, or screenshots containing private data in issues or pull requests.
