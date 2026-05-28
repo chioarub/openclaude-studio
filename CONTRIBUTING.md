@@ -45,6 +45,8 @@ The local API package is published from GitHub Actions when a `v*` tag is pushed
 
 The same release workflow deploys the web app to Cloudflare Pages after validation and npm publishing succeed. Cloudflare Pages Git integration should keep automatic production deployments disabled and preview branch deployments set to `None`; production deploys are handled by the release workflow.
 
+Release tags must match the server package version, for example `v0.0.1` for `apps/server/package.json` version `0.0.1`. If the exact npm package version was already published, the workflow skips npm publishing and still deploys the web app.
+
 The release workflow needs these repository secrets:
 
 - `CLOUDFLARE_ACCOUNT_ID`
