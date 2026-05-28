@@ -29,12 +29,17 @@ describe('App', () => {
   test('explains how to start the local server when the hosted UI cannot reach the API', async () => {
     const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
     vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined);
 
     render(<App />);
 
     const status = await screen.findByRole('status');
     expect(within(status).getByText('Start the local OpenClaude Studio server')).toBeInTheDocument();
+    expect(within(status).getByText('The hosted UI needs the local read-only API. Run this in a terminal, keep it open, then refresh.')).toBeInTheDocument();
     expect(within(status).getByText('npx openclaude-studio')).toBeInTheDocument();
+    await user.click(within(status).getByRole('button', { name: /copy local server command/i }));
+    expect(writeText).toHaveBeenCalledWith('npx openclaude-studio');
     expect(within(status).getByText('Expected API: http://127.0.0.1:43110')).toBeInTheDocument();
     expect(within(status).getByText('Last error: Failed to fetch')).toBeInTheDocument();
   });
@@ -48,6 +53,7 @@ describe('App', () => {
     expect(await screen.findByRole('button', { name: /project-a main/i })).toBeInTheDocument();
     expect(screen.queryByLabelText('API token')).not.toBeInTheDocument();
     expect(screen.queryByText('Selected project')).not.toBeInTheDocument();
+    expect(screen.getAllByText('v0.0.1-test').length).toBeGreaterThan(0);
     expect(screen.getByText('Anthropic')).toBeInTheDocument();
     expect(screen.getByText('Build the API')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
