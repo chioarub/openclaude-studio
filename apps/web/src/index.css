@@ -941,10 +941,41 @@ body {
   padding: 7px 10px;
 }
 
+.status-banner-command:hover,
+.status-banner-command:focus-within {
+  border-color: rgb(204 120 92 / 45%);
+}
+
 .status-banner-command code {
   overflow-wrap: anywhere;
   font-size: 12px;
   font-weight: 700;
+}
+
+.status-banner-command-copy {
+  display: inline-flex;
+  height: 24px;
+  width: 24px;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin: -4px -6px -4px 0;
+  border-radius: 6px;
+  color: var(--code-panel-muted);
+  opacity: 0;
+  transition: background 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+
+.status-banner-command:hover .status-banner-command-copy,
+.status-banner-command:focus-within .status-banner-command-copy {
+  opacity: 1;
+}
+
+.status-banner-command-copy:hover,
+.status-banner-command-copy:focus-visible {
+  background: var(--code-panel-elevated);
+  color: #cc785c;
+  outline: none;
 }
 
 .status-banner-meta {

@@ -14,6 +14,8 @@ https://openclaude-studio.pages.dev/
 npx openclaude-studio
 ```
 
+Keep the command running while you use the hosted frontend. Stop it with `Ctrl+C` when you are done.
+
 The server binds to `127.0.0.1:43110` by default and reads:
 
 - `~/.openclaude.json`
@@ -48,6 +50,6 @@ OPENCLAUDE_STUDIO_ALLOWED_ORIGINS=https://studio.example.com npx openclaude-stud
 
 ## Safety
 
-The `0.0.1` API is read-only. It does not write OpenClaude settings, sessions, logs, provider profiles, project files, tasks, or plans.
+The local API is read-only. It does not write OpenClaude settings, sessions, logs, provider profiles, project files, tasks, or plans.
 
 Keep the server bound to a loopback address unless you provide your own trusted access control.

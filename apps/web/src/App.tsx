@@ -450,6 +450,7 @@ function Header({
 }) {
   const { theme, toggleTheme } = useTheme();
   const connected = health?.status === 'ok';
+  const serverVersion = connected && 'version' in health ? `v${health.version}` : null;
 
   return (
     <header className="sticky top-0 z-40 flex h-16 shrink-0 items-center justify-between gap-3 border-b border-hairline bg-canvas px-4 md:px-6">
@@ -480,6 +481,7 @@ function Header({
             <span className="flex items-center text-sm font-medium text-success" title={baseUrl}>
               <Activity className="h-4 w-4 sm:mr-1" />
               <span className="hidden sm:inline">Connected</span>
+              {serverVersion ? <span className="ml-1 text-xs font-semibold tabular-nums">{serverVersion}</span> : null}
             </span>
           ) : (
             <span className="flex items-center text-sm font-medium text-error" title={baseUrl}>
@@ -1608,6 +1610,13 @@ function PageStack({ children }: { children: ReactNode }) {
 
 function StatusBanner({ baseUrl, error, isConnected }: { baseUrl: string; error: string; isConnected: boolean }) {
   const likelyConnectionError = !isConnected || /failed to fetch|load failed|networkerror/i.test(error);
+  const command = 'npx openclaude-studio';
+  const [copiedCommand, setCopiedCommand] = useState(false);
+
+  function copyCommand() {
+    void window.navigator.clipboard?.writeText(command);
+    setCopiedCommand(true);
+  }
 
   return (
     <div aria-live="polite" className="status-banner mb-5" role="status">
@@ -1621,12 +1630,20 @@ function StatusBanner({ baseUrl, error, isConnected }: { baseUrl: string; error:
         {likelyConnectionError ? (
           <>
             <p className="status-banner-copy">
-              The hosted UI reads OpenClaude through a small read-only server on your machine. Run this command locally,
-              then refresh the page.
+              The hosted UI needs the local read-only API. Run this in a terminal, keep it open, then refresh.
             </p>
             <div className="status-banner-command" aria-label="Local server command">
               <Terminal className="h-3.5 w-3.5" aria-hidden="true" />
-              <code>npx openclaude-studio</code>
+              <code>{command}</code>
+              <button
+                aria-label="Copy local server command"
+                className="status-banner-command-copy"
+                onClick={copyCommand}
+                title="Copy command"
+                type="button"
+              >
+                {copiedCommand ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              </button>
             </div>
           </>
         ) : (

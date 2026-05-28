@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
+import { readFileSync } from 'node:fs';
+
 import { buildServer, defaultAllowedOrigins } from './http/server.js';
 
-const version = '0.0.1';
+const version = readPackageVersion();
 const options = readCliOptions(process.argv.slice(2));
 
 if (options.help) {
@@ -133,4 +135,15 @@ Environment:
   OPENCLAUDE_STUDIO_TOKEN             Optional API token for custom clients.
   CLAUDE_CONFIG_DIR                   Override OpenClaude config directory.
 `);
+}
+
+function readPackageVersion(): string {
+  try {
+    const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      version?: unknown;
+    };
+    return typeof packageJson.version === 'string' ? packageJson.version : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
 }

@@ -56,6 +56,8 @@ For normal use, start the local read-only API:
 npx openclaude-studio
 ```
 
+Keep that terminal open while using the dashboard; stopping the command stops the local API.
+
 Then open the hosted dashboard:
 
 ```text
