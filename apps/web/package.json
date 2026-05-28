@@ -1,0 +1,32 @@
+{
+  "name": "@openclaude-studio/web",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "dev": "vite --host 127.0.0.1 --port 5173",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --environment jsdom --passWithNoTests"
+  },
+  "dependencies": {
+    "@openclaude-studio/shared": "file:../../packages/shared",
+    "@tailwindcss/vite": "^4.1.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.546.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.0.0",
+    "tailwind-merge": "^3.3.0",
+    "vite": "^7.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.0",
+    "@testing-library/react": "^16.0.0",
+    "@testing-library/user-event": "^14.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "jsdom": "^26.0.0",
+    "vitest": "^3.2.0"
+  }
+}

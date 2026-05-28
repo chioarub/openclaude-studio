@@ -1,0 +1,17 @@
+{
+  "name": "@openclaude-studio/shared",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "dist/api.js",
+  "types": "dist/api.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  }
+}

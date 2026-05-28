@@ -1,0 +1,24 @@
+{
+  "name": "@openclaude-studio/server",
+  "version": "0.0.1",
+  "type": "module",
+  "bin": {
+    "openclaude-studio-server": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
+    "dev": "tsx watch src/cli.ts --port 43110",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.0.0",
+    "@openclaude-studio/shared": "file:../../packages/shared",
+    "fastify": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "vitest": "^3.2.0"
+  }
+}
