@@ -6,8 +6,7 @@ reviews:
   profile: assertive
   request_changes_workflow: false
   high_level_summary: true
-  high_level_summary_placeholder: "@coderabbitai summary"
-  high_level_summary_in_walkthrough: false
+  high_level_summary_in_walkthrough: true
   high_level_summary_instructions: |
     Write a concise, professional PR summary for maintainers and contributors.
     Start with the purpose and user-visible or operational impact.
@@ -16,7 +15,7 @@ reviews:
     Keep the summary concrete, public-repository appropriate, and short enough to scan quickly.
   changed_files_summary: true
   review_status: true
-  review_details: true
+  review_details: false
   commit_status: false
   fail_commit_status: false
   collapse_walkthrough: true

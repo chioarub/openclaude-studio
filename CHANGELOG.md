@@ -4,12 +4,12 @@ All notable changes to OpenClaude Studio are documented here.
 
 This project uses semantic versioning for the published `openclaude-studio` npm package.
 
-## 0.0.7
+## 0.1.0
 
 - Added a session details inspector with conversation timeline, tool calls, changed files, token breakdowns, and related activity context.
 - Improved the session details layout so long side-panel sections remain usable without creating nested modal scrolling problems.
 - Added repository guidance for AI coding agents and tightened contributor pull request guidance for protected `main` branch workflows.
-- Improved CodeRabbit review configuration with PR summaries, public-repository hygiene checks, and non-blocking review automation.
+- Improved CodeRabbit review configuration with walkthrough-only PR summaries, public-repository hygiene checks, and non-blocking review automation.
 
 ## 0.0.6
 

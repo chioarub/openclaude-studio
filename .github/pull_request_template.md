@@ -2,11 +2,6 @@
 
 Describe what changed and why.
 
-## CodeRabbit Summary
-
-<!-- CodeRabbit replaces the marker below with an automated PR summary. -->
-@coderabbitai summary
-
 ## Validation
 
 - [ ] `npm test`
