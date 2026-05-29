@@ -39,6 +39,10 @@ Roadmap discussions are welcome. For larger features, open an issue first so the
 - Update docs in `docs/` when architecture, deployment, local server behavior, or privacy assumptions change.
 - Keep the local server read-only unless the change has an explicit safety design.
 
+CodeRabbit runs on pull requests and uses the repository configuration in `.coderabbit.yaml`. Wait for the review to complete before merging. Address actionable findings in code, or explain why a finding is intentionally deferred in the pull request discussion.
+
+The CodeRabbit configuration is intentionally strict about API compatibility, local data safety, release readiness, test coverage, and public repository hygiene. New checks should start in `warning` mode until they have produced useful signal across multiple pull requests.
+
 ## Code Style
 
 Use the existing TypeScript, React, and Fastify patterns in the repository. Prefer small services with focused tests over broad cross-cutting changes.

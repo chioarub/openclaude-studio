@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+early_access: false
+
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: true
+  changed_files_summary: true
+  review_status: true
+  review_details: true
+  commit_status: true
+  fail_commit_status: false
+  collapse_walkthrough: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  in_progress_fortune: false
+  poem: false
+  enable_prompt_for_ai_agents: false
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 5
+    drafts: false
+    ignore_title_keywords:
+      - WIP
+      - DO NOT MERGE
+      - "[skip review]"
+
+  path_filters:
+    - "!**/node_modules/**"
+    - "!**/dist/**"
+    - "!**/coverage/**"
+    - "!**/playwright-report/**"
+    - "!**/test-results/**"
+    - "!**/*.tgz"
+    - "!package-lock.json"
+
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    simplify:
+      enabled: false
+
+  path_instructions:
+    - path: "apps/web/src/**"
+      instructions: |
+        Review React and TypeScript changes for runtime safety against partial or older local API responses. Flag assumptions that optional arrays, nested objects, or newly added response fields always exist unless the code normalizes them or tests legacy payloads. Also check accessibility, loading and error states, light and dark theme behavior, and route-specific rendering.
+    - path: "apps/server/src/**"
+      instructions: |
+        Review the local API server for backward-compatible contracts, safe filesystem access, symlink and path traversal resistance, CORS/private-network behavior, log redaction, and accidental exposure of secrets or local-only paths.
+    - path: "packages/shared/src/**"
+      instructions: |
+        Review shared API type changes as cross-package contracts. Flag breaking response-shape changes unless they include the server implementation, frontend compatibility handling, tests, and documentation or changelog updates.
+    - path: ".github/workflows/**"
+      instructions: |
+        Review workflow changes for tag/version safety, npm trusted publishing, Cloudflare Pages deployment behavior, least-privilege permissions, concurrency, and artifact handling. Flag release changes that are not idempotent.
+    - path: "**/*.md"
+      instructions: |
+        Review public-facing documentation for accurate setup, release, deployment, and usage instructions. Flag stale commands, stale versions, private notes, local machine paths, personal data, or wording that should not appear in a public repository.
+    - path: "**/package.json"
+      instructions: |
+        Review package metadata, scripts, dependency changes, and workspace configuration for public npm readiness. Flag package/version mismatches, unsafe publish settings, dependency changes without validation, and scripts that do not work from a clean checkout.
+
+  pre_merge_checks:
+    docstrings:
+      mode: warning
+      threshold: 80
+    title:
+      mode: warning
+      requirements: "Use a concise, professional title that describes the user-visible or operational change."
+    description:
+      mode: warning
+    issue_assessment:
+      mode: warning
+    custom_checks:
+      - name: API compatibility
+        mode: warning
+        instructions: |
+          Pass if the PR does not change frontend API response consumption. When it does, pass only if the frontend handles missing fields from older local API responses. Fail if it directly uses `.length`, `.map`, `.filter`, or nested properties on newly added response fields without normalization, guards, or tests using legacy payloads.
+      - name: Local data safety
+        mode: warning
+        instructions: |
+          Pass if the PR does not change server-side local data access. When it does, pass only if file access stays inside expected OpenClaude data locations, avoids unsafe paths, redacts secrets from logs or diagnostics, and does not expose raw local paths unless intentionally documented. Fail on path traversal, secret exposure, or expanded read scope without a safety explanation.
+      - name: Release readiness
+        mode: warning
+        instructions: |
+          Pass if the PR does not change release behavior. When it does, pass only if package versions, package-lock, CHANGELOG, release workflow, npm publishing, and Cloudflare deployment docs stay consistent. Fail if a release-related change cannot be rerun safely or leaves public instructions stale.
+      - name: Test coverage
+        mode: warning
+        instructions: |
+          Pass if the PR does not change runtime behavior. When it does, pass only if behavior changes include targeted tests at the right layer. Fail if UI runtime behavior, API/service behavior, release workflow behavior, or risky end-to-end paths change without appropriate validation or a clear reason in the PR description.
+      - name: Public hygiene
+        mode: warning
+        instructions: |
+          Pass if committed files are suitable for a public repository. Fail on private workflow names, local machine paths, personal data, secret values, unpublished process notes, or non-public implementation wording.
