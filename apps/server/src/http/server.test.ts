@@ -187,6 +187,40 @@ describe('HTTP server', () => {
     });
   });
 
+  test('serves latest log windows through the tail query parameter', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(paths.debugDir, { recursive: true });
+    await writeFile(
+      join(paths.debugDir, 'session-tail.txt'),
+      [
+        '2026-05-28T08:00:00.000Z INFO line-1',
+        '2026-05-28T08:01:00.000Z INFO line-2',
+        '2026-05-28T08:02:00.000Z WARN line-3',
+        '2026-05-28T08:03:00.000Z INFO line-4',
+        '2026-05-28T08:04:00.000Z ERROR line-5',
+      ].join('\n'),
+      'utf8',
+    );
+    const server = await testServer(home);
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/logs/window?tail=true&count=2',
+      headers: tokenHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      start: 3,
+      totalLines: 5,
+      entries: [
+        { lineNumber: 4, message: 'line-4' },
+        { lineNumber: 5, message: 'line-5' },
+      ],
+    });
+  });
+
   test('returns projects, overview, sessions, and logs through read-only endpoints', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
     const projectPath = join(home, 'project-a');
@@ -281,6 +315,18 @@ describe('HTTP server', () => {
     expect(overview.json()).toMatchObject({
       provider: { id: 'provider-1', baseUrl: 'https://example.com/v1?api_key=%3Credacted%3E' },
       cards: { sessionCount: 1, totalTokens: 30, totalCostUsd: 0.25, logWarningCount: 1 },
+      usageSeries: [
+        {
+          date: '2026-05-28',
+          name: '05-28',
+          inputTokens: 10,
+          outputTokens: 20,
+          totalTokens: 30,
+          costUsd: 0.25,
+          sessionCount: 1,
+          sessionIds: ['session-1'],
+        },
+      ],
     });
     expect(sessions.json().sessions[0]).toMatchObject({ id: 'session-1', title: 'Build the API' });
     expect(logs.json().entries[0]).toMatchObject({

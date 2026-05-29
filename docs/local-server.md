@@ -1,0 +1,63 @@
+# Local Server
+
+The local server is the read-only bridge between the hosted dashboard and local OpenClaude files.
+
+## Start the Server
+
+```bash
+npx openclaude-studio
+```
+
+By default, the server listens at:
+
+```text
+http://127.0.0.1:43110
+```
+
+Keep the command running while using the dashboard. Stopping the process stops the local API.
+
+## CLI Options
+
+```text
+--host <host>                 Host to bind. Defaults to 127.0.0.1.
+--port <port>                 Port to listen on. Defaults to 43110.
+--allowed-origin <origin>     Additional hosted frontend origin to allow. Repeat or comma-separate values.
+--version, -v                 Print version.
+--help, -h                    Print help.
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `OPENCLAUDE_STUDIO_HOST` | `127.0.0.1` | Host for the local API server. |
+| `OPENCLAUDE_STUDIO_PORT` | `43110` | Port for the local API server. |
+| `OPENCLAUDE_STUDIO_ALLOWED_ORIGINS` | official hosted app plus loopback browser origins | Comma-separated additional hosted web origins allowed to call the local API. |
+| `OPENCLAUDE_STUDIO_TOKEN` | unset | Optional API token for custom callers or deployments with their own access flow. |
+| `CLAUDE_CONFIG_DIR` | `~/.openclaude` | OpenClaude config directory override for alternate local data roots. |
+
+The bundled web UI does not prompt for `OPENCLAUDE_STUDIO_TOKEN`. If you enable a token, use it for custom clients or your own access flow.
+
+## Browser Origins
+
+Loopback browser origins are allowed so local development works without extra configuration. The official hosted frontend is allowed by default:
+
+```text
+https://openclaude-studio.pages.dev
+```
+
+For a custom hosted frontend, allow the exact origin:
+
+```bash
+npx openclaude-studio --allowed-origin https://studio.example.com
+```
+
+or:
+
+```bash
+OPENCLAUDE_STUDIO_ALLOWED_ORIGINS=https://studio.example.com npx openclaude-studio
+```
+
+## Safety Notes
+
+Keep the server bound to loopback unless you have a trusted network and an explicit access-control model. The server reads local OpenClaude files and should not be exposed to public networks.

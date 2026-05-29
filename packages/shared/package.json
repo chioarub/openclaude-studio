@@ -1,6 +1,6 @@
 {
   "name": "@openclaude-studio/shared",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "type": "module",
   "main": "dist/api.js",
   "types": "dist/api.d.ts",

@@ -39,6 +39,7 @@ export type LogFileScope = {
 };
 
 export type LogWindowRequest = {
+  tail?: boolean;
   start?: number;
   count?: number;
 };
@@ -72,19 +73,20 @@ export async function readLogWindow(
   const listed = await listInternalLogFiles(paths.debugDir);
   const files = scopeLogFiles(listed.files, scope);
   const diagnostics = [...listed.diagnostics];
-  const start = normalizeStart(request.start);
+  const requestedStart = normalizeStart(request.start);
   const count = normalizeCount(request.count);
 
   const selected = selectLogFile(files, fileName, diagnostics);
   if (!selected) {
-    return emptyWindow(files, null, diagnostics, start, count);
+    return emptyWindow(files, null, diagnostics, requestedStart, count);
   }
 
   const index = await getOrBuildLogIndex(selected, diagnostics);
   if (!index) {
-    return emptyWindow(files, selected, diagnostics, start, count);
+    return emptyWindow(files, selected, diagnostics, requestedStart, count);
   }
 
+  const start = request.tail ? Math.max(0, index.lineCount - count) : requestedStart;
   const entries = await readIndexedEntries(index, start, count, diagnostics);
   const safeStart = Math.min(start, index.lineCount);
 
@@ -108,7 +110,7 @@ export async function searchLogs(
   const listed = await listInternalLogFiles(paths.debugDir);
   const files = scopeLogFiles(listed.files, scope);
   const diagnostics = [...listed.diagnostics];
-  const start = normalizeStart(request.start);
+  const requestedStart = normalizeStart(request.start);
   const count = normalizeCount(request.count);
   const query = (request.query ?? '').trim();
   const level = request.level ?? 'all';
@@ -116,7 +118,7 @@ export async function searchLogs(
   const selected = selectLogFile(files, fileName, diagnostics);
   if (!selected) {
     return {
-      ...emptyWindow(files, null, diagnostics, start, count),
+      ...emptyWindow(files, null, diagnostics, requestedStart, count),
       query,
       totalMatches: 0,
     };
@@ -125,7 +127,7 @@ export async function searchLogs(
   const index = await getOrBuildLogIndex(selected, diagnostics);
   if (!index) {
     return {
-      ...emptyWindow(files, selected, diagnostics, start, count),
+      ...emptyWindow(files, selected, diagnostics, requestedStart, count),
       query,
       totalMatches: 0,
     };
@@ -145,7 +147,12 @@ export async function searchLogs(
         );
         for (const entry of windowEntries) {
           if (!matchesSearch(entry, query, level)) continue;
-          if (totalMatches >= start && entries.length < count) {
+          if (request.tail) {
+            entries.push(entry);
+            if (entries.length > count) {
+              entries.shift();
+            }
+          } else if (totalMatches >= requestedStart && entries.length < count) {
             entries.push(entry);
           }
           totalMatches += 1;
@@ -155,7 +162,7 @@ export async function searchLogs(
       await handle.close().catch(() => undefined);
     }
   }
-  const safeStart = Math.min(start, totalMatches);
+  const safeStart = request.tail ? Math.max(0, totalMatches - entries.length) : Math.min(requestedStart, totalMatches);
 
   return {
     files: files.map(toPublicLogFile),

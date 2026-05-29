@@ -106,6 +106,23 @@ describe('logs', () => {
     expect(result.entries.map((entry) => entry.message)).toEqual(['line-1050', 'line-1051', 'line-1052']);
   });
 
+  test('can return the latest log window for tail-style viewers', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-logs-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(paths.debugDir, { recursive: true });
+    const lines = Array.from(
+      { length: 12 },
+      (_, index) => `2026-05-28T08:00:00.000Z INFO line-${index + 1}`,
+    );
+    await writeFile(join(paths.debugDir, 'session-tail.txt'), `${lines.join('\n')}\n`, 'utf8');
+
+    const result = await readLogWindow(paths, 'session-tail.txt', { count: 4, tail: true });
+
+    expect(result.totalLines).toBe(12);
+    expect(result.start).toBe(8);
+    expect(result.entries.map((entry) => entry.message)).toEqual(['line-9', 'line-10', 'line-11', 'line-12']);
+  });
+
   test('rejects unsafe log file names', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-logs-'));
     const paths = createOpenClaudePaths({ home, env: {} });
@@ -144,5 +161,32 @@ describe('logs', () => {
     expect(result.totalLines).toBe(3);
     expect(result.totalMatches).toBe(1);
     expect(result.entries[0]?.level).toBe('warn');
+  });
+
+  test('can return the latest matching search results', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-logs-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(paths.debugDir, { recursive: true });
+    await writeFile(
+      join(paths.debugDir, 'session-search-tail.txt'),
+      [
+        '2026-05-28T08:00:00.000Z INFO cache 1',
+        '2026-05-28T08:01:00.000Z INFO cache 2',
+        '2026-05-28T08:02:00.000Z INFO other',
+        '2026-05-28T08:03:00.000Z WARN cache 3',
+        '2026-05-28T08:04:00.000Z ERROR cache 4',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const result = await searchLogs(paths, 'session-search-tail.txt', {
+      query: 'cache',
+      count: 2,
+      tail: true,
+    });
+
+    expect(result.totalMatches).toBe(4);
+    expect(result.start).toBe(2);
+    expect(result.entries.map((entry) => entry.message)).toEqual(['cache 3', 'cache 4']);
   });
 });

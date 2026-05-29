@@ -56,10 +56,50 @@ describe('App', () => {
     expect(screen.getAllByText('v0.0.1-test').length).toBeGreaterThan(0);
     expect(screen.getByText('Anthropic')).toBeInTheDocument();
     expect(screen.getByText('Build the API')).toBeInTheDocument();
+    const projectOverview = screen.getByText('Project Overview').closest('section');
+    expect(projectOverview).not.toBeNull();
+    expect(within(projectOverview!).getByText('Usage Overview')).toBeInTheDocument();
+    expect(within(projectOverview!).getByRole('img', { name: /recorded spend chart/i })).toBeInTheDocument();
+    expect(within(projectOverview!).getAllByText('$0.25').length).toBeGreaterThan(0);
+    fireEvent.pointerEnter(within(projectOverview!).getByLabelText('2026-05-28: $0.25'));
+    const tooltip = await within(projectOverview!).findByRole('tooltip');
+    expect(within(tooltip).getByText('Recorded cost')).toBeInTheDocument();
+    expect(within(tooltip).getAllByText('$0.25').length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith(
       'http://127.0.0.1:43110/api/projects',
       expect.objectContaining({ headers: { accept: 'application/json' } }),
     );
+  });
+
+  test('defaults the overview chart to tokens when cost is not recorded', async () => {
+    vi.stubGlobal('fetch', mockApi({ overviewUsageSeries: tokenOnlyUsageSeriesFixture() }));
+
+    render(<App />);
+
+    const projectOverview = (await screen.findByText('Project Overview')).closest('section');
+    expect(projectOverview).not.toBeNull();
+    expect(within(projectOverview!).getByRole('img', { name: /token throughput chart/i })).toBeInTheDocument();
+    expect(within(projectOverview!).getByRole('button', { name: 'Tokens' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(projectOverview!).getByRole('button', { name: 'Cost' })).toHaveAttribute('aria-disabled', 'true');
+    expect(within(projectOverview!).getByText('Recorded cost unavailable')).toBeInTheDocument();
+  });
+
+  test('clears the usage chart tooltip when the timeframe changes', async () => {
+    vi.stubGlobal('fetch', mockApi());
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const projectOverview = (await screen.findByText('Project Overview')).closest('section');
+    expect(projectOverview).not.toBeNull();
+
+    await user.click(within(projectOverview!).getByRole('button', { name: 'All' }));
+    fireEvent.pointerEnter(within(projectOverview!).getByLabelText('2026-05-27: $0.00'));
+    expect(await within(projectOverview!).findByRole('tooltip')).toBeInTheDocument();
+
+    await user.click(within(projectOverview!).getByRole('button', { name: '14D' }));
+
+    expect(within(projectOverview!).queryByRole('tooltip')).not.toBeInTheDocument();
   });
 
   test('uses the saved server URL without reusing a stale persistent token', async () => {
@@ -121,26 +161,27 @@ describe('App', () => {
     const logsLink = screen.getAllByRole('link', { name: /^Logs$/i })[0];
     expect(logsLink).toBeDefined();
     await user.click(logsLink!);
-    await screen.findByText('line-1');
+    await screen.findByText('line-1200');
+    expect(wasFetchedWithQuery(fetchMock, '/api/logs/window', 'tail', 'true')).toBe(true);
     const initialLogRequests = fetchCountByPath(fetchMock, '/api/logs/window');
 
     const logView = screen.getByRole('region', { name: /log entries/i });
     Object.defineProperty(logView, 'clientHeight', { configurable: true, value: 320 });
-    logView.scrollTop = 18_000;
+    logView.scrollTop = 12_000;
     fireEvent.scroll(logView);
-    logView.scrollTop = 24_000;
+    logView.scrollTop = 9_000;
     fireEvent.scroll(logView);
-    logView.scrollTop = 30_000;
+    logView.scrollTop = 6_000;
     fireEvent.scroll(logView);
 
     await waitFor(() => {
-      expect(wasFetchedWithQuery(fetchMock, '/api/logs/window', 'start', '750')).toBe(true);
+      expect(wasFetchedWithQuery(fetchMock, '/api/logs/window', 'start', '0')).toBe(true);
     });
     expect(fetchCountByPath(fetchMock, '/api/logs/window')).toBe(initialLogRequests + 1);
   });
 
   test('recovers lazy log loading after a failed range request', async () => {
-    const fetchMock = mockApi({ failLogWindowStartOnce: 750, logTotalLines: 1200 });
+    const fetchMock = mockApi({ failLogWindowStartOnce: 0, logTotalLines: 1200 });
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
 
@@ -150,12 +191,12 @@ describe('App', () => {
     const logsLink = screen.getAllByRole('link', { name: /^Logs$/i })[0];
     expect(logsLink).toBeDefined();
     await user.click(logsLink!);
-    await screen.findByText('line-1');
+    await screen.findByText('line-1200');
     const initialLogRequests = fetchCountByPath(fetchMock, '/api/logs/window');
 
     const logView = screen.getByRole('region', { name: /log entries/i });
     Object.defineProperty(logView, 'clientHeight', { configurable: true, value: 320 });
-    logView.scrollTop = 30_000;
+    logView.scrollTop = 0;
     fireEvent.scroll(logView);
 
     expect(await screen.findByText('Unable to load data')).toBeInTheDocument();
@@ -163,14 +204,36 @@ describe('App', () => {
     expect(screen.queryByText('npx openclaude-studio')).not.toBeInTheDocument();
     expect(fetchCountByPath(fetchMock, '/api/logs/window')).toBe(initialLogRequests + 1);
 
-    logView.scrollTop = 31_500;
+    logView.scrollTop = 3_000;
     fireEvent.scroll(logView);
 
     await waitFor(() => {
-      expect(wasFetchedWithQuery(fetchMock, '/api/logs/window', 'start', '800')).toBe(true);
+      expect(fetchCountByPath(fetchMock, '/api/logs/window')).toBe(initialLogRequests + 2);
     });
-    expect(fetchCountByPath(fetchMock, '/api/logs/window')).toBe(initialLogRequests + 2);
+    expect(wasFetchedWithQuery(fetchMock, '/api/logs/window', 'start', '0')).toBe(true);
     await waitFor(() => expect(screen.queryByText(/Injected log failure/i)).not.toBeInTheDocument());
+  });
+
+  test('loads the latest matching log window when filters change', async () => {
+    const fetchMock = mockApi({ logTotalLines: 1200 });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    const logsLink = screen.getAllByRole('link', { name: /^Logs$/i })[0];
+    expect(logsLink).toBeDefined();
+    await user.click(logsLink!);
+    await screen.findByText('line-1200');
+
+    await user.click(screen.getByRole('button', { name: 'warn' }));
+
+    await waitFor(() => {
+      expect(wasFetchedWithQuery(fetchMock, '/api/logs/search', 'tail', 'true')).toBe(true);
+      expect(wasFetchedWithQuery(fetchMock, '/api/logs/search', 'level', 'warn')).toBe(true);
+    });
+    expect(await screen.findByText('line-1200')).toBeInTheDocument();
   });
 
   test('surfaces API diagnostics on the diagnostics route', async () => {
@@ -232,21 +295,21 @@ describe('App', () => {
       'fetch',
       mockApi({
         projects: [
-            projectFixture({ id: 'project-1', name: 'project-a', path: '/tmp/project-a', active: true }),
-            projectFixture({
-              id: 'project-2',
-              name: 'archived',
-              path: '/tmp/archived',
-              exists: false,
-              branch: 'legacy',
-              diagnostics: [
-                { level: 'error', message: 'Missing project.' },
-                { level: 'warn', message: 'Config is stale.' },
-              ],
-            }),
-          ],
-        }),
-      );
+          projectFixture({ id: 'project-1', name: 'project-a', path: '/tmp/project-a', active: true }),
+          projectFixture({
+            id: 'project-2',
+            name: 'archived',
+            path: '/tmp/archived',
+            exists: false,
+            branch: 'legacy',
+            diagnostics: [
+              { level: 'error', message: 'Missing project.' },
+              { level: 'warn', message: 'Config is stale.' },
+            ],
+          }),
+        ],
+      }),
+    );
     const user = userEvent.setup();
 
     render(<App />);
@@ -330,6 +393,7 @@ type MockApiOptions = {
   baseUrl?: string;
   failLogWindowStartOnce?: number;
   logTotalLines?: number;
+  overviewUsageSeries?: unknown[];
   projectDiagnostics?: unknown[];
   projects?: unknown[];
 };
@@ -381,6 +445,7 @@ function mockApi(options: MockApiOptions = {}) {
           logErrorCount: 0,
         },
         recentSessions: [],
+        usageSeries: options.overviewUsageSeries ?? usageSeriesFixture(),
         diagnostics: [],
       });
     }
@@ -407,7 +472,12 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (path === '/api/logs/window') {
       const projectId = requestUrl.searchParams.get('projectId');
-      const start = Number(requestUrl.searchParams.get('start') ?? 0);
+      const requestedCount = Number(requestUrl.searchParams.get('count') ?? 250);
+      const totalLines = options.logTotalLines ?? 1;
+      const shouldTail = requestUrl.searchParams.get('tail') === 'true';
+      const start = shouldTail
+        ? Math.max(0, totalLines - requestedCount)
+        : Number(requestUrl.searchParams.get('start') ?? 0);
       if (options.failLogWindowStartOnce === start && !failedLogWindowStart) {
         failedLogWindowStart = true;
         return jsonResponse({ error: 'Injected log failure' }, 500);
@@ -416,10 +486,40 @@ function mockApi(options: MockApiOptions = {}) {
         return jsonResponse({ ...logsFixture(), files: [], selectedFile: null, entries: [], totalLines: 0 });
       }
       return jsonResponse(logsFixture({
-        count: Number(requestUrl.searchParams.get('count') ?? 250),
+        count: requestedCount,
         start,
-        totalLines: options.logTotalLines ?? 1,
+        totalLines,
       }));
+    }
+
+    if (path === '/api/logs/search') {
+      const projectId = requestUrl.searchParams.get('projectId');
+      const requestedCount = Number(requestUrl.searchParams.get('count') ?? 250);
+      const totalMatches = options.logTotalLines ?? 1;
+      const shouldTail = requestUrl.searchParams.get('tail') === 'true';
+      const start = shouldTail
+        ? Math.max(0, totalMatches - requestedCount)
+        : Number(requestUrl.searchParams.get('start') ?? 0);
+      if (projectId && projectId !== 'project-1') {
+        return jsonResponse({
+          ...logsFixture(),
+          files: [],
+          selectedFile: null,
+          entries: [],
+          query: requestUrl.searchParams.get('query') ?? '',
+          totalLines: 0,
+          totalMatches: 0,
+        });
+      }
+      return jsonResponse({
+        ...logsFixture({
+          count: requestedCount,
+          start,
+          totalLines: totalMatches,
+        }),
+        query: requestUrl.searchParams.get('query') ?? '',
+        totalMatches,
+      });
     }
 
     return jsonResponse({ error: 'Not found' }, 404);
@@ -446,6 +546,39 @@ function projectFixture(overrides: Partial<ProjectSummary> = {}): ProjectSummary
     },
     ...overrides,
   };
+}
+
+function usageSeriesFixture() {
+  return [
+    {
+      date: '2026-05-27',
+      name: '05-27',
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      sessionCount: 0,
+      sessionIds: [],
+    },
+    {
+      date: '2026-05-28',
+      name: '05-28',
+      inputTokens: 10,
+      outputTokens: 20,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 30,
+      costUsd: 0.25,
+      sessionCount: 1,
+      sessionIds: ['session-1'],
+    },
+  ];
+}
+
+function tokenOnlyUsageSeriesFixture() {
+  return usageSeriesFixture().map((point) => ({ ...point, costUsd: 0 }));
 }
 
 function logsFixture(options: { count?: number; start?: number; totalLines?: number } = {}) {
@@ -556,6 +689,7 @@ function mockApiWithSlowProjectTwo(slowOverview: Promise<Response>, slowSessions
             logErrorCount: 0,
           },
           recentSessions: [],
+          usageSeries: usageSeriesFixture(),
           diagnostics: [],
         }),
       );
@@ -626,6 +760,20 @@ function projectTwoOverviewFixture() {
       logErrorCount: 0,
     },
     recentSessions: [],
+    usageSeries: [
+      {
+        date: '2026-05-28',
+        name: '05-28',
+        inputTokens: 10,
+        outputTokens: 10,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 20,
+        costUsd: 0.1,
+        sessionCount: 1,
+        sessionIds: ['session-2'],
+      },
+    ],
     diagnostics: [],
   };
 }

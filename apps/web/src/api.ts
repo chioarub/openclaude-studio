@@ -51,10 +51,18 @@ export function createApiClient(settings: ConnectionSettings) {
       request<OverviewResponse>(`/api/projects/${encodeURIComponent(projectId)}/overview`),
     sessions: (projectId: string) =>
       request<SessionsResponse>(`/api/projects/${encodeURIComponent(projectId)}/sessions`),
-    logWindow: (input: { fileName?: string; projectId?: string; start?: number; count?: number } = {}) =>
+    logWindow: (input: { fileName?: string; projectId?: string; start?: number; count?: number; tail?: boolean } = {}) =>
       request<LogsWindowResponse>(`/api/logs/window${queryString(input)}`),
     logSearch: (
-      input: { fileName?: string; projectId?: string; query?: string; level?: string; start?: number; count?: number } = {},
+      input: {
+        fileName?: string;
+        projectId?: string;
+        query?: string;
+        level?: string;
+        start?: number;
+        count?: number;
+        tail?: boolean;
+      } = {},
     ) => request<LogsSearchResponse>(`/api/logs/search${queryString(input)}`),
   };
 }
@@ -63,7 +71,7 @@ export function normalizeBaseUrl(value: string): string {
   return (value.trim() || 'http://127.0.0.1:43110').replace(/\/+$/, '');
 }
 
-function queryString(input: Record<string, string | number | undefined>): string {
+function queryString(input: Record<string, string | number | boolean | undefined>): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(input)) {
     if (value === undefined || value === '') continue;
