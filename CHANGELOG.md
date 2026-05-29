@@ -4,6 +4,10 @@ All notable changes to OpenClaude Studio are documented here.
 
 This project uses semantic versioning for the published `openclaude-studio` npm package.
 
+## 0.0.6
+
+- Fixed the hosted UI crash when connected to an older local server that does not return usage chart data yet.
+
 ## 0.0.5
 
 - Added a project usage overview chart with cost and token views.

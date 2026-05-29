@@ -978,6 +978,10 @@ function ControlCenterPage({
   project: ProjectSummary | null;
   sessions: SessionSummary[];
 }) {
+  const usageSeries: OverviewResponse['usageSeries'] = Array.isArray(overview?.usageSeries)
+    ? overview.usageSeries
+    : [];
+
   return (
     <PageStack>
       <PageHeader
@@ -1003,11 +1007,11 @@ function ControlCenterPage({
         <section className="panel project-overview-panel">
           <div className="section-heading-row">
             <SectionHeading icon={ShieldCheck} label="Project Overview" />
-            {overview ? <Badge label={`${formatNumber(overview.usageSeries.length)} usage days`} tone="muted" /> : null}
+            {overview ? <Badge label={`${formatNumber(usageSeries.length)} usage days`} tone="muted" /> : null}
           </div>
           {project && overview ? (
             <div className="project-overview-content">
-              <UsageOverviewChart series={overview.usageSeries} />
+              <UsageOverviewChart series={usageSeries} />
               <div className="project-overview-facts">
                 <Info label="Path" value={project.path} />
                 <Info label="Branch" value={project.branch || 'no branch'} />
