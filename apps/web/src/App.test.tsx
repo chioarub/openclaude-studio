@@ -171,9 +171,11 @@ describe('App', () => {
 
     await screen.findByRole('button', { name: /project-a main/i });
     await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
-    await user.click(screen.getByLabelText('Open details for Build the API'));
+    const sessionRow = screen.getByLabelText('Open details for Build the API');
+    await user.click(sessionRow);
 
     const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: /close dialog/i })).toHaveFocus());
     expect(within(dialog).getAllByText('Build the API').length).toBeGreaterThan(0);
     expect(within(dialog).getByText('Run command')).toBeInTheDocument();
     expect(within(dialog).getByText('npm test')).toBeInTheDocument();
@@ -192,6 +194,7 @@ describe('App', () => {
 
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /session details/i })).not.toBeInTheDocument());
+    expect(sessionRow).toHaveFocus();
   });
 
   test('renders legacy partial session details without crashing', async () => {
@@ -207,6 +210,7 @@ describe('App', () => {
     const dialog = await screen.findByRole('dialog', { name: /session details/i });
     expect(within(dialog).getByText('unknown model')).toBeInTheDocument();
     expect(within(dialog).getByText('No files were altered.')).toBeInTheDocument();
+    expect(within(dialog).getByText('No conversation events were recorded for this session.')).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: /tools used/i }));
     expect(within(dialog).getByText('No tool calls recorded.')).toBeInTheDocument();
     expect(within(dialog).getAllByText('0').length).toBeGreaterThan(0);
@@ -906,6 +910,23 @@ function legacySessionDetailsFixture() {
   const full = sessionDetailsFixture();
   return {
     ...full,
+    timeline: [
+      {
+        id: 42,
+        timestamp: 'not-a-date',
+        kind: 'tool',
+        title: null,
+        content: null,
+        tool: {
+          phase: 'invalid',
+          name: 42,
+          status: 'invalid',
+          command: 42,
+          filePath: 42,
+          outputType: 'invalid',
+        },
+      },
+    ],
     session: {
       ...full.session,
       modelSet: undefined,

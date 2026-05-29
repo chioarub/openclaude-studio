@@ -39,6 +39,7 @@ type FileHistoryGroup = {
 type PartialSessionDetails = Partial<SessionDetailsResponse['session']> & {
   tokens?: Partial<SessionDetailsResponse['session']['tokens']>;
 };
+type TimelineTool = NonNullable<ConversationTimelineEvent['tool']>;
 
 export type InlineSegment =
   | { type: 'text'; text: string }
@@ -405,7 +406,7 @@ function normalizeSessionDetailsResponse(data: SessionDetailsResponse): SessionD
 
   return {
     ...data,
-    timeline: arrayOrEmpty<ConversationTimelineEvent>(data.timeline),
+    timeline: arrayOrEmpty<unknown>(data.timeline).map(normalizeTimelineEvent),
     session: {
       ...data.session,
       id: typeof session.id === 'string' ? session.id : '',
@@ -434,6 +435,54 @@ function normalizeSessionDetailsResponse(data: SessionDetailsResponse): SessionD
   };
 }
 
+function normalizeTimelineEvent(value: unknown, index: number): ConversationTimelineEvent {
+  const event = isRecord(value) ? value : {};
+  const kind = event.kind;
+  const safeKind: ConversationTimelineEvent['kind'] =
+    kind === 'user' || kind === 'assistant' || kind === 'tool' || kind === 'error' || kind === 'system'
+      ? kind
+      : 'system';
+
+  const normalized: ConversationTimelineEvent = {
+    id: typeof event.id === 'string' && event.id ? event.id : `timeline-${index}`,
+    timestamp: validTimestampOrFallback(event.timestamp),
+    kind: safeKind,
+    title: typeof event.title === 'string' ? event.title : '',
+    content: typeof event.content === 'string' ? event.content : '',
+  };
+  if (isRecord(event.tool)) {
+    normalized.tool = normalizeTimelineTool(event.tool);
+  }
+  return normalized;
+}
+
+function normalizeTimelineTool(value: Record<string, unknown>): TimelineTool {
+  const phase = value.phase === 'result' ? 'result' : 'call';
+  const status =
+    value.status === 'success' || value.status === 'error' || value.status === 'unknown'
+      ? value.status
+      : 'unknown';
+  const outputType =
+    value.outputType === 'command' ||
+    value.outputType === 'stdout' ||
+    value.outputType === 'stderr' ||
+    value.outputType === 'file' ||
+    value.outputType === 'text' ||
+    value.outputType === 'image' ||
+    value.outputType === 'none'
+      ? value.outputType
+      : 'none';
+
+  return {
+    phase,
+    name: typeof value.name === 'string' ? value.name : null,
+    status,
+    command: typeof value.command === 'string' ? value.command : null,
+    filePath: typeof value.filePath === 'string' ? value.filePath : null,
+    outputType,
+  };
+}
+
 function arrayOrEmpty<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
@@ -447,6 +496,10 @@ function validTimestampOrFallback(value: unknown): string {
     return value;
   }
   return new Date(0).toISOString();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 // Modal
@@ -467,6 +520,8 @@ function Modal({
   bodyClassName?: string;
 }) {
   const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -479,8 +534,34 @@ function Modal({
 
   useEffect(() => {
     if (!isOpen) return;
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = window.requestAnimationFrame(() => {
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusTarget = getFocusableElements(dialog)[0] ?? dialog;
+      focusTarget.focus();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      const restoreTarget = restoreFocusRef.current;
+      restoreFocusRef.current = null;
+      if (restoreTarget && document.contains(restoreTarget)) {
+        restoreTarget.focus();
+      }
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key === 'Tab') {
+        trapTabNavigation(e, dialogRef.current);
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -501,6 +582,8 @@ function Modal({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        ref={dialogRef}
+        tabIndex={-1}
         className={cn('bg-canvas border border-hairline rounded-lg shadow-sm w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden', className)}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-hairline-soft bg-surface-soft shrink-0">
@@ -519,6 +602,42 @@ function Modal({
     </div>,
     document.body,
   );
+}
+
+function trapTabNavigation(event: KeyboardEvent, dialog: HTMLElement | null): void {
+  if (!dialog) return;
+
+  const focusable = getFocusableElements(dialog);
+  if (focusable.length === 0) {
+    event.preventDefault();
+    dialog.focus();
+    return;
+  }
+
+  const first = focusable[0]!;
+  const last = focusable[focusable.length - 1]!;
+  const activeElement = document.activeElement;
+
+  if (event.shiftKey) {
+    if (activeElement === first || !dialog.contains(activeElement)) {
+      event.preventDefault();
+      last.focus();
+    }
+    return;
+  }
+
+  if (activeElement === last || !dialog.contains(activeElement)) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function getFocusableElements(root: HTMLElement): HTMLElement[] {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => element.tabIndex >= 0 && element.getAttribute('aria-hidden') !== 'true');
 }
 
 // Conversation event

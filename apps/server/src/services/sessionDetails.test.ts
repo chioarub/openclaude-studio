@@ -253,6 +253,47 @@ describe('readSessionDetails', () => {
     }
   });
 
+  test('keeps non-error system events in the conversation timeline', async () => {
+    const { projectPath, paths, cleanup } = await setup();
+    try {
+      const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(
+        join(projectDir, 'session-system.jsonl'),
+        [
+          jsonl({
+            type: 'system',
+            sessionId: 'session-system',
+            timestamp: '2026-05-28T10:02:00.000Z',
+            cwd: projectPath,
+            content: 'Working directory changed.',
+          }),
+          jsonl({
+            type: 'system',
+            sessionId: 'session-system',
+            timestamp: '2026-05-28T10:03:00.000Z',
+            cwd: projectPath,
+            content: '   ',
+          }),
+        ].join('\n'),
+        'utf8',
+      );
+
+      const result = await readSessionDetails(paths, projectSummary(projectPath), 'session-system');
+
+      expect(result).not.toBeNull();
+      expect(result!.timeline).toEqual([
+        expect.objectContaining({
+          kind: 'system',
+          title: 'System',
+          content: 'Working directory changed.',
+        }),
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   test('redacts sensitive content from timeline events', async () => {
     const { projectPath, paths, cleanup } = await setup();
     try {
@@ -499,6 +540,60 @@ describe('readSessionDetails', () => {
     }
   });
 
+  test('prefers stderr for failed command results that also include stdout', async () => {
+    const { projectPath, paths, cleanup } = await setup();
+    try {
+      const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(
+        join(projectDir, 'session-stderr.jsonl'),
+        [
+          jsonl({
+            type: 'assistant',
+            sessionId: 'session-stderr',
+            timestamp: '2026-05-28T16:10:00.000Z',
+            cwd: projectPath,
+            message: {
+              role: 'assistant',
+              content: [{ type: 'tool_use', id: 'call-bash', name: 'Bash', input: { command: 'npm test' } }],
+            },
+          }),
+          jsonl({
+            type: 'user',
+            sessionId: 'session-stderr',
+            timestamp: '2026-05-28T16:10:05.000Z',
+            cwd: projectPath,
+            message: {
+              role: 'user',
+              content: [{ type: 'tool_result', tool_use_id: 'call-bash', content: 'stdout fallback', is_error: true }],
+            },
+            toolUseResult: {
+              stdout: 'stdout fallback',
+              stderr: 'test failed',
+              interrupted: false,
+            },
+          }),
+        ].join('\n'),
+        'utf8',
+      );
+
+      const result = await readSessionDetails(paths, projectSummary(projectPath), 'session-stderr');
+
+      expect(result).not.toBeNull();
+      const resultEvent = result!.timeline.find((event) => event.tool?.phase === 'result');
+      expect(resultEvent).toMatchObject({
+        title: 'Command error',
+        content: 'test failed',
+        tool: {
+          status: 'error',
+          outputType: 'stderr',
+        },
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
   test('pairs legacy tool rows by message tool_use_id instead of latest call fallback', async () => {
     const { projectPath, paths, cleanup } = await setup();
     try {
@@ -630,6 +725,73 @@ describe('readSessionDetails', () => {
         { filePath: 'src/App.tsx', backupFileName: 'abc123@v1', version: 1, backupExists: true },
         { filePath: 'src/NewPanel.tsx', backupFileName: null, version: 1, backupExists: false },
       ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('skips global session artifacts when a session id is ambiguous across projects', async () => {
+    const { projectPath, paths, cleanup } = await setup();
+    try {
+      const otherProjectPath = join(projectPath, '..', 'project-b');
+      const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+      const otherProjectDir = join(paths.projectsDir, encodeProjectPath(otherProjectPath));
+      await mkdir(projectDir, { recursive: true });
+      await mkdir(otherProjectDir, { recursive: true });
+      await mkdir(join(paths.tasksDir, 'session-collision'), { recursive: true });
+      await mkdir(join(paths.fileHistoryDir, 'session-collision'), { recursive: true });
+      await writeFile(
+        join(paths.tasksDir, 'session-collision', '1.json'),
+        JSON.stringify({
+          id: '1',
+          subject: 'Task from another project',
+          status: 'pending',
+          description: 'This must not be exposed when the artifact scope is ambiguous.',
+        }),
+        'utf8',
+      );
+      await writeFile(join(paths.fileHistoryDir, 'session-collision', 'abc123@v1'), 'old content\n', 'utf8');
+      await writeFile(
+        join(projectDir, 'session-collision.jsonl'),
+        [
+          jsonl({
+            type: 'user',
+            sessionId: 'session-collision',
+            timestamp: '2026-05-28T17:10:00.000Z',
+            cwd: projectPath,
+            message: { role: 'user', content: 'Selected project session' },
+          }),
+          jsonl(fileHistorySnapshot({
+            timestamp: '2026-05-28T17:11:00.000Z',
+            trackedFileBackups: {
+              'src/App.tsx': {
+                backupFileName: 'abc123@v1',
+                version: 1,
+                backupTime: '2026-05-28T17:11:00.000Z',
+              },
+            },
+          })),
+        ].join('\n'),
+        'utf8',
+      );
+      await writeFile(
+        join(otherProjectDir, 'session-collision.jsonl'),
+        jsonl({
+          type: 'user',
+          sessionId: 'session-collision',
+          timestamp: '2026-05-28T17:12:00.000Z',
+          cwd: otherProjectPath,
+          message: { role: 'user', content: 'Other project session' },
+        }),
+        'utf8',
+      );
+
+      const result = await readSessionDetails(paths, projectSummary(projectPath), 'session-collision');
+
+      expect(result).not.toBeNull();
+      expect(result!.session.linkedTasks).toEqual([]);
+      expect(result!.session.fileHistory).toEqual([]);
+      expect(result!.session.fileHistoryAvailable).toBe(false);
     } finally {
       await cleanup();
     }

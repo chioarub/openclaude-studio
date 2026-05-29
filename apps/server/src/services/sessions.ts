@@ -170,7 +170,7 @@ function transcriptEntryFromUnknown(
     Boolean(stringFromUnknown(value.error)) ||
     toolResult?.status === 'error';
 
-  if (type === 'system' && !failed) {
+  if (type === 'system' && !failed && !text.trim()) {
     return null;
   }
 
@@ -433,6 +433,7 @@ function extractToolResult(row: UnknownRecord, content: unknown): ParsedToolResu
   const hasResultPayload = Boolean(resultRecord || rawText.trim() || stdout || stderr || filePath);
   const status: ParsedToolResult['status'] = isError ? 'error' : hasResultPayload ? 'success' : 'unknown';
   const outputType = inferToolResultOutputType({
+    isError,
     resultRecord,
     rawText,
     stdout,
@@ -456,18 +457,21 @@ function extractToolResult(row: UnknownRecord, content: unknown): ParsedToolResu
 }
 
 function inferToolResultOutputType({
+  isError,
   resultRecord,
   rawText,
   stdout,
   stderr,
   filePath,
 }: {
+  isError: boolean;
   resultRecord: UnknownRecord | null;
   rawText: string;
   stdout: string | null;
   stderr: string | null;
   filePath: string | null;
 }): ParsedToolResult['outputType'] {
+  if (isError && stderr) return 'stderr';
   if (stdout) return 'stdout';
   if (stderr) return 'stderr';
   if (resultRecord?.isImage === true) return 'image';

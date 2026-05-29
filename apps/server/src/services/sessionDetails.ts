@@ -30,6 +30,7 @@ const TEXT_TIMELINE_MAX_LENGTH = 16_000;
 const TASK_FILE_MAX_BYTES = 256 * 1024;
 const PLAN_TITLE_MAX_BYTES = 64 * 1024;
 const FILE_HISTORY_TRANSCRIPT_MAX_BYTES = 10 * 1024 * 1024;
+const ARTIFACT_SCOPE_SCAN_MAX_DEPTH = 10;
 
 const mutationTools = new Set(['Edit', 'MultiEdit', 'NotebookEdit', 'Write']);
 
@@ -82,6 +83,119 @@ async function findCandidateTranscriptFiles(
   return findTranscriptFilesForProject(projectsDir, projectPath);
 }
 
+async function isUnambiguousSessionArtifactScope(
+  projectsDir: string,
+  projectPath: string,
+  sessionId: string,
+): Promise<boolean> {
+  if (!isSafeSessionScopedArtifactId(sessionId)) {
+    return false;
+  }
+
+  const selectedProjectDir = resolve(join(projectsDir, encodeProjectPath(projectPath)));
+  let entries;
+  try {
+    entries = await readdir(projectsDir, { withFileTypes: true });
+  } catch (error) {
+    if (isNodeFileError(error, 'ENOENT') || isNodeFileError(error, 'ENOTDIR')) {
+      return true;
+    }
+    throw error;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const candidateDir = join(projectsDir, entry.name);
+    const stats = await safeLstat(candidateDir);
+    if (!stats || !stats.isDirectory() || stats.isSymbolicLink()) {
+      continue;
+    }
+    if (resolve(candidateDir) === selectedProjectDir) {
+      continue;
+    }
+    if (await directoryContainsSessionTranscript(candidateDir, sessionId, 0)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+async function directoryContainsSessionTranscript(root: string, sessionId: string, depth: number): Promise<boolean> {
+  if (depth > ARTIFACT_SCOPE_SCAN_MAX_DEPTH) {
+    return true;
+  }
+
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+
+  for (const entry of entries) {
+    const entryPath = join(root, entry.name);
+    const stats = await safeLstat(entryPath);
+    if (!stats || stats.isSymbolicLink()) {
+      continue;
+    }
+
+    if (stats.isDirectory()) {
+      if (await directoryContainsSessionTranscript(entryPath, sessionId, depth + 1)) {
+        return true;
+      }
+      continue;
+    }
+
+    if (!stats.isFile() || !entry.name.endsWith('.jsonl')) {
+      continue;
+    }
+    if (entry.name === `${sessionId}.jsonl` || await transcriptFileContainsSessionId(entryPath, sessionId)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function transcriptFileContainsSessionId(filePath: string, sessionId: string): Promise<boolean> {
+  try {
+    const file = await readBoundedTextFile(filePath, { maxBytes: FILE_HISTORY_TRANSCRIPT_MAX_BYTES });
+    if (!file.exists) {
+      return false;
+    }
+
+    for (const line of file.content.split(/\r?\n/)) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        if (isRecord(parsed) && parsed.sessionId === sessionId) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
+}
+
+async function safeLstat(path: string) {
+  try {
+    return await lstat(path);
+  } catch {
+    return null;
+  }
+}
+
 async function buildSessionDetails(
   sessionId: string,
   entries: ParsedTranscriptEntry[],
@@ -97,11 +211,19 @@ async function buildSessionDetails(
     .find(Boolean);
   const sourcePath = entries[0]?.sourcePath ?? '';
   const linkedPlans = await readLinkedPlans(entries, paths.plansDir);
-  const [linkedTasks, fileHistory, fileHistoryAvailable] = await Promise.all([
-    readLinkedTasks(paths.tasksDir, sessionId),
-    readFileHistory(paths.fileHistoryDir, sessionId, sourcePath),
-    hasSafeSessionDirectoryEntries(paths.fileHistoryDir, sessionId),
-  ]);
+  const artifactScopeIsUnambiguous = await isUnambiguousSessionArtifactScope(
+    paths.projectsDir,
+    project.path,
+    sessionId,
+  );
+  const [linkedTasks, fileHistory, fileHistoryAvailable]: [LinkedTaskSummary[], SessionFileHistoryEntry[], boolean] =
+    artifactScopeIsUnambiguous
+      ? await Promise.all([
+          readLinkedTasks(paths.tasksDir, sessionId),
+          readFileHistory(paths.fileHistoryDir, sessionId, sourcePath),
+          hasSafeSessionDirectoryEntries(paths.fileHistoryDir, sessionId),
+        ])
+      : [[], [], false];
   const changedFiles = unique(
     entries
       .flatMap((row) => row.toolUses)
@@ -612,6 +734,10 @@ function safeChildPath(root: string, child: string): string | null {
   }
 
   return resolvedPath;
+}
+
+function isSafeSessionScopedArtifactId(value: string): boolean {
+  return /^[A-Za-z0-9._-]+$/.test(value) && !value.includes('..');
 }
 
 function isMeaningfulTimelineEvent(event: ConversationTimelineEvent): boolean {
