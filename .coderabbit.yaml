@@ -4,12 +4,20 @@ early_access: false
 
 reviews:
   profile: assertive
-  request_changes_workflow: true
+  request_changes_workflow: false
   high_level_summary: true
+  high_level_summary_placeholder: "@coderabbitai summary"
+  high_level_summary_in_walkthrough: false
+  high_level_summary_instructions: |
+    Write a concise, professional PR summary for maintainers and contributors.
+    Start with the purpose and user-visible or operational impact.
+    Call out compatibility, privacy, security, release, deployment, and migration implications when relevant.
+    Mention validation evidence only when it is present in the PR description or checks; do not invent test results.
+    Keep the summary concrete, public-repository appropriate, and short enough to scan quickly.
   changed_files_summary: true
   review_status: true
   review_details: true
-  commit_status: true
+  commit_status: false
   fail_commit_status: false
   collapse_walkthrough: true
   sequence_diagrams: true

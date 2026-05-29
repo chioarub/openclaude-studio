@@ -31,6 +31,7 @@ Roadmap discussions are welcome. For larger features, open an issue first so the
 
 ## Pull Requests
 
+- Open pull requests against `main`; do not push directly to `main`.
 - Keep changes focused and small.
 - Include tests for behavior changes.
 - Avoid committing generated output, local environment files, secrets, logs, or machine-specific paths.
@@ -38,6 +39,7 @@ Roadmap discussions are welcome. For larger features, open an issue first so the
 - Document user-visible changes in `README.md` when behavior, setup, or scope changes.
 - Update docs in `docs/` when architecture, deployment, local server behavior, or privacy assumptions change.
 - Keep the local server read-only unless the change has an explicit safety design.
+- Wait for required CI, review automation, and maintainer review before merging. The maintainer controls merges to `main`.
 
 CodeRabbit runs on pull requests and uses the repository configuration in `.coderabbit.yaml`. Wait for the review to complete before merging. Address actionable findings in code, or explain why a finding is intentionally deferred in the pull request discussion.
 
