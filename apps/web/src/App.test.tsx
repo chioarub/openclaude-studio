@@ -84,6 +84,17 @@ describe('App', () => {
     expect(within(projectOverview!).getByText('Recorded cost unavailable')).toBeInTheDocument();
   });
 
+  test('renders legacy overview responses without usage series', async () => {
+    vi.stubGlobal('fetch', mockApi({ omitOverviewUsageSeries: true }));
+
+    render(<App />);
+
+    const projectOverview = (await screen.findByText('Project Overview')).closest('section');
+    expect(projectOverview).not.toBeNull();
+    expect(within(projectOverview!).getByText('0 usage days')).toBeInTheDocument();
+    expect(within(projectOverview!).getByText('No token usage recorded')).toBeInTheDocument();
+  });
+
   test('clears the usage chart tooltip when the timeframe changes', async () => {
     vi.stubGlobal('fetch', mockApi());
     const user = userEvent.setup();
@@ -393,6 +404,7 @@ type MockApiOptions = {
   baseUrl?: string;
   failLogWindowStartOnce?: number;
   logTotalLines?: number;
+  omitOverviewUsageSeries?: boolean;
   overviewUsageSeries?: unknown[];
   projectDiagnostics?: unknown[];
   projects?: unknown[];
@@ -445,7 +457,9 @@ function mockApi(options: MockApiOptions = {}) {
           logErrorCount: 0,
         },
         recentSessions: [],
-        usageSeries: options.overviewUsageSeries ?? usageSeriesFixture(),
+        ...(options.omitOverviewUsageSeries
+          ? {}
+          : { usageSeries: options.overviewUsageSeries ?? usageSeriesFixture() }),
         diagnostics: [],
       });
     }
