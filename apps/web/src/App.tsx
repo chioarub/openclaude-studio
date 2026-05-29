@@ -67,6 +67,8 @@ type ProjectFilter = 'all' | 'active' | 'missing';
 type ProjectSort = 'recent' | 'name' | 'branch' | 'usage';
 type LogLevelFilter = 'all' | LogEntry['level'];
 type Theme = 'light' | 'dark';
+type UsageMetric = 'cost' | 'tokens';
+type UsageTimeframe = '7d' | '14d' | 'all';
 type LogRange = {
   start: number;
   count: number;
@@ -140,6 +142,15 @@ const logRowHeight = 30;
 const logFetchOverscan = 250;
 const logFetchLimit = 800;
 const logRangeDebounceMs = 160;
+const usageChartWidth = 720;
+const usageChartHeight = 248;
+const usageChartPadding = { top: 18, right: 18, bottom: 34, left: 54 };
+
+const usageTimeframeOptions: Array<{ value: UsageTimeframe; label: string }> = [
+  { value: '7d', label: '7D' },
+  { value: '14d', label: '14D' },
+  { value: 'all', label: 'All' },
+];
 
 const projectFilters: Array<{ value: ProjectFilter; label: string }> = [
   { value: 'all', label: 'All' },
@@ -229,11 +240,12 @@ function StudioApp() {
       const fileName = input.fileName ?? (isSameProject ? selectedLogFile : undefined);
       const query = input.query ?? logQuery;
       const level = input.level ?? logLevel;
+      const shouldTail = input.start === undefined;
       const start = input.start ?? 0;
       const count = input.count ?? defaultLogWindowCount;
       const logsInput = query.trim() || level !== 'all'
-        ? api.logSearch(logSearchInput(fileName, query.trim(), level, projectId, start, count))
-        : api.logWindow(logWindowInput(fileName, projectId, start, count));
+        ? api.logSearch(logSearchInput(fileName, query.trim(), level, projectId, start, count, shouldTail))
+        : api.logWindow(logWindowInput(fileName, projectId, start, count, shouldTail));
       const [overview, sessionsResponse, logs] = projectId
         ? await Promise.all([api.overview(projectId), api.sessions(projectId), logsInput])
         : [null, { sessions: [] as SessionSummary[] }, await logsInput];
@@ -287,11 +299,12 @@ function StudioApp() {
       const fileName = input.fileName ?? selectedLogFile;
       const query = input.query ?? logQuery;
       const level = input.level ?? logLevel;
+      const shouldTail = input.start === undefined;
       const start = input.start ?? 0;
       const count = input.count ?? defaultLogWindowCount;
       const logs = query.trim() || level !== 'all'
-        ? await api.logSearch(logSearchInput(fileName, query.trim(), level, projectId, start, count))
-        : await api.logWindow(logWindowInput(fileName, projectId, start, count));
+        ? await api.logSearch(logSearchInput(fileName, query.trim(), level, projectId, start, count, shouldTail))
+        : await api.logWindow(logWindowInput(fileName, projectId, start, count, shouldTail));
 
       if (requestId !== logsRequestIdRef.current) {
         return;
@@ -368,21 +381,22 @@ function StudioApp() {
               path="/logs"
               element={
                 <LogsPage
+                  isLoading={status === 'loading'}
                   logs={snapshot.logs}
                   level={logLevel}
                   query={logQuery}
                   selectedFile={selectedLogFile}
                   onFileChange={(fileName) => {
                     setSelectedLogFile(fileName);
-                    void loadWorkspace({ fileName, level: logLevel, query: logQuery, start: 0, count: defaultLogWindowCount });
+                    void loadWorkspace({ fileName, level: logLevel, query: logQuery, count: defaultLogWindowCount });
                   }}
                   onLevelChange={(level) => {
                     setLogLevel(level);
-                    void loadWorkspace({ level, query: logQuery, start: 0, count: defaultLogWindowCount });
+                    void loadWorkspace({ level, query: logQuery, count: defaultLogWindowCount });
                   }}
                   onSearch={(query) => {
                     setLogQuery(query);
-                    void loadWorkspace({ level: logLevel, query, start: 0, count: defaultLogWindowCount });
+                    void loadWorkspace({ level: logLevel, query, count: defaultLogWindowCount });
                   }}
                   onWindowChange={(start, count) => {
                     return loadLogs({ start, count });
@@ -986,14 +1000,20 @@ function ControlCenterPage({
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <section className="panel">
-          <SectionHeading icon={ShieldCheck} label="Project Overview" />
+        <section className="panel project-overview-panel">
+          <div className="section-heading-row">
+            <SectionHeading icon={ShieldCheck} label="Project Overview" />
+            {overview ? <Badge label={`${formatNumber(overview.usageSeries.length)} usage days`} tone="muted" /> : null}
+          </div>
           {project && overview ? (
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
-              <Info label="Path" value={project.path} />
-              <Info label="Branch" value={project.branch || 'no branch'} />
-              <Info label="Changed files" value={String(overview.cards.changedFileCount)} />
-              <Info label="Failed sessions" value={String(overview.cards.failedSessionCount)} />
+            <div className="project-overview-content">
+              <UsageOverviewChart series={overview.usageSeries} />
+              <div className="project-overview-facts">
+                <Info label="Path" value={project.path} />
+                <Info label="Branch" value={project.branch || 'no branch'} />
+                <Info label="Changed files" value={String(overview.cards.changedFileCount)} />
+                <Info label="Failed sessions" value={String(overview.cards.failedSessionCount)} />
+              </div>
             </div>
           ) : (
             <EmptyState label={isLoading ? 'Loading workspace' : 'No project selected'} />
@@ -1064,6 +1084,7 @@ function ProviderPage({ overview }: { overview: OverviewResponse | null }) {
 }
 
 function LogsPage({
+  isLoading,
   level,
   logs,
   onLevelChange,
@@ -1073,6 +1094,7 @@ function LogsPage({
   query,
   selectedFile,
 }: {
+  isLoading: boolean;
   level: LogLevelFilter;
   logs: LogsWindowResponse | LogsSearchResponse | null;
   onLevelChange: (level: LogLevelFilter) => void;
@@ -1088,6 +1110,7 @@ function LogsPage({
   const pendingRangeRef = useRef<LogRange | null>(null);
   const rangeTimerRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
+  const shouldScrollToLatestRef = useRef(true);
   const onWindowChangeRef = useRef(onWindowChange);
   const selectedLog = logs?.selectedFile ?? null;
   const isSearchResponse = Boolean(logs && 'totalMatches' in logs);
@@ -1112,14 +1135,26 @@ function LogsPage({
     }
     activeRangeRef.current = null;
     pendingRangeRef.current = null;
-    const logView = logViewRef.current;
-    if (!logView) return;
-    if (typeof logView.scrollTo === 'function') {
-      logView.scrollTo({ top: 0 });
-    } else {
-      logView.scrollTop = 0;
-    }
+    shouldScrollToLatestRef.current = true;
   }, [level, query, selectedLog?.name]);
+
+  useEffect(() => {
+    if (isLoading || !shouldScrollToLatestRef.current || !logs || totalRows === 0) {
+      return undefined;
+    }
+
+    const logView = logViewRef.current;
+    if (!logView) {
+      return undefined;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      logView.scrollTop = logView.scrollHeight;
+      shouldScrollToLatestRef.current = false;
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [isLoading, logs, totalRows]);
 
   useEffect(() => {
     return () => {
@@ -1456,6 +1491,209 @@ function DiagnosticsPage({ diagnostics }: { diagnostics: Diagnostic[] }) {
   );
 }
 
+function UsageOverviewChart({ series }: { series: OverviewResponse['usageSeries'] }) {
+  const [metric, setMetric] = useState<UsageMetric>(() => preferredUsageMetric(series));
+  const [timeframe, setTimeframe] = useState<UsageTimeframe>('14d');
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    setMetric((current) => hasUsageData(series, current) ? current : preferredUsageMetric(series));
+  }, [series]);
+
+  const visibleSeries = useMemo(() => filterUsageSeries(series, timeframe), [series, timeframe]);
+  const plot = useMemo(() => buildUsageChartPlot(visibleSeries, metric), [metric, visibleSeries]);
+  const hasRecordedCost = hasUsageData(series, 'cost');
+  const totalValue = visibleSeries.reduce((total, point) => total + usageValue(point, metric), 0);
+  const latestPoint = visibleSeries.at(-1);
+  const latestValue = latestPoint ? usageValue(latestPoint, metric) : 0;
+  const xLabelIndexes = usageChartLabelIndexes(visibleSeries.length);
+  const metricLabel = metric === 'cost' ? 'Recorded spend' : 'Token throughput';
+  const hoveredPoint = hoveredIndex === null ? null : plot.points[hoveredIndex] ?? null;
+  const emptyLabel = metric === 'cost' ? 'No recorded cost in this range' : 'No token usage recorded';
+
+  return (
+    <div className="usage-overview">
+      <div className="usage-overview-toolbar">
+        <div className="min-w-0">
+          <div className="usage-overview-title">Usage Overview</div>
+          <div className="usage-overview-subtitle">
+            <span>{metricLabel}</span>
+            <span>{timeframe.toUpperCase()}</span>
+            {!hasRecordedCost ? <span>Recorded cost unavailable</span> : null}
+          </div>
+        </div>
+        <div className="usage-overview-controls" aria-label="Usage chart controls">
+          <div className="segmented-control" aria-label="Usage metric">
+            {(['cost', 'tokens'] as const).map((value) => (
+              <button
+                aria-pressed={metric === value}
+                className="segmented-control-button"
+                key={value}
+                aria-disabled={value === 'cost' && !hasRecordedCost ? 'true' : undefined}
+                onClick={() => {
+                  if (value === 'cost' && !hasRecordedCost) {
+                    return;
+                  }
+                  setMetric(value);
+                  setHoveredIndex(null);
+                }}
+                title={
+                  value === 'cost' && !hasRecordedCost
+                    ? 'This project has token usage, but OpenClaude has not saved recorded cost for it.'
+                    : undefined
+                }
+                type="button"
+              >
+                {value === 'cost' ? 'Cost' : 'Tokens'}
+              </button>
+            ))}
+          </div>
+          <div className="segmented-control" aria-label="Usage timeframe">
+            {usageTimeframeOptions.map((option) => (
+              <button
+                aria-pressed={timeframe === option.value}
+                className="segmented-control-button"
+                key={option.value}
+                onClick={() => setTimeframe(option.value)}
+                type="button"
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="usage-chart-shell">
+        <div className="usage-chart-summary">
+          <div>
+            <span>Total</span>
+            <strong>{formatUsageValue(totalValue, metric)}</strong>
+          </div>
+          <div>
+            <span>Latest</span>
+            <strong>{formatUsageValue(latestValue, metric)}</strong>
+          </div>
+        </div>
+
+        {plot.hasData ? (
+          <div className="usage-chart-frame" onPointerLeave={() => setHoveredIndex(null)}>
+            <svg
+              aria-label={`${metricLabel} chart`}
+              className="usage-chart"
+              role="img"
+              viewBox={`0 0 ${usageChartWidth} ${usageChartHeight}`}
+            >
+              <defs>
+                <linearGradient id={`usage-chart-fill-${metric}`} x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="5%" stopColor={metric === 'cost' ? 'var(--color-primary)' : 'var(--color-accent-teal)'} stopOpacity="0.48" />
+                  <stop offset="100%" stopColor={metric === 'cost' ? 'var(--color-primary)' : 'var(--color-accent-teal)'} stopOpacity="0" />
+                </linearGradient>
+              </defs>
+
+              {plot.ticks.map((tick) => (
+                <g key={tick.value}>
+                  <line className="usage-chart-grid" x1={plot.left} x2={plot.right} y1={tick.y} y2={tick.y} />
+                  <text className="usage-chart-y-label" x={plot.left - 10} y={tick.y + 4}>
+                    {formatUsageAxisValue(tick.value, metric)}
+                  </text>
+                </g>
+              ))}
+
+              <path className="usage-chart-area" d={plot.areaPath} fill={`url(#usage-chart-fill-${metric})`} />
+              <path className={cn('usage-chart-line', metric === 'tokens' && 'usage-chart-line-tokens')} d={plot.linePath} />
+
+              {hoveredPoint ? (
+                <line
+                  className="usage-chart-crosshair"
+                  x1={hoveredPoint.x}
+                  x2={hoveredPoint.x}
+                  y1={plot.top}
+                  y2={plot.bottom}
+                />
+              ) : null}
+
+              {plot.points.map((point) => (
+                <circle
+                  className={cn(
+                    'usage-chart-point',
+                    metric === 'tokens' && 'usage-chart-point-tokens',
+                    hoveredIndex === point.index && 'usage-chart-point-active',
+                  )}
+                  cx={point.x}
+                  cy={point.y}
+                  key={`${point.date}-${point.index}`}
+                  r={hoveredIndex === point.index ? 4.5 : 3.5}
+                />
+              ))}
+
+              {plot.points.map((point, index) => (
+                <rect
+                  aria-label={`${point.date}: ${formatUsageValue(point.value, metric)}`}
+                  className="usage-chart-hit-target"
+                  height={plot.bottom - plot.top}
+                  key={`${point.date}-hit-target`}
+                  onBlur={() => setHoveredIndex(null)}
+                  onFocus={() => setHoveredIndex(index)}
+                  onPointerEnter={() => setHoveredIndex(index)}
+                  tabIndex={0}
+                  width={plot.hitTargetWidth}
+                  x={point.x - plot.hitTargetWidth / 2}
+                  y={plot.top}
+                />
+              ))}
+
+              {xLabelIndexes.map((index) => {
+                const point = plot.points[index];
+                return point ? (
+                  <text className="usage-chart-x-label" key={point.date} x={point.x} y={usageChartHeight - 8}>
+                    {point.name}
+                  </text>
+                ) : null;
+              })}
+            </svg>
+            {hoveredPoint ? (
+              <UsageChartTooltip metric={metric} point={hoveredPoint} />
+            ) : null}
+          </div>
+        ) : (
+          <EmptyState label={emptyLabel} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UsageChartTooltip({
+  metric,
+  point,
+}: {
+  metric: UsageMetric;
+  point: ReturnType<typeof buildUsageChartPlot>['points'][number];
+}) {
+  return (
+    <div
+      className={cn('usage-chart-tooltip', usageTooltipAlignment(point.x))}
+      role="tooltip"
+      style={{
+        left: `${(point.x / usageChartWidth) * 100}%`,
+        top: `${(point.y / usageChartHeight) * 100}%`,
+      }}
+    >
+      <div className="usage-chart-tooltip-date">{formatUsageTooltipDate(point.date)}</div>
+      <div className="usage-chart-tooltip-value">{formatUsageValue(point.value, metric)}</div>
+      <div className="usage-chart-tooltip-grid">
+        <span>Sessions</span>
+        <strong>{formatNumber(point.sessionCount)}</strong>
+        <span>Tokens</span>
+        <strong>{formatCompactNumber(point.totalTokens)}</strong>
+        <span>Recorded cost</span>
+        <strong>{point.costUsd > 0 ? formatUsd(point.costUsd) : 'Not recorded'}</strong>
+      </div>
+    </div>
+  );
+}
+
 function ProviderSummaryCard({ overview }: { overview: OverviewResponse | null }) {
   const provider = overview?.provider;
   return (
@@ -1762,8 +2000,19 @@ function resolveProjectId(projects: ProjectSummary[], requested: string | null |
   return projects.find((project) => project.active)?.id ?? projects[0]?.id ?? null;
 }
 
-function logWindowInput(fileName: string | undefined, projectId: string | null, start: number, count: number) {
-  const input: { count: number; fileName?: string; projectId?: string; start: number } = { start, count };
+function logWindowInput(
+  fileName: string | undefined,
+  projectId: string | null,
+  start: number,
+  count: number,
+  tail: boolean,
+) {
+  const input: { count: number; fileName?: string; projectId?: string; start?: number; tail?: boolean } = { count };
+  if (tail) {
+    input.tail = true;
+  } else {
+    input.start = start;
+  }
   if (fileName) {
     input.fileName = fileName;
   }
@@ -1780,8 +2029,22 @@ function logSearchInput(
   projectId: string | null,
   start: number,
   count: number,
+  tail: boolean,
 ) {
-  const input: { count: number; fileName?: string; level?: string; projectId?: string; query: string; start: number } = { query, start, count };
+  const input: {
+    count: number;
+    fileName?: string;
+    level?: string;
+    projectId?: string;
+    query: string;
+    start?: number;
+    tail?: boolean;
+  } = { query, count };
+  if (tail) {
+    input.tail = true;
+  } else {
+    input.start = start;
+  }
   if (fileName) {
     input.fileName = fileName;
   }
@@ -1904,6 +2167,178 @@ function sessionTokenTotal(session: SessionSummary): number {
 function logIssueCount(overview: OverviewResponse | null): number {
   if (!overview) return 0;
   return overview.cards.logWarningCount + overview.cards.logErrorCount;
+}
+
+function filterUsageSeries(
+  series: OverviewResponse['usageSeries'],
+  timeframe: UsageTimeframe,
+): OverviewResponse['usageSeries'] {
+  if (timeframe === 'all') {
+    return series;
+  }
+
+  const count = timeframe === '7d' ? 7 : 14;
+  const datedSeries = series.filter((point) => /^\d{4}-\d{2}-\d{2}$/.test(point.date));
+  if (datedSeries.length !== series.length) {
+    return series.slice(Math.max(0, series.length - count));
+  }
+
+  const latestDate = datedSeries.map((point) => point.date).sort().at(-1);
+  if (!latestDate) {
+    return [];
+  }
+
+  const byDate = new Map(datedSeries.map((point) => [point.date, point]));
+  const start = addUtcDays(latestDate, -(count - 1));
+  return Array.from({ length: count }, (_, index) => {
+    const date = formatUtcDate(addUtcDays(start, index));
+    return byDate.get(date) ?? emptyUsagePoint(date);
+  });
+}
+
+function emptyUsagePoint(date: string): OverviewResponse['usageSeries'][number] {
+  return {
+    date,
+    name: date.slice(5),
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: 0,
+    costUsd: 0,
+    sessionCount: 0,
+    sessionIds: [],
+  };
+}
+
+function addUtcDays(date: string | Date, days: number) {
+  const value = typeof date === 'string'
+    ? new Date(`${date}T00:00:00.000Z`)
+    : new Date(date.getTime());
+  value.setUTCDate(value.getUTCDate() + days);
+  return value;
+}
+
+function formatUtcDate(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function buildUsageChartPlot(series: OverviewResponse['usageSeries'], metric: UsageMetric) {
+  const left = usageChartPadding.left;
+  const right = usageChartWidth - usageChartPadding.right;
+  const top = usageChartPadding.top;
+  const bottom = usageChartHeight - usageChartPadding.bottom;
+  const values = series.map((point) => usageValue(point, metric));
+  const hasData = values.some((value) => value > 0);
+  const maxValue = Math.max(...values, 1);
+  const plotWidth = right - left;
+  const plotHeight = bottom - top;
+  const points = series.map((point, index) => {
+    const x = series.length === 1 ? left + plotWidth / 2 : left + (plotWidth * index) / Math.max(1, series.length - 1);
+    const value = values[index] ?? 0;
+    const y = bottom - (value / maxValue) * plotHeight;
+    return {
+      costUsd: point.costUsd,
+      date: point.date,
+      index,
+      name: point.name,
+      sessionCount: point.sessionCount,
+      totalTokens: point.totalTokens,
+      value,
+      x,
+      y,
+    };
+  });
+  const linePath = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
+  const areaPath = points.length > 0
+    ? `${linePath} L ${points.at(-1)?.x ?? right} ${bottom} L ${points[0]?.x ?? left} ${bottom} Z`
+    : '';
+
+  return {
+    areaPath,
+    bottom,
+    hasData,
+    hitTargetWidth: Math.max(28, plotWidth / Math.max(1, series.length)),
+    left,
+    linePath,
+    points,
+    right,
+    top,
+    ticks: [1, 0.5, 0].map((ratio) => ({
+      value: maxValue * ratio,
+      y: bottom - ratio * plotHeight,
+    })),
+  };
+}
+
+function usageValue(point: OverviewResponse['usageSeries'][number], metric: UsageMetric): number {
+  return metric === 'cost' ? point.costUsd : point.totalTokens;
+}
+
+function preferredUsageMetric(series: OverviewResponse['usageSeries']): UsageMetric {
+  return hasUsageData(series, 'cost') ? 'cost' : 'tokens';
+}
+
+function hasUsageData(series: OverviewResponse['usageSeries'], metric: UsageMetric): boolean {
+  return series.some((point) => usageValue(point, metric) > 0);
+}
+
+function usageChartLabelIndexes(length: number): number[] {
+  if (length <= 0) {
+    return [];
+  }
+  const indexes = new Set([0, Math.floor((length - 1) / 2), length - 1]);
+  return [...indexes].sort((left, right) => left - right);
+}
+
+function formatUsageValue(value: number, metric: UsageMetric): string {
+  return metric === 'cost' ? formatUsd(value) : `${formatCompactNumber(value)} tokens`;
+}
+
+function formatUsageAxisValue(value: number, metric: UsageMetric): string {
+  return metric === 'cost' ? formatShortUsd(value) : formatCompactNumber(value);
+}
+
+function formatCompactNumber(value: number): string {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1, notation: 'compact' }).format(value);
+}
+
+function formatShortUsd(value: number): string {
+  if (value === 0) {
+    return '$0';
+  }
+  if (value < 1) {
+    return `$${value.toFixed(2)}`;
+  }
+  return new Intl.NumberFormat(undefined, {
+    currency: 'USD',
+    maximumFractionDigits: 1,
+    notation: 'compact',
+    style: 'currency',
+  }).format(value);
+}
+
+function formatUsageTooltipDate(value: string): string {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+    year: 'numeric',
+  }).format(date);
+}
+
+function usageTooltipAlignment(x: number): string {
+  if (x < usageChartWidth * 0.25) {
+    return 'usage-chart-tooltip-left';
+  }
+  if (x > usageChartWidth * 0.75) {
+    return 'usage-chart-tooltip-right';
+  }
+  return 'usage-chart-tooltip-center';
 }
 
 function isActivePath(pathname: string, path: string) {

@@ -68,9 +68,14 @@ test.beforeAll(async () => {
     'utf8',
   );
   await mkdir(paths.debugDir, { recursive: true });
+  const logLines = Array.from(
+    { length: 799 },
+    (_, index) => `2026-05-28T08:${String(index % 60).padStart(2, '0')}:00.000Z INFO line-${index + 1}`,
+  );
+  logLines.push('2026-05-28T09:00:00.000Z WARN OPENAI_API_KEY=secret-value slow');
   await writeFile(
     join(paths.debugDir, 'session-1.txt'),
-    '2026-05-28T08:00:00.000Z WARN OPENAI_API_KEY=secret-value slow\n',
+    `${logLines.join('\n')}\n`,
     'utf8',
   );
 
@@ -94,4 +99,20 @@ test('loads project overview, sessions, provider, and logs', async ({ page }) =>
   await expect(page.getByText('Build the API')).toBeVisible();
   await page.getByRole('link', { name: /^Logs$/ }).click();
   await expect(page.getByText('OPENAI_API_KEY=<redacted> slow')).toBeVisible();
+  await expect(page.getByText(/^line-1$/)).toHaveCount(0);
+
+  const logView = page.getByRole('region', { name: /log entries/i });
+  await expect.poll(async () => (
+    logView.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)
+  )).toBeLessThan(2);
+
+  const headerDeltas = await page.locator('.log-table-header').evaluate((header) => {
+    const headerRect = header.getBoundingClientRect();
+    const headerCenter = headerRect.top + headerRect.height / 2;
+    return Array.from(header.querySelectorAll('span')).map((label) => {
+      const labelRect = label.getBoundingClientRect();
+      return Math.abs(labelRect.top + labelRect.height / 2 - headerCenter);
+    });
+  });
+  expect(Math.max(...headerDeltas)).toBeLessThan(2);
 });

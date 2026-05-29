@@ -100,6 +100,19 @@ export type LogsSearchResponse = LogsWindowResponse & {
   totalMatches: number;
 };
 
+export type OverviewUsagePoint = {
+  date: string;
+  name: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  sessionCount: number;
+  sessionIds: string[];
+};
+
 export type OverviewResponse = {
   project: ProjectSummary;
   provider: ProviderSummary | null;
@@ -113,6 +126,7 @@ export type OverviewResponse = {
     logErrorCount: number;
   };
   recentSessions: SessionSummary[];
+  usageSeries: OverviewUsagePoint[];
   diagnostics: Diagnostic[];
 };
 

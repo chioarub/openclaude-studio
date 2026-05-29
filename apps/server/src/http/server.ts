@@ -7,8 +7,10 @@ import type {
   HealthResponse,
   LogEntry,
   OverviewResponse,
+  OverviewUsagePoint,
   ProjectsResponse,
   ProjectSummary,
+  SessionSummary,
 } from '@openclaude-studio/shared';
 
 import {
@@ -167,6 +169,7 @@ function buildOverviewResponse(
   logs: Awaited<ReturnType<typeof readLogWindow>>,
 ): OverviewResponse {
   const changedFiles = new Set(sessions.flatMap((session) => session.changedFiles));
+  const usageSeries = buildUsageSeries(sessions);
   const diagnostics: Diagnostic[] = [
     ...project.diagnostics,
     ...providerResult.diagnostics,
@@ -194,8 +197,49 @@ function buildOverviewResponse(
       logErrorCount: logs.entries.filter((entry) => entry.level === 'error').length,
     },
     recentSessions: sessions.slice(0, 5),
+    usageSeries,
     diagnostics,
   };
+}
+
+function buildUsageSeries(sessions: SessionSummary[]): OverviewUsagePoint[] {
+  const byDay = new Map<string, OverviewUsagePoint>();
+
+  for (const session of sessions) {
+    const day = session.lastTimestamp.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      continue;
+    }
+
+    const existing = byDay.get(day) ?? {
+      date: day,
+      name: day.slice(5),
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      sessionCount: 0,
+      sessionIds: [],
+    };
+
+    existing.inputTokens += session.tokens.input;
+    existing.outputTokens += session.tokens.output;
+    existing.cacheReadTokens += session.tokens.cacheRead;
+    existing.cacheWriteTokens += session.tokens.cacheWrite;
+    existing.totalTokens += sessionTokenTotal(session);
+    existing.costUsd += session.costUsd;
+    existing.sessionCount += 1;
+    existing.sessionIds.push(session.id);
+    byDay.set(day, existing);
+  }
+
+  return [...byDay.values()].sort((left, right) => left.date.localeCompare(right.date));
+}
+
+function sessionTokenTotal(session: SessionSummary): number {
+  return session.tokens.input + session.tokens.output + session.tokens.cacheRead + session.tokens.cacheWrite;
 }
 
 async function logScopeFromRequest(
@@ -240,11 +284,13 @@ function queryLevel(request: FastifyRequest): LogSearchRequest['level'] {
 }
 
 function logWindowRequest(request: FastifyRequest) {
-  const result: { start?: number; count?: number } = {};
+  const result: { count?: number; start?: number; tail?: boolean } = {};
   const start = queryNumber(request, 'start');
   const count = queryNumber(request, 'count');
+  const tail = queryString(request, 'tail');
   if (start !== undefined) result.start = start;
   if (count !== undefined) result.count = count;
+  if (tail === 'true') result.tail = true;
   return result;
 }
 
