@@ -21,6 +21,9 @@ export function createOpenClaudePaths(options: PathOptions = {}) {
     debugDir: join(openClaudeHome, 'debug'),
     sessionsDir: join(openClaudeHome, 'sessions'),
     statsCache: join(openClaudeHome, 'stats-cache.json'),
+    tasksDir: join(openClaudeHome, 'tasks'),
+    plansDir: join(openClaudeHome, 'plans'),
+    fileHistoryDir: join(openClaudeHome, 'file-history'),
     projectSettings(projectPath: string) {
       const base = join(resolve(projectPath), '.openclaude');
       return {

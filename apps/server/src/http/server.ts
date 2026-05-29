@@ -21,6 +21,7 @@ import {
 import { listLogFiles, readLogWindow, searchLogs, type LogFileScope, type LogSearchRequest } from '../services/logs.js';
 import { createOpenClaudePaths, type PathOptions } from '../services/paths.js';
 import { readSessionSummaries } from '../services/sessions.js';
+import { readSessionDetails } from '../services/sessionDetails.js';
 import { ApiError } from './errors.js';
 
 export type ServerOptions = PathOptions & {
@@ -121,6 +122,18 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
     const project = await resolveProject(paths, request.params.projectId);
     return { sessions: await readSessionSummaries(paths, project) };
   });
+
+  app.get<{ Params: { projectId: string; sessionId: string } }>(
+    '/api/projects/:projectId/sessions/:sessionId',
+    async (request, reply) => {
+      const project = await resolveProject(paths, request.params.projectId);
+      const result = await readSessionDetails(paths, project, request.params.sessionId);
+      if (!result) {
+        return reply.code(404).send({ error: 'Session not found', code: 'NOT_FOUND', diagnostics: [] } satisfies ApiErrorResponse);
+      }
+      return result;
+    },
+  );
 
   app.get<{ Params: ProjectParams }>('/api/projects/:projectId/overview', async (request) => {
     const project = await resolveProject(paths, request.params.projectId);

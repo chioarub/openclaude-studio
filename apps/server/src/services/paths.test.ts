@@ -11,6 +11,9 @@ describe('OpenClaude paths', () => {
     expect(paths.openClaudeHome).toBe('/tmp/example-home/.openclaude');
     expect(paths.projectsDir).toBe('/tmp/example-home/.openclaude/projects');
     expect(paths.debugDir).toBe('/tmp/example-home/.openclaude/debug');
+    expect(paths.tasksDir).toBe('/tmp/example-home/.openclaude/tasks');
+    expect(paths.plansDir).toBe('/tmp/example-home/.openclaude/plans');
+    expect(paths.fileHistoryDir).toBe('/tmp/example-home/.openclaude/file-history');
   });
 
   test('honors CLAUDE_CONFIG_DIR for the OpenClaude home', () => {

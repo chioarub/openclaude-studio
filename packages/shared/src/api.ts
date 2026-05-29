@@ -65,6 +65,58 @@ export type SessionSummary = {
   linkedTaskCount: number;
 };
 
+export type ConversationTimelineEvent = {
+  id: string;
+  timestamp: string;
+  kind: 'user' | 'assistant' | 'tool' | 'error' | 'system';
+  title: string;
+  content: string;
+  tool?: {
+    phase: 'call' | 'result';
+    name: string | null;
+    status: 'success' | 'error' | 'unknown';
+    command: string | null;
+    filePath: string | null;
+    outputType: 'command' | 'stdout' | 'stderr' | 'file' | 'text' | 'image' | 'none';
+  };
+};
+
+export type SessionFileHistoryEntry = {
+  filePath: string;
+  backupFileName: string | null;
+  version: number;
+  backupTime: string | null;
+  backupExists: boolean;
+};
+
+export type LinkedTaskSummary = {
+  id: string;
+  title: string;
+  status: string;
+  description: string;
+  activeForm: string | null;
+};
+
+export type LinkedPlanSummary = {
+  slug: string;
+  title: string;
+  exists: boolean;
+};
+
+export type SessionDetails = SessionSummary & {
+  messageCount: number;
+  toolsUsed: { name: string; count: number }[];
+  fileHistoryAvailable: boolean;
+  fileHistory: SessionFileHistoryEntry[];
+  linkedTasks: LinkedTaskSummary[];
+  linkedPlans: LinkedPlanSummary[];
+};
+
+export type SessionDetailsResponse = {
+  session: SessionDetails;
+  timeline: ConversationTimelineEvent[];
+};
+
 export type LogFileSummary = {
   name: string;
   sizeBytes: number;
