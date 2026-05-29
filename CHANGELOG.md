@@ -4,8 +4,11 @@ All notable changes to OpenClaude Studio are documented here.
 
 This project uses semantic versioning for the published `openclaude-studio` npm package.
 
-## Unreleased
+## 0.0.5
 
+- Added a project usage overview chart with cost and token views.
+- Improved cost handling so projects without recorded spend fall back to token usage.
+- Improved system logs with project-scoped log selection, sticky table headers, virtualized window loading, and log-message copy actions.
 - Hardened CI into separate lint, unit test, build/package, and e2e jobs.
 - Added a packed-package smoke test for the npm CLI.
 - Added documentation for architecture, local server behavior, deployment, and privacy/redaction.
