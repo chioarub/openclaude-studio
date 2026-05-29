@@ -84,6 +84,24 @@ describe('App', () => {
     expect(within(projectOverview!).getByText('Recorded cost unavailable')).toBeInTheDocument();
   });
 
+  test('clears the usage chart tooltip when the timeframe changes', async () => {
+    vi.stubGlobal('fetch', mockApi());
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const projectOverview = (await screen.findByText('Project Overview')).closest('section');
+    expect(projectOverview).not.toBeNull();
+
+    await user.click(within(projectOverview!).getByRole('button', { name: 'All' }));
+    fireEvent.pointerEnter(within(projectOverview!).getByLabelText('2026-05-27: $0.00'));
+    expect(within(projectOverview!).getByRole('tooltip')).toBeInTheDocument();
+
+    await user.click(within(projectOverview!).getByRole('button', { name: '14D' }));
+
+    expect(within(projectOverview!).queryByRole('tooltip')).not.toBeInTheDocument();
+  });
+
   test('uses the saved server URL without reusing a stale persistent token', async () => {
     window.localStorage.setItem(
       legacyConnectionStorageKey,
@@ -277,21 +295,21 @@ describe('App', () => {
       'fetch',
       mockApi({
         projects: [
-            projectFixture({ id: 'project-1', name: 'project-a', path: '/tmp/project-a', active: true }),
-            projectFixture({
-              id: 'project-2',
-              name: 'archived',
-              path: '/tmp/archived',
-              exists: false,
-              branch: 'legacy',
-              diagnostics: [
-                { level: 'error', message: 'Missing project.' },
-                { level: 'warn', message: 'Config is stale.' },
-              ],
-            }),
-          ],
-        }),
-      );
+          projectFixture({ id: 'project-1', name: 'project-a', path: '/tmp/project-a', active: true }),
+          projectFixture({
+            id: 'project-2',
+            name: 'archived',
+            path: '/tmp/archived',
+            exists: false,
+            branch: 'legacy',
+            diagnostics: [
+              { level: 'error', message: 'Missing project.' },
+              { level: 'warn', message: 'Config is stale.' },
+            ],
+          }),
+        ],
+      }),
+    );
     const user = userEvent.setup();
 
     render(<App />);

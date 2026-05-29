@@ -1498,6 +1498,7 @@ function UsageOverviewChart({ series }: { series: OverviewResponse['usageSeries'
 
   useEffect(() => {
     setMetric((current) => hasUsageData(series, current) ? current : preferredUsageMetric(series));
+    setHoveredIndex(null);
   }, [series]);
 
   const visibleSeries = useMemo(() => filterUsageSeries(series, timeframe), [series, timeframe]);
@@ -1554,7 +1555,10 @@ function UsageOverviewChart({ series }: { series: OverviewResponse['usageSeries'
                 aria-pressed={timeframe === option.value}
                 className="segmented-control-button"
                 key={option.value}
-                onClick={() => setTimeframe(option.value)}
+                onClick={() => {
+                  setTimeframe(option.value);
+                  setHoveredIndex(null);
+                }}
                 type="button"
               >
                 {option.label}
