@@ -126,3 +126,22 @@ jobs:
             test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - lint
+      - unit-tests
+      - build-package
+      - e2e
+    if: ${{ always() }}
+
+    steps:
+      - name: Require all CI jobs to pass
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+        run: exit 1
+
+      - name: Report success
+        run: echo "All required CI jobs passed."
