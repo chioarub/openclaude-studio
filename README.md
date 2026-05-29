@@ -5,16 +5,16 @@
 [![npm version](https://img.shields.io/npm/v/openclaude-studio.svg)](https://www.npmjs.com/package/openclaude-studio)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-OpenClaude Studio is a read-only companion dashboard for OpenClaude. Run a small local API on your machine, open the hosted web app, and inspect projects, sessions, provider status, diagnostics, and debug logs without editing local OpenClaude data.
+OpenClaude Studio is a read-only companion dashboard for OpenClaude. Run a small local API on your machine, open the hosted web app, and inspect projects, sessions, provider status, diagnostics, usage, and debug logs without editing local OpenClaude data.
 
-The project is intentionally small in `0.0.1`: a hosted or local web app talks to a local server running on your machine. The server reads OpenClaude files from disk, redacts likely secrets, and exposes only read-only HTTP endpoints.
+The project is intentionally scoped around a small read-only foundation: a hosted or local web app talks to a local server running on your machine. The server reads OpenClaude files from disk, redacts likely secrets, and exposes only read-only HTTP endpoints.
 
 ## Current Scope
 
-OpenClaude Studio `0.0.1` includes:
+The current MVP line includes:
 
 - Project selector backed by `~/.openclaude.json`
-- Project overview with recent sessions, usage, log issue counts, and provider status
+- Project overview with recent sessions, usage chart, log issue counts, and provider status
 - Session summaries for the selected project
 - Active provider inspection with secret fields redacted
 - Project-scoped diagnostics
@@ -47,6 +47,8 @@ The web UI can run locally during development or be hosted as static assets. The
 - Node.js 22 or newer
 - npm
 - OpenClaude installed and used at least once, so local config/session files exist
+
+The supported runtime floor is Node.js 22. CI and release jobs use Node.js 22 so local development, validation, and publishing exercise the same supported baseline. The repository includes [`.nvmrc`](.nvmrc) for contributors who use nvm-compatible tooling.
 
 ## Quick Start
 
@@ -132,6 +134,7 @@ Useful commands:
 npm run lint
 npm test
 npm run build
+npm run smoke:package
 npm run test:e2e
 ```
 
@@ -142,11 +145,18 @@ Workspace layout:
 - `packages/shared`: API response types shared by server and web
 - `tests/e2e`: Playwright coverage for the integrated app
 
+Additional documentation:
+
+- [Architecture](docs/architecture.md)
+- [Local server](docs/local-server.md)
+- [Deployment](docs/deployment.md)
+- [Privacy and redaction](docs/privacy-and-redaction.md)
+
 ## Safety Model
 
 OpenClaude Studio is designed to be conservative by default:
 
-- The `0.0.1` API is read-only.
+- The current API is read-only.
 - The server binds to loopback by default.
 - Browser origins are restricted to loopback, the official hosted app, and any origins explicitly configured by the user.
 - File reads are bounded.
@@ -159,7 +169,7 @@ Redaction is defense in depth, not a guarantee for every possible secret format.
 
 The current release focuses on a useful read-only foundation. Future work will be prioritized by real user feedback. Valuable next areas include:
 
-Shipped in `0.0.1`:
+Shipped in the MVP line:
 
 - [x] Hosted web dashboard
 - [x] Installable local API package through npm

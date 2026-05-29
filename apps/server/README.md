@@ -10,6 +10,8 @@ https://openclaude-studio.pages.dev/
 
 ## Usage
 
+Requires Node.js 22 or newer.
+
 ```bash
 npx openclaude-studio
 ```

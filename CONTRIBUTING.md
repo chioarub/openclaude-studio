@@ -17,12 +17,15 @@ Before opening a pull request, run:
 npm test
 npm run lint
 npm run build
+npm run smoke:package
 npm run test:e2e
 ```
 
+The project supports Node.js 22 or newer. CI and releases run on Node.js 22 to validate the supported baseline.
+
 ## Scope
 
-The `0.0.1` line is intentionally read-only. Changes that write OpenClaude settings, sessions, logs, provider profiles, or project files should wait until the write model has explicit design and security review.
+The current MVP line is intentionally read-only. Changes that write OpenClaude settings, sessions, logs, provider profiles, or project files should wait until the write model has explicit design and security review.
 
 Roadmap discussions are welcome. For larger features, open an issue first so the data access model, UI scope, and testing plan can be discussed before implementation.
 
@@ -33,6 +36,7 @@ Roadmap discussions are welcome. For larger features, open an issue first so the
 - Avoid committing generated output, local environment files, secrets, logs, or machine-specific paths.
 - Keep API responses typed through `packages/shared`.
 - Document user-visible changes in `README.md` when behavior, setup, or scope changes.
+- Update docs in `docs/` when architecture, deployment, local server behavior, or privacy assumptions change.
 - Keep the local server read-only unless the change has an explicit safety design.
 
 ## Code Style
@@ -45,7 +49,7 @@ The local API package is published from GitHub Actions when a `v*` tag is pushed
 
 The same release workflow deploys the web app to Cloudflare Pages after validation and npm publishing succeed. Cloudflare Pages Git integration should keep automatic production deployments disabled and preview branch deployments set to `None`; production deploys are handled by the release workflow.
 
-Release tags must match the server package version, for example `v0.0.1` for `apps/server/package.json` version `0.0.1`. If the exact npm package version was already published, the workflow skips npm publishing and still deploys the web app.
+Release tags must match the server package version, for example `v0.0.4` for `apps/server/package.json` version `0.0.4`. If the exact npm package version was already published, the workflow skips npm publishing and still deploys the web app.
 
 The release workflow needs these repository secrets:
 

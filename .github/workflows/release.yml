@@ -12,6 +12,7 @@ permissions:
 
 env:
   CI: true
+  NODE_VERSION: 22
 
 concurrency:
   group: release-${{ github.ref }}
@@ -31,7 +32,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: ${{ env.NODE_VERSION }}
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
@@ -69,11 +70,25 @@ jobs:
       - name: Check npm package contents
         run: npm pack --dry-run -w openclaude-studio
 
+      - name: Smoke test packed package
+        run: npm run smoke:package
+
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 
       - name: End-to-end tests
         run: npm run test:e2e -- --project=chromium
+
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-playwright-artifacts
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Check npm publication status
         id: npm

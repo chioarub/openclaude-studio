@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Security fixes target the latest `main` branch until the first tagged release is published.
+Security fixes target the latest tagged release and the current `main` branch.
 
 ## Reporting a Vulnerability
 
