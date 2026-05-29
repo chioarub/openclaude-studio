@@ -62,7 +62,7 @@ describe('App', () => {
     expect(within(projectOverview!).getByRole('img', { name: /recorded spend chart/i })).toBeInTheDocument();
     expect(within(projectOverview!).getAllByText('$0.25').length).toBeGreaterThan(0);
     fireEvent.pointerEnter(within(projectOverview!).getByLabelText('2026-05-28: $0.25'));
-    const tooltip = within(projectOverview!).getByRole('tooltip');
+    const tooltip = await within(projectOverview!).findByRole('tooltip');
     expect(within(tooltip).getByText('Recorded cost')).toBeInTheDocument();
     expect(within(tooltip).getAllByText('$0.25').length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith(
@@ -95,7 +95,7 @@ describe('App', () => {
 
     await user.click(within(projectOverview!).getByRole('button', { name: 'All' }));
     fireEvent.pointerEnter(within(projectOverview!).getByLabelText('2026-05-27: $0.00'));
-    expect(within(projectOverview!).getByRole('tooltip')).toBeInTheDocument();
+    expect(await within(projectOverview!).findByRole('tooltip')).toBeInTheDocument();
 
     await user.click(within(projectOverview!).getByRole('button', { name: '14D' }));
 
