@@ -12,12 +12,33 @@ type UnknownRecord = Record<string, unknown>;
 
 type SessionProject = Pick<ProjectSummary, 'path' | 'usage'>;
 
-type ParsedTranscriptEntry = {
+export type ParsedToolUse = {
+  id: string | null;
+  name: string;
+  filePath: string | null;
+  command: string | null;
+  displayLabel: string | null;
+  details: string | null;
+};
+
+export type ParsedToolResult = {
+  toolUseId: string | null;
+  resultType: string | null;
+  status: 'success' | 'error' | 'unknown';
+  outputType: 'command' | 'stdout' | 'stderr' | 'file' | 'text' | 'image' | 'none';
+  filePath: string | null;
+  stdout: string | null;
+  stderr: string | null;
+  text: string | null;
+};
+
+export type ParsedTranscriptEntry = {
   sessionId: string;
   timestamp: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
   text: string;
   title: string | null;
+  slug: string | null;
   model: string | null;
   inputTokens: number;
   outputTokens: number;
@@ -25,6 +46,9 @@ type ParsedTranscriptEntry = {
   cacheWriteTokens: number;
   changedFiles: string[];
   failed: boolean;
+  toolUses: ParsedToolUse[];
+  toolResult: ParsedToolResult | null;
+  sourcePath: string;
 };
 
 const maxTranscriptBytes = 10 * 1024 * 1024;
@@ -82,7 +106,7 @@ async function collectJsonlFiles(root: string): Promise<string[]> {
   return files.sort((left, right) => left.localeCompare(right));
 }
 
-async function parseTranscriptFile(
+export async function parseTranscriptFile(
   filePath: string,
   projectPath: string,
 ): Promise<ParsedTranscriptEntry[]> {
@@ -101,7 +125,7 @@ async function parseTranscriptFile(
       const parsed = JSON.parse(line) as unknown;
       const entry = transcriptEntryFromUnknown(parsed, projectPath);
       if (entry) {
-        entries.push(entry);
+        entries.push({ ...entry, sourcePath: filePath });
       }
     } catch {
       continue;
@@ -128,11 +152,27 @@ function transcriptEntryFromUnknown(
 
   const type = stringFromUnknown(value.type) ?? 'system';
   const message = isRecord(value.message) ? value.message : null;
-  const role = readRole(type, stringFromUnknown(message?.role));
   const content = message?.content;
+  const toolResult = extractToolResult(value, content);
+  const role = toolResult ? 'tool' : readRole(type, stringFromUnknown(message?.role));
   const usage = isRecord(message?.usage) ? message.usage : null;
-  const text = message ? extractText(content) : stringFromUnknown(value.message) ?? '';
   const toolUses = extractToolUses(content);
+  const systemMessage =
+    typeof value.message === 'string'
+      ? value.message
+      : stringFromUnknown(value.content) ?? '';
+  const rawText = message ? extractText(content) : systemMessage;
+  const localCommandText = localCommandDisplayText(rawText);
+  const text = stripTranscriptNoise(localCommandText === null ? '' : localCommandText ?? rawText);
+  const failed =
+    (type === 'system' && stringFromUnknown(value.level) === 'error') ||
+    value.isApiErrorMessage === true ||
+    Boolean(stringFromUnknown(value.error)) ||
+    toolResult?.status === 'error';
+
+  if (type === 'system' && !failed) {
+    return null;
+  }
 
   return {
     sessionId,
@@ -140,6 +180,7 @@ function transcriptEntryFromUnknown(
     role,
     text,
     title: extractTitle(value),
+    slug: stringFromUnknown(value.slug),
     model: stringFromUnknown(message?.model),
     inputTokens: intFromUnknown(usage?.input_tokens),
     outputTokens: intFromUnknown(usage?.output_tokens),
@@ -149,10 +190,10 @@ function transcriptEntryFromUnknown(
       .filter((tool) => mutationTools.has(tool.name))
       .map((tool) => tool.filePath)
       .filter((filePath): filePath is string => Boolean(filePath)),
-    failed:
-      (type === 'system' && stringFromUnknown(value.level) === 'error') ||
-      value.isApiErrorMessage === true ||
-      Boolean(stringFromUnknown(value.error)),
+    toolUses,
+    toolResult,
+    failed,
+    sourcePath: '',
   };
 }
 
@@ -229,6 +270,9 @@ function readRole(
   if (type === 'user' || type === 'assistant' || type === 'system') {
     return type;
   }
+  if (type === 'tool' || type === 'tool_result') {
+    return 'tool';
+  }
   return 'tool';
 }
 
@@ -244,6 +288,12 @@ function extractText(content: unknown): string {
   return content
     .map((block) => {
       if (!isRecord(block) || block.type !== 'text') {
+        if (isRecord(block) && Array.isArray(block.content)) {
+          return extractText(block.content);
+        }
+        if (isRecord(block) && typeof block.content === 'string') {
+          return block.content;
+        }
         return '';
       }
       return stringFromUnknown(block.text) ?? '';
@@ -252,12 +302,12 @@ function extractText(content: unknown): string {
     .join('\n');
 }
 
-function extractToolUses(content: unknown): Array<{ name: string; filePath: string | null }> {
+function extractToolUses(content: unknown): ParsedToolUse[] {
   if (!Array.isArray(content)) {
     return [];
   }
 
-  const tools: Array<{ name: string; filePath: string | null }> = [];
+  const tools: ParsedToolUse[] = [];
   for (const block of content) {
     if (!isRecord(block) || block.type !== 'tool_use') {
       continue;
@@ -269,15 +319,173 @@ function extractToolUses(content: unknown): Array<{ name: string; filePath: stri
     }
 
     const input = isRecord(block.input) ? block.input : {};
+    const summary = summarizeToolUseInput(name, input);
     tools.push({
+      id: stringFromUnknown(block.id),
       name,
       filePath:
         stringFromUnknown(input.file_path) ??
         stringFromUnknown(input.path) ??
         stringFromUnknown(input.notebook_path),
+      command: stringFromUnknown(input.command),
+      displayLabel: summary.displayLabel,
+      details: summary.details,
     });
   }
   return tools;
+}
+
+function summarizeToolUseInput(
+  name: string,
+  input: UnknownRecord,
+): Pick<ParsedToolUse, 'displayLabel' | 'details'> {
+  if (/^Skill$/i.test(name)) {
+    const skill = stringFromUnknown(input.skill);
+    const args = stringFromUnknown(input.args);
+    return {
+      displayLabel: skill,
+      details: labeledToolDetails([
+        ['Skill', skill],
+        ['Arguments', args],
+      ]),
+    };
+  }
+
+  if (/^TaskCreate$/i.test(name)) {
+    const subject = stringFromUnknown(input.subject);
+    const activeForm = stringFromUnknown(input.activeForm);
+    const description = stringFromUnknown(input.description);
+    return {
+      displayLabel: subject,
+      details: labeledToolDetails([
+        ['Task', subject],
+        ['State', activeForm],
+        ['Description', description],
+      ]),
+    };
+  }
+
+  if (/^Agent$/i.test(name)) {
+    const description = stringFromUnknown(input.description);
+    const subagentType = stringFromUnknown(input.subagent_type);
+    const prompt = stringFromUnknown(input.prompt);
+    return {
+      displayLabel: description,
+      details: labeledToolDetails([
+        ['Agent', description],
+        ['Type', subagentType],
+        ['Prompt', prompt],
+      ]),
+    };
+  }
+
+  const subject =
+    stringFromUnknown(input.subject) ??
+    stringFromUnknown(input.description) ??
+    stringFromUnknown(input.prompt) ??
+    stringFromUnknown(input.args);
+  return {
+    displayLabel: subject,
+    details: labeledToolDetails([
+      ['Subject', stringFromUnknown(input.subject)],
+      ['Description', stringFromUnknown(input.description)],
+      ['Prompt', stringFromUnknown(input.prompt)],
+      ['Arguments', stringFromUnknown(input.args)],
+    ]),
+  };
+}
+
+function labeledToolDetails(fields: Array<[string, string | null]>): string | null {
+  const blockLabels = new Set(['Arguments', 'Description', 'Prompt']);
+  const lines = fields
+    .filter((field): field is [string, string] => Boolean(field[1]?.trim()))
+    .map(([label, value]) =>
+      value.includes('\n') || blockLabels.has(label) ? `${label}:\n${value}` : `${label}: ${value}`,
+    );
+  return lines.length > 0 ? lines.join('\n') : null;
+}
+
+function extractToolResult(row: UnknownRecord, content: unknown): ParsedToolResult | null {
+  const resultRecord = isRecord(row.toolUseResult) ? row.toolUseResult : null;
+  const messageRecord = isRecord(row.message) ? row.message : null;
+  const toolResultItem = Array.isArray(content)
+    ? content.find((item): item is UnknownRecord => isRecord(item) && item.type === 'tool_result') ?? null
+    : null;
+
+  if (!resultRecord && !toolResultItem && stringFromUnknown(row.type) !== 'tool') {
+    return null;
+  }
+
+  const rawText = stripTranscriptNoise(extractText(content));
+  const nestedFile = resultRecord && isRecord(resultRecord.file) ? resultRecord.file : null;
+  const stdout = resultRecord ? stringFromUnknown(resultRecord.stdout) : null;
+  const stderr = resultRecord ? stringFromUnknown(resultRecord.stderr) : null;
+  const filePath =
+    (resultRecord ? stringFromUnknown(resultRecord.filePath) : null) ??
+    stringFromUnknown(nestedFile?.filePath) ??
+    filePathFromToolResultText(rawText);
+  const resultType = resultRecord ? stringFromUnknown(resultRecord.type) : null;
+  const isError =
+    toolResultItem?.is_error === true ||
+    resultRecord?.is_error === true ||
+    resultRecord?.interrupted === true ||
+    row.isApiErrorMessage === true;
+  const hasResultPayload = Boolean(resultRecord || rawText.trim() || stdout || stderr || filePath);
+  const status: ParsedToolResult['status'] = isError ? 'error' : hasResultPayload ? 'success' : 'unknown';
+  const outputType = inferToolResultOutputType({
+    resultRecord,
+    rawText,
+    stdout,
+    stderr,
+    filePath,
+  });
+
+  return {
+    toolUseId:
+      stringFromUnknown(toolResultItem?.tool_use_id) ??
+      stringFromUnknown(messageRecord?.tool_use_id) ??
+      stringFromUnknown(row.tool_use_id),
+    resultType,
+    status,
+    outputType,
+    filePath,
+    stdout,
+    stderr,
+    text: rawText.trim() ? rawText : null,
+  };
+}
+
+function inferToolResultOutputType({
+  resultRecord,
+  rawText,
+  stdout,
+  stderr,
+  filePath,
+}: {
+  resultRecord: UnknownRecord | null;
+  rawText: string;
+  stdout: string | null;
+  stderr: string | null;
+  filePath: string | null;
+}): ParsedToolResult['outputType'] {
+  if (stdout) return 'stdout';
+  if (stderr) return 'stderr';
+  if (resultRecord?.isImage === true) return 'image';
+  if (rawText.trim() && !isGenericFileResultText(rawText, filePath)) return 'text';
+  if (filePath) return 'file';
+  if (rawText.trim()) return 'text';
+  return 'none';
+}
+
+function filePathFromToolResultText(value: string): string | null {
+  const match = value.match(/^File \w+ successfully at:\s+(.+)$/i);
+  return match?.[1]?.trim() || null;
+}
+
+function isGenericFileResultText(value: string, filePath: string | null): boolean {
+  const trimmed = value.trim();
+  if (filePath && trimmed === filePath) return true;
+  return /^File \w+ successfully at:\s+.+$/i.test(trimmed);
 }
 
 function cleanTitle(value: string): string {
@@ -290,6 +498,49 @@ function cleanTitle(value: string): string {
     .trim();
 
   return normalized.startsWith('/') ? '' : normalized;
+}
+
+function localCommandDisplayText(content: string): string | null | undefined {
+  if (!isLocalCommandMarkup(content)) {
+    return undefined;
+  }
+
+  if (/<(?:local-command-caveat|local-command-stdout|local-command-stderr)\b/i.test(content)) {
+    return null;
+  }
+
+  const commandName = tagContent(content, 'command-name');
+  const commandMessage = tagContent(content, 'command-message');
+  if (isHiddenLocalCommand(commandName ?? commandMessage)) {
+    return null;
+  }
+
+  return tagContent(content, 'command-args')?.trim() || null;
+}
+
+function isLocalCommandMarkup(content: string): boolean {
+  return /<(?:command-name|command-message|command-args|local-command-caveat|local-command-stdout|local-command-stderr)\b/i.test(
+    content,
+  );
+}
+
+function isHiddenLocalCommand(command: string | null | undefined): boolean {
+  if (!command) {
+    return false;
+  }
+
+  const commandName = command.trim().split(/\s+/)[0]?.replace(/^\/+/, '').split(':').pop()?.toLowerCase();
+  return Boolean(commandName && ['clear', 'cost', 'doctor', 'export', 'help', 'login', 'logout', 'model'].includes(commandName));
+}
+
+function tagContent(content: string, tagName: string): string | null {
+  const escapedTagName = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = content.match(new RegExp(`<${escapedTagName}\\b[^>]*>([\\s\\S]*?)<\\/${escapedTagName}>`, 'i'));
+  return match?.[1] ?? null;
+}
+
+function stripTranscriptNoise(content: string): string {
+  return content.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, '').trim();
 }
 
 function truncateText(value: string, maxLength: number): string {

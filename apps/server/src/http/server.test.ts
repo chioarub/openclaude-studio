@@ -335,6 +335,105 @@ describe('HTTP server', () => {
     });
     expect(logs.json().files.map((file: { name: string }) => file.name)).toEqual(['session-1.txt']);
   });
+
+  test('returns session details for an existing session', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
+    const projectPath = join(home, 'project-a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(projectPath, { recursive: true });
+    await mkdir(join(projectPath, '.git'), { recursive: true });
+    await writeFile(join(projectPath, '.git', 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [],
+        projects: {
+          [projectPath]: {
+            lastGracefulShutdown: '2026-05-28T08:00:00.000Z',
+            lastSessionId: 'session-1',
+            lastCost: 0.25,
+          },
+        },
+      }),
+      'utf8',
+    );
+    const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'session-1.jsonl'),
+      [
+        JSON.stringify({
+          type: 'user',
+          sessionId: 'session-1',
+          timestamp: '2026-05-28T08:00:00.000Z',
+          cwd: projectPath,
+          message: { role: 'user', content: 'Build the API' },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          sessionId: 'session-1',
+          timestamp: '2026-05-28T08:01:00.000Z',
+          cwd: projectPath,
+          message: {
+            role: 'assistant',
+            model: 'claude-sonnet',
+            usage: { input_tokens: 100, output_tokens: 200 },
+            content: [{ type: 'text', text: 'Done' }],
+          },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+    const server = await testServer(home);
+    const headers = tokenHeaders();
+
+    const projects = await server.inject({ method: 'GET', url: '/api/projects', headers });
+    const projectId = projects.json().projects[0].id;
+    const detail = await server.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/sessions/session-1`,
+      headers,
+    });
+
+    expect(detail.statusCode).toBe(200);
+    const body = detail.json();
+    expect(body.session).toMatchObject({ id: 'session-1', title: 'Build the API' });
+    expect(body.timeline).toBeInstanceOf(Array);
+    expect(body.timeline).toHaveLength(2);
+  });
+
+  test('returns 404 for nonexistent session', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
+    const projectPath = join(home, 'project-a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(projectPath, { recursive: true });
+    await mkdir(join(projectPath, '.git'), { recursive: true });
+    await writeFile(join(projectPath, '.git', 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [],
+        projects: {
+          [projectPath]: { lastGracefulShutdown: '2026-05-28T08:00:00.000Z' },
+        },
+      }),
+      'utf8',
+    );
+    await mkdir(join(paths.projectsDir, encodeProjectPath(projectPath)), { recursive: true });
+    const server = await testServer(home);
+    const headers = tokenHeaders();
+
+    const projects = await server.inject({ method: 'GET', url: '/api/projects', headers });
+    const projectId = projects.json().projects[0].id;
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/sessions/nonexistent`,
+      headers,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ code: 'NOT_FOUND' });
+  });
 });
 
 async function testServer(home = '/tmp/ocs-empty-home'): Promise<FastifyInstance> {
