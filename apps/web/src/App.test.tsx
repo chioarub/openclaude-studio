@@ -161,6 +161,76 @@ describe('App', () => {
     expect(screen.getByText('Build the API')).toBeInTheDocument();
   });
 
+  test('opens a session details timeline from the sessions table', async () => {
+    const fetchMock = mockApi();
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    expect(within(dialog).getAllByText('Build the API').length).toBeGreaterThan(0);
+    expect(within(dialog).getByText('Run command')).toBeInTheDocument();
+    expect(within(dialog).getByText('npm test')).toBeInTheDocument();
+    expect(within(dialog).getByText('Command output')).toBeInTheDocument();
+    expect(within(dialog).getByText('ok')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: /^plans/i }));
+    expect(within(dialog).getAllByText('Session Details').length).toBeGreaterThan(0);
+    expect(within(dialog).getByText('session-details')).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: /copy timeline/i }));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('[TOOL] Run command\nnpm test'));
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:43110/api/projects/project-1/sessions/session-1',
+      expect.objectContaining({ headers: { accept: 'application/json' } }),
+    );
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /session details/i })).not.toBeInTheDocument());
+  });
+
+  test('renders legacy partial session details without crashing', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionDetails: legacySessionDetailsFixture() }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    expect(within(dialog).getByText('unknown model')).toBeInTheDocument();
+    expect(within(dialog).getByText('No files were altered.')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: /tools used/i }));
+    expect(within(dialog).getByText('No tool calls recorded.')).toBeInTheDocument();
+    expect(within(dialog).getAllByText('0').length).toBeGreaterThan(0);
+  });
+
+  test('summarizes repeated file-history snapshots by file path', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionDetails: repeatedFileHistorySessionDetailsFixture() }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('button', { name: /file history/i }));
+
+    const displayPath = '.../specs/2026-04-23-jinx-full-app-design.md';
+    expect(within(dialog).getAllByText(displayPath)).toHaveLength(1);
+    expect(within(dialog).getByText('Latest v2')).toBeInTheDocument();
+    expect(within(dialog).getByText('2 versions')).toBeInTheDocument();
+  });
+
   test('debounces additional log window requests as the log view scrolls', async () => {
     const fetchMock = mockApi({ logTotalLines: 1200 });
     vi.stubGlobal('fetch', fetchMock);
@@ -408,6 +478,7 @@ type MockApiOptions = {
   overviewUsageSeries?: unknown[];
   projectDiagnostics?: unknown[];
   projects?: unknown[];
+  sessionDetails?: unknown;
 };
 
 function mockApi(options: MockApiOptions = {}) {
@@ -482,6 +553,10 @@ function mockApi(options: MockApiOptions = {}) {
           },
         ],
       });
+    }
+
+    if (path === '/api/projects/project-1/sessions/session-1') {
+      return jsonResponse(options.sessionDetails ?? sessionDetailsFixture());
     }
 
     if (path === '/api/logs/window') {
@@ -742,6 +817,138 @@ function projectOneSessionFixture() {
     costUsd: 0.25,
     linkedPlanCount: 0,
     linkedTaskCount: 0,
+  };
+}
+
+function sessionDetailsFixture() {
+  return {
+    session: {
+      ...projectOneSessionFixture(),
+      messageCount: 2,
+      toolsUsed: [{ name: 'Bash', count: 1 }],
+      fileHistoryAvailable: true,
+      fileHistory: [
+        {
+          filePath: 'src/api.ts',
+          backupFileName: 'abc123@v1',
+          version: 1,
+          backupTime: '2026-05-28T08:00:30.000Z',
+          backupExists: true,
+        },
+      ],
+      linkedTasks: [
+        {
+          id: '1',
+          title: 'Build API endpoint',
+          status: 'completed',
+          description: 'Expose session details',
+          activeForm: null,
+        },
+      ],
+      linkedPlans: [
+        {
+          slug: 'session-details',
+          title: 'Session Details',
+          exists: true,
+        },
+      ],
+    },
+    timeline: [
+      {
+        id: 'session-1-0-user',
+        timestamp: '2026-05-28T08:00:00.000Z',
+        kind: 'user',
+        title: 'User message',
+        content: 'Build the API',
+      },
+      {
+        id: 'session-1-1-assistant',
+        timestamp: '2026-05-28T08:00:10.000Z',
+        kind: 'assistant',
+        title: 'claude-sonnet',
+        content: 'I will run the tests.',
+      },
+      {
+        id: 'session-1-2-tool',
+        timestamp: '2026-05-28T08:00:20.000Z',
+        kind: 'tool',
+        title: 'Run command',
+        content: 'npm test',
+        tool: {
+          phase: 'call',
+          name: 'Bash',
+          status: 'unknown',
+          command: 'npm test',
+          filePath: null,
+          outputType: 'command',
+        },
+      },
+      {
+        id: 'session-1-3-tool',
+        timestamp: '2026-05-28T08:00:30.000Z',
+        kind: 'tool',
+        title: 'Command output',
+        content: 'ok',
+        tool: {
+          phase: 'result',
+          name: 'Bash',
+          status: 'success',
+          command: 'npm test',
+          filePath: null,
+          outputType: 'stdout',
+        },
+      },
+    ],
+  };
+}
+
+function legacySessionDetailsFixture() {
+  const full = sessionDetailsFixture();
+  return {
+    ...full,
+    session: {
+      ...full.session,
+      modelSet: undefined,
+      changedFiles: undefined,
+      tokens: undefined,
+      toolsUsed: undefined,
+      fileHistory: undefined,
+      linkedTasks: undefined,
+      linkedPlans: undefined,
+    },
+  };
+}
+
+function repeatedFileHistorySessionDetailsFixture() {
+  const full = sessionDetailsFixture();
+  return {
+    ...full,
+    session: {
+      ...full.session,
+      fileHistory: [
+        {
+          filePath: 'docs/specs/2026-04-23-jinx-full-app-design.md',
+          backupFileName: 'jinx-design@v1',
+          version: 1,
+          backupTime: '2026-04-23T02:36:00.000Z',
+          backupExists: true,
+        },
+        {
+          filePath: 'docs/specs/2026-04-23-jinx-full-app-design.md',
+          backupFileName: 'jinx-design@v2',
+          version: 2,
+          backupTime: '2026-04-23T02:37:00.000Z',
+          backupExists: true,
+        },
+        {
+          filePath: 'docs/specs/2026-04-23-jinx-full-app-design.md',
+          backupFileName: 'jinx-design@v2',
+          version: 2,
+          backupTime: '2026-04-23T02:37:00.000Z',
+          backupExists: true,
+        },
+      ],
+    },
   };
 }
 

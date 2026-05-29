@@ -10,8 +10,8 @@ import {
   type ReactNode,
 } from 'react';
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
+
+import { cn } from './lib/cn.js';
 import {
   Activity,
   AlertTriangle,
@@ -55,6 +55,7 @@ import type {
 } from '@openclaude-studio/shared';
 
 import { createApiClient, normalizeBaseUrl } from './api';
+import { SessionDetailsModal } from './components/SessionDetailsModal';
 
 const serverUrlStorageKey = 'openclaude-studio:server-url';
 const legacyConnectionStorageKey = 'openclaude-studio.connection';
@@ -198,6 +199,7 @@ function StudioApp() {
   const [selectedLogFile, setSelectedLogFile] = useState<string | undefined>();
   const [logQuery, setLogQuery] = useState('');
   const [logLevel, setLogLevel] = useState<LogLevelFilter>('all');
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [status, setStatus] = useState<LoadState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthState>(null);
@@ -207,6 +209,10 @@ function StudioApp() {
 
   const api = useMemo(() => createApiClient({ baseUrl }), [baseUrl]);
   const selectedProject = snapshot.projects.find((project) => project.id === selectedProjectId) ?? null;
+
+  useEffect(() => {
+    setSelectedSessionId(null);
+  }, [selectedProjectId]);
 
   async function refreshHealth() {
     try {
@@ -375,7 +381,7 @@ function StudioApp() {
                 />
               }
             />
-            <Route path="/sessions" element={<SessionsPage sessions={snapshot.sessions} />} />
+            <Route path="/sessions" element={<SessionsPage sessions={snapshot.sessions} onSessionClick={setSelectedSessionId} />} />
             <Route path="/providers" element={<ProviderPage overview={snapshot.overview} />} />
             <Route
               path="/logs"
@@ -409,6 +415,13 @@ function StudioApp() {
           </Routes>
         </main>
       </div>
+      <SessionDetailsModal
+        sessionId={selectedSessionId}
+        projectId={selectedProjectId}
+        isOpen={selectedSessionId !== null}
+        onClose={() => setSelectedSessionId(null)}
+        api={api}
+      />
     </div>
   );
 }
@@ -1032,7 +1045,7 @@ function ControlCenterPage({
   );
 }
 
-function SessionsPage({ sessions }: { sessions: SessionSummary[] }) {
+function SessionsPage({ sessions, onSessionClick }: { sessions: SessionSummary[]; onSessionClick: (id: string) => void }) {
   const failedCount = sessions.filter((session) => session.status === 'failed').length;
 
   return (
@@ -1048,7 +1061,7 @@ function SessionsPage({ sessions }: { sessions: SessionSummary[] }) {
           </div>
         }
       />
-      <SessionsTable sessions={sessions} title="Sessions" />
+      <SessionsTable sessions={sessions} title="Sessions" onSessionClick={onSessionClick} />
     </PageStack>
   );
 }
@@ -1727,7 +1740,7 @@ function ProviderSummaryCard({ overview }: { overview: OverviewResponse | null }
   );
 }
 
-function SessionsTable({ sessions, title }: { sessions: SessionSummary[]; title: string }) {
+function SessionsTable({ sessions, title, onSessionClick }: { sessions: SessionSummary[]; title: string; onSessionClick?: (id: string) => void }) {
   return (
     <section className="panel">
       <SectionHeading icon={MessageSquareText} label={title} />
@@ -1749,7 +1762,20 @@ function SessionsTable({ sessions, title }: { sessions: SessionSummary[]; title:
             </thead>
             <tbody>
               {sessions.map((session) => (
-                <tr key={session.id}>
+                <tr
+                  key={session.id}
+                  onClick={() => onSessionClick?.(session.id)}
+                  onKeyDown={(event) => {
+                    if (!onSessionClick) return;
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      onSessionClick(session.id);
+                    }
+                  }}
+                  tabIndex={onSessionClick ? 0 : undefined}
+                  aria-label={onSessionClick ? `Open details for ${session.title}` : undefined}
+                  className={onSessionClick ? 'cursor-pointer hover:bg-surface-soft/50 transition-colors' : undefined}
+                >
                   <td className="max-w-[380px] truncate">{session.title}</td>
                   <td>
                     <Badge tone={session.status === 'failed' ? 'danger' : 'success'} label={session.status} />
@@ -2153,10 +2179,6 @@ function safeStorage(name: 'localStorage' | 'sessionStorage'): Storage | null {
   } catch {
     return null;
   }
-}
-
-function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
 }
 
 function projectTokenTotal(project: ProjectSummary): number {

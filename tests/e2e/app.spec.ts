@@ -61,8 +61,22 @@ test.beforeAll(async () => {
           role: 'assistant',
           model: 'claude-sonnet',
           usage: { input_tokens: 10, output_tokens: 20 },
-          content: [{ type: 'text', text: 'Done' }],
+          content: [
+            { type: 'text', text: 'Done' },
+            { type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'npm test' } },
+          ],
         },
+      }),
+      JSON.stringify({
+        type: 'user',
+        sessionId: 'session-1',
+        timestamp: '2026-05-28T08:02:00.000Z',
+        cwd: projectPath,
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'ok\n' }],
+        },
+        toolUseResult: { stdout: 'ok\n', interrupted: false },
       }),
     ].join('\n'),
     'utf8',
@@ -97,6 +111,24 @@ test('loads project overview, sessions, provider, and logs', async ({ page }) =>
   await expect(page.getByRole('button', { name: /project-a.*main/i })).toBeVisible();
   await expect(page.getByText('Anthropic')).toBeVisible();
   await expect(page.getByText('Build the API')).toBeVisible();
+  await page.getByRole('link', { name: /^Sessions$/ }).click();
+  await page.locator('tr[aria-label="Open details for Build the API"]').click();
+  const detailsDialog = page.getByRole('dialog', { name: 'Session Details' });
+  await expect(detailsDialog).toBeVisible();
+  await expect(detailsDialog).toHaveCSS('overflow-y', 'hidden');
+  await expect(page.getByTestId('session-details-sidebar')).toHaveCSS('overflow-y', 'auto');
+  await expect(detailsDialog.getByText('Build the API').first()).toBeVisible();
+  await expect(detailsDialog.getByText('Successful')).toBeVisible();
+  await expect(detailsDialog.getByText('claude-sonnet')).toBeVisible();
+  await expect(detailsDialog.getByText('Usage')).toBeVisible();
+  await expect(detailsDialog.getByText('Run command')).toBeVisible();
+  await expect(detailsDialog.getByText('npm test')).toBeVisible();
+  await expect(detailsDialog.getByText('Command output')).toBeVisible();
+  await expect(detailsDialog.locator('code').filter({ hasText: /^ok\s*$/ })).toBeVisible();
+  await detailsDialog.getByRole('button', { name: /tools used/i }).click();
+  await expect(detailsDialog.getByText('Bash x1')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(detailsDialog).toBeHidden();
   await page.getByRole('link', { name: /^Logs$/ }).click();
   await expect(page.getByText('OPENAI_API_KEY=<redacted> slow')).toBeVisible();
   await expect(page.getByText(/^line-1$/)).toHaveCount(0);

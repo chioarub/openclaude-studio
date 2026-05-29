@@ -4,6 +4,7 @@ import type {
   LogsWindowResponse,
   OverviewResponse,
   ProjectsResponse,
+  SessionDetailsResponse,
   SessionSummary,
 } from '@openclaude-studio/shared';
 
@@ -51,6 +52,8 @@ export function createApiClient(settings: ConnectionSettings) {
       request<OverviewResponse>(`/api/projects/${encodeURIComponent(projectId)}/overview`),
     sessions: (projectId: string) =>
       request<SessionsResponse>(`/api/projects/${encodeURIComponent(projectId)}/sessions`),
+    sessionDetails: (projectId: string, sessionId: string) =>
+      request<SessionDetailsResponse>(`/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`),
     logWindow: (input: { fileName?: string; projectId?: string; start?: number; count?: number; tail?: boolean } = {}) =>
       request<LogsWindowResponse>(`/api/logs/window${queryString(input)}`),
     logSearch: (
