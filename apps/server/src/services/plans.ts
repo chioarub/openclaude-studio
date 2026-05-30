@@ -271,8 +271,15 @@ async function buildPlanSessionMap(
     return map;
   }
 
+  let entries: ParsedTranscriptEntry[];
+  try {
+    entries = await parseTranscriptFilesForProject(files, projectPath);
+  } catch {
+    return map;
+  }
+
   const entriesBySession = new Map<string, ParsedTranscriptEntry[]>();
-  for (const entry of await parseTranscriptFilesForProject(files, projectPath)) {
+  for (const entry of entries) {
     const rows = entriesBySession.get(entry.sessionId) ?? [];
     rows.push(entry);
     entriesBySession.set(entry.sessionId, rows);

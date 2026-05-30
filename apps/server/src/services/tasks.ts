@@ -180,7 +180,12 @@ async function readTaskSessionReferences(
     return [];
   }
 
-  const allEntries: ParsedTranscriptEntry[] = await parseTranscriptFilesForProject(files, projectPath);
+  let allEntries: ParsedTranscriptEntry[];
+  try {
+    allEntries = await parseTranscriptFilesForProject(files, projectPath);
+  } catch {
+    return [];
+  }
 
   const bySession = new Map<string, ParsedTranscriptEntry[]>();
   for (const entry of allEntries) {
