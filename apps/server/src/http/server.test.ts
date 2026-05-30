@@ -402,6 +402,109 @@ describe('HTTP server', () => {
     expect(body.timeline).toHaveLength(2);
   });
 
+  test('serves project-scoped plans and tasks through read-only endpoints', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
+    const projectPath = join(home, 'project-a');
+    const otherProjectPath = join(home, 'project-b');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(projectPath, { recursive: true });
+    await mkdir(otherProjectPath, { recursive: true });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [],
+        projects: {
+          [projectPath]: { lastGracefulShutdown: '2026-05-28T08:00:00.000Z' },
+          [otherProjectPath]: { lastGracefulShutdown: '2026-05-28T08:00:00.000Z' },
+        },
+      }),
+      'utf8',
+    );
+    await mkdir(join(paths.projectsDir, encodeProjectPath(projectPath)), { recursive: true });
+    await mkdir(join(paths.projectsDir, encodeProjectPath(otherProjectPath)), { recursive: true });
+    await mkdir(join(paths.tasksDir, 'route-session'), { recursive: true });
+    await mkdir(join(paths.tasksDir, 'other-route-session'), { recursive: true });
+    await mkdir(paths.plansDir, { recursive: true });
+    await writeFile(join(paths.plansDir, 'route-plan.md'), '# Route Plan\n\nOPENAI_API_KEY=sk-route-secret\n');
+    await writeFile(join(paths.plansDir, 'other-route-plan.md'), '# Other Route Plan\n\nDo not expose.\n');
+    await writeFile(
+      join(paths.tasksDir, 'route-session', '1.json'),
+      `${JSON.stringify({ subject: 'Route task', status: 'in_progress', apiKey: 'task-secret' })}\n`,
+    );
+    await writeFile(
+      join(paths.tasksDir, 'other-route-session', '1.json'),
+      `${JSON.stringify({ subject: 'Other route task', status: 'completed' })}\n`,
+    );
+    await writeFile(
+      join(paths.projectsDir, encodeProjectPath(projectPath), 'route-session.jsonl'),
+      `${JSON.stringify({
+        type: 'user',
+        sessionId: 'route-session',
+        timestamp: '2026-05-28T08:00:00.000Z',
+        cwd: projectPath,
+        slug: 'route-plan',
+        message: { role: 'user', content: 'Use route task' },
+      })}\n`,
+      'utf8',
+    );
+    await writeFile(
+      join(paths.projectsDir, encodeProjectPath(otherProjectPath), 'other-route-session.jsonl'),
+      `${JSON.stringify({
+        type: 'user',
+        sessionId: 'other-route-session',
+        timestamp: '2026-05-28T08:00:00.000Z',
+        cwd: otherProjectPath,
+        slug: 'other-route-plan',
+        message: { role: 'user', content: 'Use other route task' },
+      })}\n`,
+      'utf8',
+    );
+    const server = await testServer(home);
+    const headers = tokenHeaders();
+
+    const projects = await server.inject({ method: 'GET', url: '/api/projects', headers });
+    const projectId = projects.json().projects.find((project: { path: string }) => project.path === projectPath).id;
+    const plans = await server.inject({ method: 'GET', url: `/api/projects/${projectId}/plans`, headers });
+    const planDetail = await server.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/plans/route-plan`,
+      headers,
+    });
+    const otherPlanDetail = await server.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/plans/other-route-plan`,
+      headers,
+    });
+    const tasks = await server.inject({ method: 'GET', url: `/api/projects/${projectId}/tasks`, headers });
+    const taskDetail = await server.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/tasks/route-session/1`,
+      headers,
+    });
+    const otherTaskDetail = await server.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/tasks/other-route-session/1`,
+      headers,
+    });
+
+    expect(plans.statusCode).toBe(200);
+    expect(plans.json().plans.map((plan: { id: string }) => plan.id)).toEqual(['route-plan']);
+    expect(JSON.stringify(plans.json())).not.toContain('Other Route Plan');
+    expect(planDetail.statusCode).toBe(200);
+    expect(planDetail.json().plan.content).toContain('OPENAI_API_KEY=<redacted>');
+    expect(planDetail.json().plan.content).not.toContain('sk-route-secret');
+    expect(otherPlanDetail.statusCode).toBe(404);
+    expect(otherPlanDetail.json()).toMatchObject({ code: 'PLAN_NOT_FOUND' });
+    expect(tasks.statusCode).toBe(200);
+    expect(tasks.json().tasks.map((task: { title: string }) => task.title)).toEqual(['Route task']);
+    expect(JSON.stringify(tasks.json())).not.toContain('Other route task');
+    expect(taskDetail.statusCode).toBe(200);
+    expect(taskDetail.json().task.content).toContain('"apiKey": "<redacted>"');
+    expect(taskDetail.json().task.content).not.toContain('task-secret');
+    expect(otherTaskDetail.statusCode).toBe(404);
+    expect(otherTaskDetail.json()).toMatchObject({ code: 'TASK_NOT_FOUND' });
+  });
+
   test('returns 404 for nonexistent session', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
     const projectPath = join(home, 'project-a');

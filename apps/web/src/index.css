@@ -365,6 +365,15 @@ body {
   font-weight: 650;
 }
 
+.quick-stat.quick-stat-warning {
+  border-color: rgb(212 160 23 / 30%);
+  background: rgb(212 160 23 / 10%);
+}
+
+.quick-stat.quick-stat-warning strong {
+  color: var(--color-warning);
+}
+
 .section-heading {
   display: flex;
   align-items: center;
@@ -1331,6 +1340,34 @@ body {
   color: var(--text-muted-soft);
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+.plans-tasks-workspace {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
+.plans-tasks-pane {
+  min-height: 420px;
+}
+
+.plans-tasks-list {
+  max-height: min(560px, calc(100vh - 340px));
+}
+
+@media (min-width: 1280px) {
+  .plans-tasks-workspace {
+    grid-template-columns: 380px minmax(0, 1fr);
+    height: clamp(440px, calc(100vh - 360px), 720px);
+  }
+
+  .plans-tasks-pane,
+  .plans-tasks-list {
+    height: 100%;
+    max-height: none;
+    min-height: 0;
+  }
 }
 
 @media (max-width: 640px) {

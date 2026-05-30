@@ -3,9 +3,13 @@ import type {
   LogsSearchResponse,
   LogsWindowResponse,
   OverviewResponse,
+  PlanDetailsResponse,
+  PlansResponse,
   ProjectsResponse,
   SessionDetailsResponse,
   SessionSummary,
+  TaskDetailsResponse,
+  TasksResponse,
 } from '@openclaude-studio/shared';
 
 export type ConnectionSettings = {
@@ -24,6 +28,8 @@ export class ApiRequestError extends Error {
     super(message);
   }
 }
+
+export type ApiClient = ReturnType<typeof createApiClient>;
 
 export function createApiClient(settings: ConnectionSettings) {
   const baseUrl = normalizeBaseUrl(settings.baseUrl);
@@ -67,6 +73,14 @@ export function createApiClient(settings: ConnectionSettings) {
         tail?: boolean;
       } = {},
     ) => request<LogsSearchResponse>(`/api/logs/search${queryString(input)}`),
+    plans: (projectId: string) =>
+      request<PlansResponse>(`/api/projects/${encodeURIComponent(projectId)}/plans`),
+    planDetails: (projectId: string, planId: string) =>
+      request<PlanDetailsResponse>(`/api/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(planId)}`),
+    tasks: (projectId: string) =>
+      request<TasksResponse>(`/api/projects/${encodeURIComponent(projectId)}/tasks`),
+    taskDetails: (projectId: string, sessionId: string, taskId: string) =>
+      request<TaskDetailsResponse>(`/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(sessionId)}/${encodeURIComponent(taskId)}`),
   };
 }
 

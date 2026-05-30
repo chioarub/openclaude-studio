@@ -387,7 +387,6 @@ describe('readSessionDetails', () => {
       await writeFile(
         join(tasksDir, '1.json'),
         JSON.stringify({
-          id: '1',
           subject: 'Implement auth',
           status: 'in_progress',
           description: 'Add authentication flow',
@@ -673,6 +672,14 @@ describe('readSessionDetails', () => {
             type: 'user',
             sessionId: 'session-artifacts',
             timestamp: '2026-05-28T17:01:00.000Z',
+            cwd: projectPath,
+            slug: 'missing-plan',
+            message: { role: 'user', content: 'Reference stale plan' },
+          }),
+          jsonl({
+            type: 'user',
+            sessionId: 'session-artifacts',
+            timestamp: '2026-05-28T17:01:30.000Z',
             cwd: projectPath,
             slug: '../unsafe-plan',
             message: { role: 'user', content: 'Ignore unsafe plan slug' },

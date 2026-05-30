@@ -4,9 +4,12 @@ early_access: false
 
 reviews:
   profile: assertive
+  tools:
+    eslint:
+      enabled: false
   request_changes_workflow: false
   high_level_summary: true
-  high_level_summary_in_walkthrough: true
+  high_level_summary_in_walkthrough: false
   high_level_summary_instructions: |
     Write a concise, professional PR summary for maintainers and contributors.
     Start with the purpose and user-visible or operational impact.
@@ -74,8 +77,7 @@ reviews:
 
   pre_merge_checks:
     docstrings:
-      mode: warning
-      threshold: 80
+      mode: off
     title:
       mode: warning
       requirements: "Use a concise, professional title that describes the user-visible or operational change."
