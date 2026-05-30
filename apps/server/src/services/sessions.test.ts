@@ -132,6 +132,169 @@ describe('session summaries', () => {
     await expect(readSessionSummaries(paths, projectSummary(projectPath))).resolves.toEqual([]);
   });
 
+  test('keeps selected project rows from OpenClaude worktree sessions', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-sessions-'));
+    const projectPath = join(home, 'project-a');
+    const worktreePath = join(projectPath, '.claude', 'worktrees', 'feature-a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'session-worktree.jsonl'),
+      [
+        jsonl({
+          type: 'user',
+          sessionId: 'session-worktree',
+          timestamp: '2026-05-28T09:00:00.000Z',
+          cwd: projectPath,
+          message: { role: 'user', content: 'Use a worktree' },
+        }),
+        jsonl({
+          type: 'assistant',
+          sessionId: 'session-worktree',
+          timestamp: '2026-05-28T09:01:00.000Z',
+          cwd: worktreePath,
+          message: {
+            role: 'assistant',
+            usage: { input_tokens: 3, output_tokens: 5 },
+            content: [
+              { type: 'text', text: 'Updated from the worktree.' },
+              { type: 'tool_use', name: 'Write', input: { file_path: 'src/worktree.ts' } },
+            ],
+          },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    const sessions = await readSessionSummaries(paths, projectSummary(projectPath));
+
+    expect(sessions[0]).toMatchObject({
+      id: 'session-worktree',
+      changedFiles: ['src/worktree.ts'],
+      tokens: expect.objectContaining({ input: 3, output: 5 }),
+    });
+  });
+
+  test('finds transcript files in selected project worktree directories', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-sessions-'));
+    const projectPath = join(home, 'project-a');
+    const worktreePath = join(projectPath, '.claude', 'worktrees', 'feature-a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+    const worktreeDir = join(paths.projectsDir, encodeProjectPath(worktreePath));
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(worktreeDir, { recursive: true });
+    await writeFile(join(projectDir, 'session-root.jsonl'), '', 'utf8');
+    await writeFile(join(worktreeDir, 'session-worktree.jsonl'), '', 'utf8');
+
+    const files = await findTranscriptFilesForProject(paths.projectsDir, projectPath);
+
+    expect(files.map((file) => file.slice(paths.projectsDir.length + 1)).sort()).toEqual([
+      `${encodeProjectPath(worktreePath)}/session-worktree.jsonl`,
+      `${encodeProjectPath(projectPath)}/session-root.jsonl`,
+    ]);
+  });
+
+  test('does not include sibling project directories that only share an encoded prefix', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-sessions-'));
+    const projectPath = join(home, 'openclaude');
+    const siblingProjectPath = join(home, 'openclaude-studio');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const siblingDir = join(paths.projectsDir, encodeProjectPath(siblingProjectPath));
+    await mkdir(siblingDir, { recursive: true });
+    await writeFile(join(siblingDir, 'session-sibling.jsonl'), '', 'utf8');
+
+    await expect(findTranscriptFilesForProject(paths.projectsDir, projectPath)).resolves.toEqual([]);
+  });
+
+  test('keeps pathless rows after a session is proven to belong to the selected project', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-sessions-'));
+    const projectPath = join(home, 'project-a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'session-pathless.jsonl'),
+      [
+        jsonl({
+          type: 'user',
+          sessionId: 'session-pathless',
+          timestamp: '2026-05-28T09:00:00.000Z',
+          cwd: projectPath,
+          message: { role: 'user', content: 'Keep the follow-up' },
+        }),
+        jsonl({
+          type: 'assistant',
+          sessionId: 'session-pathless',
+          timestamp: '2026-05-28T09:01:00.000Z',
+          message: {
+            role: 'assistant',
+            usage: { output_tokens: 7 },
+            content: 'Follow-up without cwd.',
+          },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    const sessions = await readSessionSummaries(paths, projectSummary(projectPath));
+
+    expect(sessions[0]).toMatchObject({
+      id: 'session-pathless',
+      lastTimestamp: '2026-05-28T09:01:00.000Z',
+      tokens: expect.objectContaining({ output: 7 }),
+    });
+  });
+
+  test('drops pathless rows when encoded project path collisions make the session ambiguous', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-sessions-'));
+    const projectPath = join(home, 'project-a');
+    const collidingProjectPath = join(home, 'project', 'a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'session-collision.jsonl'),
+      [
+        jsonl({
+          type: 'user',
+          sessionId: 'session-collision',
+          timestamp: '2026-05-28T09:00:00.000Z',
+          cwd: projectPath,
+          message: { role: 'user', content: 'Selected project message' },
+        }),
+        jsonl({
+          type: 'assistant',
+          sessionId: 'session-collision',
+          timestamp: '2026-05-28T09:01:00.000Z',
+          message: {
+            role: 'assistant',
+            usage: { output_tokens: 99 },
+            content: 'Ambiguous pathless row.',
+          },
+        }),
+        jsonl({
+          type: 'user',
+          sessionId: 'session-collision',
+          timestamp: '2026-05-28T09:02:00.000Z',
+          cwd: collidingProjectPath,
+          message: { role: 'user', content: 'Other project message' },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    const sessions = await readSessionSummaries(paths, projectSummary(projectPath));
+
+    expect(sessions[0]).toMatchObject({
+      id: 'session-collision',
+      lastTimestamp: '2026-05-28T09:00:00.000Z',
+      title: 'Selected project message',
+      tokens: expect.objectContaining({ output: 0 }),
+    });
+  });
+
   test('does not use command wrapper payloads as titles', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-sessions-'));
     const projectPath = join(home, 'project-a');

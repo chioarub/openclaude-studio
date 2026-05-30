@@ -65,6 +65,39 @@ describe('project plans', () => {
     expect(JSON.stringify(result.plans)).not.toContain('Orphan Plan');
   });
 
+  test('lists plans referenced by selected-project worktree sessions', async () => {
+    const { paths, project } = await makePlansHome();
+    const worktreePath = join(project.path, '.claude', 'worktrees', 'feature-a');
+    await writePlan(paths.plansDir, 'worktree-plan', '# Worktree Plan\n\nBuild from a worktree.\n');
+    await writeTranscriptRows(paths, worktreePath, 'session-worktree', [
+      {
+        type: 'user',
+        timestamp: '2026-05-16T10:00:00.000Z',
+        sessionId: 'session-worktree',
+        cwd: worktreePath,
+        slug: 'worktree-plan',
+        message: { role: 'user', content: 'Use worktree plan' },
+      },
+    ]);
+
+    const result = await listProjectPlans(paths, project);
+
+    expect(result.plans).toHaveLength(1);
+    expect(result.plans[0]).toMatchObject({
+      id: 'worktree-plan',
+      title: 'Worktree Plan',
+      sessionIds: ['session-worktree'],
+      sessions: [
+        {
+          id: 'session-worktree',
+          title: 'Use worktree plan',
+          lastTimestamp: '2026-05-16T10:00:00.000Z',
+        },
+      ],
+    });
+    expect(result.diagnostics).toEqual([]);
+  });
+
   test('restricts plan details to plans linked to the selected project', async () => {
     const { paths, project, otherProjectPath } = await makePlansHome();
     await writePlan(paths.plansDir, 'selected-plan', '# Selected Plan\n\nneedle implementation detail\n');

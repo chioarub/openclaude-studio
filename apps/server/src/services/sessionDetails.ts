@@ -12,7 +12,6 @@ import type {
 } from '@openclaude-studio/shared';
 
 import type { OpenClaudePaths } from './paths.js';
-import { encodeProjectPath } from './paths.js';
 import { redactTextSecrets } from './redaction.js';
 import { readBoundedTextFile } from './safeFile.js';
 import {
@@ -39,7 +38,7 @@ export async function readSessionDetails(
   project: SessionProject,
   sessionId: string,
 ): Promise<SessionDetailsResponse | null> {
-  const files = await findCandidateTranscriptFiles(paths.projectsDir, project.path, sessionId);
+  const files = await findTranscriptFilesForProject(paths.projectsDir, project.path);
   const allEntries: ParsedTranscriptEntry[] = [];
 
   for (const file of files) {
@@ -58,29 +57,6 @@ export async function readSessionDetails(
     session,
     timeline: buildTimeline(sorted),
   };
-}
-
-async function findCandidateTranscriptFiles(
-  projectsDir: string,
-  projectPath: string,
-  sessionId: string,
-): Promise<string[]> {
-  const projectDir = join(projectsDir, encodeProjectPath(projectPath));
-  const directFile = safeChildPath(projectDir, `${sessionId}.jsonl`);
-  if (directFile) {
-    try {
-      const stats = await lstat(directFile);
-      if (stats.isFile() && !stats.isSymbolicLink()) {
-        return [directFile];
-      }
-    } catch (error) {
-      if (!isNodeFileError(error, 'ENOENT')) {
-        throw error;
-      }
-    }
-  }
-
-  return findTranscriptFilesForProject(projectsDir, projectPath);
 }
 
 async function buildSessionDetails(
@@ -723,8 +699,4 @@ function stringFromUnknown(value: unknown): string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isNodeFileError(error: unknown, code: string): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error && error.code === code;
 }
