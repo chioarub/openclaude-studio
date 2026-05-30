@@ -50,6 +50,7 @@ test.beforeAll(async () => {
         sessionId: 'session-1',
         timestamp: '2026-05-28T08:00:00.000Z',
         cwd: projectPath,
+        slug: 'release-plan',
         message: { role: 'user', content: 'Build the API' },
       }),
       JSON.stringify({
@@ -81,6 +82,24 @@ test.beforeAll(async () => {
     ].join('\n'),
     'utf8',
   );
+  await mkdir(paths.plansDir, { recursive: true });
+  await writeFile(
+    join(paths.plansDir, 'release-plan.md'),
+    '# Release Plan\n\nPrepare the public release.\n\n- [x] Build\n- [ ] Publish\n',
+    'utf8',
+  );
+  await mkdir(join(paths.tasksDir, 'session-1'), { recursive: true });
+  await writeFile(
+    join(paths.tasksDir, 'session-1', '1.json'),
+    `${JSON.stringify({
+      subject: 'Prepare release',
+      status: 'in_progress',
+      description: 'Finish the public release checklist.',
+      activeForm: 'Working',
+    }, null, 2)}\n`,
+    'utf8',
+  );
+  await writeFile(join(paths.tasksDir, 'session-1', 'broken.json'), '{not json\n', 'utf8');
   await mkdir(paths.debugDir, { recursive: true });
   const logLines = Array.from(
     { length: 799 },
@@ -147,4 +166,43 @@ test('loads project overview, sessions, provider, and logs', async ({ page }) =>
     });
   });
   expect(Math.max(...headerDeltas)).toBeLessThan(2);
+});
+
+test('loads project plans and tasks with route diagnostics', async ({ page }) => {
+  await page.addInitScript((serverUrl) => {
+    window.localStorage.setItem('openclaude-studio:server-url', serverUrl);
+  }, 'http://127.0.0.1:43111');
+
+  await page.goto('/plans-tasks');
+
+  await expect(page.getByRole('heading', { name: 'Plans & Tasks' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Release Plan.*Prepare the public release/ })).toBeVisible();
+  await expect(page.getByText('1 diagnostic while reading plans and tasks')).toBeVisible();
+  await expect(page.getByText('Invalid task JSON')).toBeVisible();
+  await page.getByRole('button', { name: /Release Plan.*Prepare the public release/ }).click();
+  await page.getByRole('button', { name: /Open session Build the API/ }).click();
+  const detailsDialog = page.getByRole('dialog', { name: 'Session Details' });
+  await expect(detailsDialog).toBeVisible();
+  await detailsDialog.getByRole('button', { name: /Plans 1/ }).click();
+  await expect(detailsDialog.getByText('Release Plan')).toBeVisible();
+  await detailsDialog.getByRole('button', { name: /Tasks 1/ }).click();
+  await expect(detailsDialog.getByText('Prepare release')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(detailsDialog).toBeHidden();
+
+  await page.getByRole('tab', { name: /Tasks/ }).click();
+
+  const taskButton = page.getByRole('button', { name: /Prepare release.*Finish the public release checklist/ });
+  await expect(taskButton).toBeVisible();
+  await expect(taskButton.getByText('In Progress')).toBeVisible();
+  await taskButton.click();
+  await page.getByRole('button', { name: /Open session Build the API/ }).click();
+  await expect(detailsDialog).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('link', { name: /Diagnostics/ }).click();
+
+  await expect(page.getByRole('heading', { name: 'Diagnostics' })).toBeVisible();
+  await expect(page.getByText('Invalid task JSON')).toBeVisible();
+  await expect(page.getByText(/broken\.json/)).toBeVisible();
 });

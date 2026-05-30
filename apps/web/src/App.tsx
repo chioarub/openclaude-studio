@@ -20,6 +20,7 @@ import {
   Check,
   ChevronDown,
   CircleDot,
+  ClipboardList,
   CircleDollarSign,
   Copy,
   Clock3,
@@ -56,6 +57,7 @@ import type {
 
 import { createApiClient, normalizeBaseUrl } from './api';
 import { SessionDetailsModal } from './components/SessionDetailsModal';
+import { PlansTasksPage } from './components/PlansTasksPage';
 
 const serverUrlStorageKey = 'openclaude-studio:server-url';
 const legacyConnectionStorageKey = 'openclaude-studio.connection';
@@ -110,6 +112,12 @@ const appRoutes: AppRoute[] = [
     path: '/sessions',
     group: 'overview',
     icon: MessageSquareText,
+  },
+  {
+    name: 'Plans & Tasks',
+    path: '/plans-tasks',
+    group: 'overview',
+    icon: ClipboardList,
   },
   {
     name: 'Providers',
@@ -204,14 +212,23 @@ function StudioApp() {
   const [error, setError] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthState>(null);
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
+  const [plansTasksDiagnostics, setPlansTasksDiagnostics] = useState<Diagnostic[]>([]);
   const workspaceRequestIdRef = useRef(0);
   const logsRequestIdRef = useRef(0);
 
   const api = useMemo(() => createApiClient({ baseUrl }), [baseUrl]);
   const selectedProject = snapshot.projects.find((project) => project.id === selectedProjectId) ?? null;
+  const diagnostics = useMemo(
+    () => mergeDiagnostics(snapshot.diagnostics, plansTasksDiagnostics),
+    [snapshot.diagnostics, plansTasksDiagnostics],
+  );
+  const handlePlansTasksDiagnosticsChange = useCallback((nextDiagnostics: Diagnostic[]) => {
+    setPlansTasksDiagnostics(nextDiagnostics);
+  }, []);
 
   useEffect(() => {
     setSelectedSessionId(null);
+    setPlansTasksDiagnostics([]);
   }, [selectedProjectId]);
 
   async function refreshHealth() {
@@ -350,7 +367,7 @@ function StudioApp() {
 
   return (
     <div className="min-h-screen bg-canvas text-ink md:flex">
-      <Sidebar diagnostics={snapshot.diagnostics} health={health} />
+      <Sidebar diagnostics={diagnostics} health={health} />
       <div className="min-h-screen min-w-0 flex-1 pb-16 md:pb-0">
         <Header
           baseUrl={baseUrl}
@@ -382,6 +399,17 @@ function StudioApp() {
               }
             />
             <Route path="/sessions" element={<SessionsPage sessions={snapshot.sessions} onSessionClick={setSelectedSessionId} />} />
+            <Route
+              path="/plans-tasks"
+              element={selectedProjectId ? (
+                <PlansTasksPage
+                  api={api}
+                  onDiagnosticsChange={handlePlansTasksDiagnosticsChange}
+                  onOpenSession={setSelectedSessionId}
+                  projectId={selectedProjectId}
+                />
+              ) : <NoProjectSelectionPage />}
+            />
             <Route path="/providers" element={<ProviderPage overview={snapshot.overview} />} />
             <Route
               path="/logs"
@@ -410,7 +438,7 @@ function StudioApp() {
                 />
               }
             />
-            <Route path="/diagnostics" element={<DiagnosticsPage diagnostics={snapshot.diagnostics} />} />
+            <Route path="/diagnostics" element={<DiagnosticsPage diagnostics={diagnostics} />} />
             <Route path="*" element={<Navigate replace to="/" />} />
           </Routes>
         </main>
@@ -1508,6 +1536,15 @@ function DiagnosticsPage({ diagnostics }: { diagnostics: Diagnostic[] }) {
   );
 }
 
+function NoProjectSelectionPage() {
+  return (
+    <PageStack>
+      <PageHeader icon={ClipboardList} status="No project selected" title="Plans & Tasks" />
+      <EmptyState label="Select a project to inspect linked plans and tasks." />
+    </PageStack>
+  );
+}
+
 function UsageOverviewChart({ series }: { series: OverviewResponse['usageSeries'] }) {
   const [metric, setMetric] = useState<UsageMetric>(() => preferredUsageMetric(series));
   const [timeframe, setTimeframe] = useState<UsageTimeframe>('14d');
@@ -2097,12 +2134,16 @@ function collectDiagnostics(
   overview: OverviewResponse | null,
   logs: LogsWindowResponse | LogsSearchResponse | null,
 ): Diagnostic[] {
-  const allDiagnostics = [
-    ...projectResponseDiagnostics,
-    ...(project?.diagnostics ?? []),
-    ...(overview?.diagnostics ?? []),
-    ...(logs?.diagnostics ?? []),
-  ];
+  return mergeDiagnostics(
+    projectResponseDiagnostics,
+    project?.diagnostics ?? [],
+    overview?.diagnostics ?? [],
+    logs?.diagnostics ?? [],
+  );
+}
+
+function mergeDiagnostics(...groups: Diagnostic[][]): Diagnostic[] {
+  const allDiagnostics = groups.flat();
   const byKey = new Map<string, Diagnostic>();
 
   for (const diagnostic of allDiagnostics) {

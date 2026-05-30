@@ -297,7 +297,7 @@ export function SessionDetailsModal({
                 <CollapsibleSection icon={<ListChecks className="w-4 h-4" />} title="Tasks" count={session.linkedTasks.length} defaultOpen={false}>
                   {session.linkedTasks.length === 0 ? (
                     <div className="text-[12px] text-muted-soft text-center py-5 border border-dashed border-hairline-soft rounded-lg bg-surface-soft/30">
-                      No session tasks were recorded.
+                      No task files are linked to this session.
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -375,7 +375,7 @@ export function SessionDetailsModal({
 
                     {session.linkedPlans.length === 0 && (
                       <div className="text-[12px] text-muted-soft text-center py-5 border border-dashed border-hairline-soft rounded-lg bg-surface-soft/30">
-                        No linked plans were recorded.
+                        No saved plan file is linked to this session.
                       </div>
                     )}
                   </div>

@@ -197,6 +197,83 @@ describe('App', () => {
     expect(sessionRow).toHaveFocus();
   });
 
+  test('renders the plans and tasks control tower for the selected project', async () => {
+    const fetchMock = mockApi();
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Plans & Tasks$/i })[0]!);
+
+    expect(await screen.findByRole('heading', { name: 'Plans & Tasks' })).toBeInTheDocument();
+    expect(screen.getByText('Active Tasks')).toBeInTheDocument();
+    expect(screen.getByText('Plan Files')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Launch plan/i })).toBeInTheDocument();
+    expect((await screen.findAllByText('Review release checklist')).length).toBeGreaterThan(1);
+
+    await user.click(screen.getByRole('button', { name: /Launch plan/i }));
+    expect(screen.getAllByText('Review release checklist').length).toBeGreaterThan(1);
+    const checklist = screen.getByRole('region', { name: /plan checklist/i });
+    expect(within(checklist).getByText('Build')).toBeInTheDocument();
+    expect(within(checklist).getByText('Publish')).toBeInTheDocument();
+    expect(within(checklist).getByRole('checkbox', { name: 'Build' })).toBeChecked();
+    expect(within(checklist).getByRole('checkbox', { name: 'Publish' })).not.toBeChecked();
+    await user.click(await screen.findByRole('button', { name: /Open session Build the API/i }));
+    expect(await screen.findByRole('dialog', { name: 'Session Details' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Session Details' })).not.toBeInTheDocument());
+
+    const tablist = screen.getByRole('tablist', { name: /plans and tasks/i });
+    await user.click(within(tablist).getByRole('tab', { name: /tasks/i }));
+    expect(screen.getByRole('button', { name: /Ship task/i })).toBeInTheDocument();
+    expect(await screen.findByText('Source JSON')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Ship task/i }));
+    expect(screen.getAllByText(/Prepare the public release/i).length).toBeGreaterThan(1);
+    const taskSessionButton = screen.getByRole('button', { name: /Open session Build the API/i });
+    expect(within(taskSessionButton).getByText('Build the API')).toBeInTheDocument();
+    expect(screen.queryByText(/^Open Session$/i)).not.toBeInTheDocument();
+    await user.click(taskSessionButton);
+    expect(await screen.findByRole('dialog', { name: 'Session Details' })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:43110/api/projects/project-1/plans',
+      expect.objectContaining({ headers: { accept: 'application/json' } }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:43110/api/projects/project-1/tasks/session-1/1',
+      expect.objectContaining({ headers: { accept: 'application/json' } }),
+    );
+  });
+
+  test('keeps plans and tasks diagnostics visible on the diagnostics route', async () => {
+    const taskDiagnostic = {
+      level: 'error',
+      message: 'Invalid task JSON: Unexpected token',
+      path: '/tmp/.openclaude/tasks/session-1/broken.json',
+    };
+    vi.stubGlobal('fetch', mockApi({
+      tasksResponse: {
+        ...tasksFixture(),
+        diagnostics: [taskDiagnostic],
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Plans & Tasks$/i })[0]!);
+    expect(await screen.findByText('1 diagnostic while reading plans and tasks')).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole('link', { name: /Diagnostics/i })[0]!);
+
+    expect(await screen.findByRole('heading', { name: 'Diagnostics' })).toBeInTheDocument();
+    expect(screen.getByText('Invalid task JSON: Unexpected token')).toBeInTheDocument();
+    expect(screen.getByText('/tmp/.openclaude/tasks/session-1/broken.json')).toBeInTheDocument();
+  });
+
   test('renders legacy partial session details without crashing', async () => {
     vi.stubGlobal('fetch', mockApi({ sessionDetails: legacySessionDetailsFixture() }));
     const user = userEvent.setup();
@@ -480,9 +557,11 @@ type MockApiOptions = {
   logTotalLines?: number;
   omitOverviewUsageSeries?: boolean;
   overviewUsageSeries?: unknown[];
+  plansResponse?: unknown;
   projectDiagnostics?: unknown[];
   projects?: unknown[];
   sessionDetails?: unknown;
+  tasksResponse?: unknown;
 };
 
 function mockApi(options: MockApiOptions = {}) {
@@ -561,6 +640,22 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (path === '/api/projects/project-1/sessions/session-1') {
       return jsonResponse(options.sessionDetails ?? sessionDetailsFixture());
+    }
+
+    if (path === '/api/projects/project-1/plans') {
+      return jsonResponse(options.plansResponse ?? plansFixture());
+    }
+
+    if (path === '/api/projects/project-1/plans/launch-plan') {
+      return jsonResponse(planDetailsFixture());
+    }
+
+    if (path === '/api/projects/project-1/tasks') {
+      return jsonResponse(options.tasksResponse ?? tasksFixture());
+    }
+
+    if (path === '/api/projects/project-1/tasks/session-1/1') {
+      return jsonResponse(taskDetailsFixture());
     }
 
     if (path === '/api/logs/window') {
@@ -718,6 +813,89 @@ function logsFixture(options: { count?: number; start?: number; totalLines?: num
     start,
     count: options.count ?? 250,
     totalLines,
+    diagnostics: [],
+  };
+}
+
+function plansFixture() {
+  return {
+    project: { id: 'project-1', name: 'project-a', path: '/tmp/project-a', exists: true },
+    plansDir: '/tmp/.openclaude/plans',
+    exists: true,
+    plans: [
+      {
+        id: 'launch-plan',
+        title: 'Launch plan',
+        exists: true,
+        modifiedAt: '2026-05-28T08:00:00.000Z',
+        sizeBytes: 96,
+        wordCount: 8,
+        lineCount: 5,
+        preview: 'Review release checklist',
+        checklist: { total: 2, completed: 1, pending: 1 },
+        sessionIds: ['session-1'],
+        sessions: [
+          {
+            id: 'session-1',
+            title: 'Build the API',
+            lastTimestamp: '2026-05-28T08:01:00.000Z',
+          },
+        ],
+        latestSessionAt: '2026-05-28T08:01:00.000Z',
+      },
+    ],
+    diagnostics: [],
+  };
+}
+
+function planDetailsFixture() {
+  return {
+    plan: {
+      ...plansFixture().plans[0]!,
+      content: '# Launch plan\n\nReview release checklist\n\n- [x] Build\n- [ ] Publish\n',
+    },
+    diagnostics: [],
+  };
+}
+
+function tasksFixture() {
+  return {
+    project: { id: 'project-1', name: 'project-a', path: '/tmp/project-a', exists: true },
+    tasksDir: '/tmp/.openclaude/tasks',
+    exists: true,
+    tasks: [
+      {
+        id: 'session-1:1',
+        taskId: '1',
+        title: 'Ship task',
+        status: 'in_progress',
+        description: 'Prepare the public release',
+        activeForm: 'Working',
+        sessionId: 'session-1',
+        sessionTitle: 'Build the API',
+        modifiedAt: '2026-05-28T08:02:00.000Z',
+        sizeBytes: 128,
+      },
+    ],
+    diagnostics: [],
+  };
+}
+
+function taskDetailsFixture() {
+  return {
+    task: {
+      ...tasksFixture().tasks[0]!,
+      content: JSON.stringify(
+        {
+          subject: 'Ship task',
+          status: 'in_progress',
+          description: 'Prepare the public release',
+          activeForm: 'Working',
+        },
+        null,
+        2,
+      ),
+    },
     diagnostics: [],
   };
 }
