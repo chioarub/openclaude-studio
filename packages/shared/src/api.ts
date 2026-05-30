@@ -182,6 +182,74 @@ export type OverviewResponse = {
   diagnostics: Diagnostic[];
 };
 
+export type ArtifactSessionSummary = {
+  id: string;
+  title: string;
+  lastTimestamp: string;
+};
+
+export type PlanSummary = {
+  id: string;
+  title: string;
+  exists: boolean;
+  modifiedAt: string;
+  sizeBytes: number;
+  wordCount: number;
+  lineCount: number;
+  preview: string;
+  checklist: {
+    total: number;
+    completed: number;
+    pending: number;
+  };
+  sessionIds: string[];
+  sessions: ArtifactSessionSummary[];
+  latestSessionAt: string | null;
+};
+
+export type PlansResponse = {
+  project: { id: string; name: string; path: string; exists: boolean };
+  plansDir: string;
+  exists: boolean;
+  plans: PlanSummary[];
+  diagnostics: Diagnostic[];
+};
+
+export type PlanDetailsResponse = {
+  plan: PlanSummary & {
+    content: string;
+  };
+  diagnostics: Diagnostic[];
+};
+
+export type TaskSummary = {
+  id: string;
+  taskId: string;
+  title: string;
+  status: string;
+  description: string;
+  activeForm: string | null;
+  sessionId: string;
+  sessionTitle: string;
+  modifiedAt: string;
+  sizeBytes: number;
+};
+
+export type TasksResponse = {
+  project: { id: string; name: string; path: string; exists: boolean };
+  tasksDir: string;
+  exists: boolean;
+  tasks: TaskSummary[];
+  diagnostics: Diagnostic[];
+};
+
+export type TaskDetailsResponse = {
+  task: TaskSummary & {
+    content: string;
+  };
+  diagnostics: Diagnostic[];
+};
+
 export type ApiErrorResponse = {
   error: string;
   code: string;

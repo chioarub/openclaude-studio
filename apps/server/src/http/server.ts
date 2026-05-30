@@ -19,9 +19,11 @@ import {
   readProjectSummariesWithDiagnostics,
 } from '../services/openclaudeData.js';
 import { listLogFiles, readLogWindow, searchLogs, type LogFileScope, type LogSearchRequest } from '../services/logs.js';
+import { listProjectPlans, readProjectPlan } from '../services/plans.js';
 import { createOpenClaudePaths, type PathOptions } from '../services/paths.js';
 import { readSessionSummaries } from '../services/sessions.js';
 import { readSessionDetails } from '../services/sessionDetails.js';
+import { listProjectTasks, readProjectTask } from '../services/tasks.js';
 import { ApiError } from './errors.js';
 
 export type ServerOptions = PathOptions & {
@@ -132,6 +134,32 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
         return reply.code(404).send({ error: 'Session not found', code: 'NOT_FOUND', diagnostics: [] } satisfies ApiErrorResponse);
       }
       return result;
+    },
+  );
+
+  app.get<{ Params: ProjectParams }>('/api/projects/:projectId/plans', async (request) => {
+    const project = await resolveProject(paths, request.params.projectId);
+    return listProjectPlans(paths, project);
+  });
+
+  app.get<{ Params: { projectId: string; planId: string } }>(
+    '/api/projects/:projectId/plans/:planId',
+    async (request) => {
+      const project = await resolveProject(paths, request.params.projectId);
+      return readProjectPlan(paths, project, request.params.planId);
+    },
+  );
+
+  app.get<{ Params: ProjectParams }>('/api/projects/:projectId/tasks', async (request) => {
+    const project = await resolveProject(paths, request.params.projectId);
+    return listProjectTasks(paths, project);
+  });
+
+  app.get<{ Params: { projectId: string; sessionId: string; taskId: string } }>(
+    '/api/projects/:projectId/tasks/:sessionId/:taskId',
+    async (request) => {
+      const project = await resolveProject(paths, request.params.projectId);
+      return readProjectTask(paths, project, request.params.sessionId, request.params.taskId);
     },
   );
 

@@ -22,6 +22,7 @@ import {
   findTranscriptFilesForProject,
   parseTranscriptFile,
 } from './sessions.js';
+import { isUnambiguousSessionArtifactScope } from './sessionArtifacts.js';
 
 type SessionProject = Pick<ProjectSummary, 'path' | 'usage'>;
 
@@ -30,7 +31,6 @@ const TEXT_TIMELINE_MAX_LENGTH = 16_000;
 const TASK_FILE_MAX_BYTES = 256 * 1024;
 const PLAN_TITLE_MAX_BYTES = 64 * 1024;
 const FILE_HISTORY_TRANSCRIPT_MAX_BYTES = 10 * 1024 * 1024;
-const ARTIFACT_SCOPE_SCAN_MAX_DEPTH = 10;
 
 const mutationTools = new Set(['Edit', 'MultiEdit', 'NotebookEdit', 'Write']);
 
@@ -81,119 +81,6 @@ async function findCandidateTranscriptFiles(
   }
 
   return findTranscriptFilesForProject(projectsDir, projectPath);
-}
-
-async function isUnambiguousSessionArtifactScope(
-  projectsDir: string,
-  projectPath: string,
-  sessionId: string,
-): Promise<boolean> {
-  if (!isSafeSessionScopedArtifactId(sessionId)) {
-    return false;
-  }
-
-  const selectedProjectDir = resolve(join(projectsDir, encodeProjectPath(projectPath)));
-  let entries;
-  try {
-    entries = await readdir(projectsDir, { withFileTypes: true });
-  } catch (error) {
-    if (isNodeFileError(error, 'ENOENT') || isNodeFileError(error, 'ENOTDIR')) {
-      return true;
-    }
-    throw error;
-  }
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-
-    const candidateDir = join(projectsDir, entry.name);
-    const stats = await safeLstat(candidateDir);
-    if (!stats || !stats.isDirectory() || stats.isSymbolicLink()) {
-      continue;
-    }
-    if (resolve(candidateDir) === selectedProjectDir) {
-      continue;
-    }
-    if (await directoryContainsSessionTranscript(candidateDir, sessionId, 0)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-async function directoryContainsSessionTranscript(root: string, sessionId: string, depth: number): Promise<boolean> {
-  if (depth > ARTIFACT_SCOPE_SCAN_MAX_DEPTH) {
-    return true;
-  }
-
-  let entries;
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return false;
-  }
-
-  for (const entry of entries) {
-    const entryPath = join(root, entry.name);
-    const stats = await safeLstat(entryPath);
-    if (!stats || stats.isSymbolicLink()) {
-      continue;
-    }
-
-    if (stats.isDirectory()) {
-      if (await directoryContainsSessionTranscript(entryPath, sessionId, depth + 1)) {
-        return true;
-      }
-      continue;
-    }
-
-    if (!stats.isFile() || !entry.name.endsWith('.jsonl')) {
-      continue;
-    }
-    if (entry.name === `${sessionId}.jsonl` || await transcriptFileContainsSessionId(entryPath, sessionId)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-async function transcriptFileContainsSessionId(filePath: string, sessionId: string): Promise<boolean> {
-  try {
-    const file = await readBoundedTextFile(filePath, { maxBytes: FILE_HISTORY_TRANSCRIPT_MAX_BYTES });
-    if (!file.exists) {
-      return false;
-    }
-
-    for (const line of file.content.split(/\r?\n/)) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(line) as unknown;
-        if (isRecord(parsed) && parsed.sessionId === sessionId) {
-          return true;
-        }
-      } catch {
-        continue;
-      }
-    }
-  } catch {
-    return false;
-  }
-
-  return false;
-}
-
-async function safeLstat(path: string) {
-  try {
-    return await lstat(path);
-  } catch {
-    return null;
-  }
 }
 
 async function buildSessionDetails(
@@ -481,7 +368,8 @@ async function readLinkedTasks(tasksDir: string, sessionId: string): Promise<Lin
         continue;
       }
       const parsed = JSON.parse(taskFile.content) as unknown;
-      const task = linkedTaskFromUnknown(parsed);
+      const taskId = entry.name.slice(0, -'.json'.length);
+      const task = linkedTaskFromUnknown(parsed, taskId);
       if (task) {
         tasks.push(task);
       }
@@ -493,14 +381,14 @@ async function readLinkedTasks(tasksDir: string, sessionId: string): Promise<Lin
   return tasks.sort((left, right) => compareTaskIds(left.id, right.id));
 }
 
-function linkedTaskFromUnknown(value: unknown): LinkedTaskSummary | null {
+function linkedTaskFromUnknown(value: unknown, taskId: string): LinkedTaskSummary | null {
   if (!isRecord(value)) {
     return null;
   }
 
-  const id = stringFromUnknown(value.id);
-  const title = stringFromUnknown(value.subject) ?? stringFromUnknown(value.title);
-  if (!id || !title) {
+  const id = stringFromUnknown(value.id) ?? taskId;
+  const title = stringFromUnknown(value.subject) ?? stringFromUnknown(value.title) ?? `Task ${taskId}`;
+  if (!id) {
     return null;
   }
 
@@ -521,7 +409,7 @@ async function readLinkedPlans(
 ): Promise<LinkedPlanSummary[]> {
   const slugs = planSlugsFromRows(entries);
   const plans = await Promise.all(slugs.map((slug) => resolveLinkedPlan(plansDir, slug)));
-  return plans.filter((plan): plan is LinkedPlanSummary => plan !== null);
+  return plans.filter((plan): plan is LinkedPlanSummary => plan !== null && plan.exists);
 }
 
 function planSlugsFromRows(rows: ParsedTranscriptEntry[]): string[] {
@@ -734,10 +622,6 @@ function safeChildPath(root: string, child: string): string | null {
   }
 
   return resolvedPath;
-}
-
-function isSafeSessionScopedArtifactId(value: string): boolean {
-  return /^[A-Za-z0-9._-]+$/.test(value) && !value.includes('..');
 }
 
 function isMeaningfulTimelineEvent(event: ConversationTimelineEvent): boolean {
