@@ -243,7 +243,7 @@ async function linkedPlanFiles(
     const id = entry.name.slice(0, -'.md'.length);
     if (!referencedIds.has(id) || !isSafePlanSlug(id)) continue;
 
-    if (entry.isFile()) {
+    if (entry.isFile() && !entry.isSymbolicLink()) {
       ids.push(id);
       continue;
     }

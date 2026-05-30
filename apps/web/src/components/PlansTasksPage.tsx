@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import type {
+  ArtifactSessionSummary,
   Diagnostic,
   PlanDetailsResponse,
   PlanSummary,
@@ -57,6 +58,8 @@ export function PlansTasksPage({ api, onDiagnosticsChange, onOpenSession, projec
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [planDetail, setPlanDetail] = useState<PlanDetailsResponse | null>(null);
   const [taskDetail, setTaskDetail] = useState<TaskDetailsResponse | null>(null);
+  const [planDetailError, setPlanDetailError] = useState<string | null>(null);
+  const [taskDetailError, setTaskDetailError] = useState<string | null>(null);
   const [listVersion, setListVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [planDetailLoading, setPlanDetailLoading] = useState(false);
@@ -81,11 +84,16 @@ export function PlansTasksPage({ api, onDiagnosticsChange, onOpenSession, projec
       const [plansRes, tasksRes] = await Promise.all([api.plans(projectId), api.tasks(projectId)]);
       if (requestId !== listRequestIdRef.current) return;
 
-      const nextPlans = plansRes.plans ?? [];
-      const nextTasks = tasksRes.tasks ?? [];
+      const plansPayload: Record<string, unknown> = isRecord(plansRes) ? plansRes : {};
+      const tasksPayload: Record<string, unknown> = isRecord(tasksRes) ? tasksRes : {};
+      const nextPlans = normalizePlanSummaries(plansPayload.plans);
+      const nextTasks = normalizeTaskSummaries(tasksPayload.tasks);
       setPlans(nextPlans);
       setTasks(nextTasks);
-      updateDiagnostics([...(plansRes.diagnostics ?? []), ...(tasksRes.diagnostics ?? [])]);
+      updateDiagnostics([
+        ...normalizeDiagnostics(plansPayload.diagnostics),
+        ...normalizeDiagnostics(tasksPayload.diagnostics),
+      ]);
       setSelectedPlanId((current) => resolveSelection(nextPlans, current));
       setSelectedTaskId((current) => resolveSelection(nextTasks, current));
       setListVersion((version) => version + 1);
@@ -103,6 +111,8 @@ export function PlansTasksPage({ api, onDiagnosticsChange, onOpenSession, projec
     setSelectedTaskId(null);
     setPlanDetail(null);
     setTaskDetail(null);
+    setPlanDetailError(null);
+    setTaskDetailError(null);
     updateDiagnostics([]);
     void fetchLists();
   }, [fetchLists, updateDiagnostics]);
@@ -111,17 +121,22 @@ export function PlansTasksPage({ api, onDiagnosticsChange, onOpenSession, projec
     const requestId = ++planDetailRequestIdRef.current;
     if (!selectedPlanId) {
       setPlanDetail(null);
+      setPlanDetailError(null);
       setPlanDetailLoading(false);
       return;
     }
 
     setPlanDetailLoading(true);
+    setPlanDetailError(null);
     api.planDetails(projectId, selectedPlanId)
       .then((response) => {
-        if (requestId === planDetailRequestIdRef.current) setPlanDetail(response);
+        if (requestId === planDetailRequestIdRef.current) setPlanDetail(normalizePlanDetailsResponse(response));
       })
-      .catch(() => {
-        if (requestId === planDetailRequestIdRef.current) setPlanDetail(null);
+      .catch((caught) => {
+        if (requestId === planDetailRequestIdRef.current) {
+          setPlanDetail(null);
+          setPlanDetailError(errorMessage(caught, 'Unable to load plan details.'));
+        }
       })
       .finally(() => {
         if (requestId === planDetailRequestIdRef.current) setPlanDetailLoading(false);
@@ -132,6 +147,7 @@ export function PlansTasksPage({ api, onDiagnosticsChange, onOpenSession, projec
     const requestId = ++taskDetailRequestIdRef.current;
     if (!selectedTaskId) {
       setTaskDetail(null);
+      setTaskDetailError(null);
       setTaskDetailLoading(false);
       return;
     }
@@ -139,17 +155,22 @@ export function PlansTasksPage({ api, onDiagnosticsChange, onOpenSession, projec
     const selectedTask = tasks.find((task) => task.id === selectedTaskId);
     if (!selectedTask) {
       setTaskDetail(null);
+      setTaskDetailError(null);
       setTaskDetailLoading(false);
       return;
     }
 
     setTaskDetailLoading(true);
+    setTaskDetailError(null);
     api.taskDetails(projectId, selectedTask.sessionId, selectedTask.taskId)
       .then((response) => {
-        if (requestId === taskDetailRequestIdRef.current) setTaskDetail(response);
+        if (requestId === taskDetailRequestIdRef.current) setTaskDetail(normalizeTaskDetailsResponse(response));
       })
-      .catch(() => {
-        if (requestId === taskDetailRequestIdRef.current) setTaskDetail(null);
+      .catch((caught) => {
+        if (requestId === taskDetailRequestIdRef.current) {
+          setTaskDetail(null);
+          setTaskDetailError(errorMessage(caught, 'Unable to load task details.'));
+        }
       })
       .finally(() => {
         if (requestId === taskDetailRequestIdRef.current) setTaskDetailLoading(false);
@@ -268,6 +289,7 @@ export function PlansTasksPage({ api, onDiagnosticsChange, onOpenSession, projec
             detailLoading={planDetailLoading}
             onOpenSession={onOpenSession}
             onSelectPlan={setSelectedPlanId}
+            planDetailError={planDetailError}
             planDetail={planDetail}
             plans={plans}
             selectedPlanId={selectedPlanId}
@@ -280,6 +302,7 @@ export function PlansTasksPage({ api, onDiagnosticsChange, onOpenSession, projec
             onOpenSession={onOpenSession}
             onSelectTask={setSelectedTaskId}
             selectedTaskId={selectedTaskId}
+            taskDetailError={taskDetailError}
             taskDetail={taskDetail}
             tasks={tasks}
             tasksByStatus={tasksByStatus}
@@ -372,6 +395,7 @@ function PlansView({
   detailLoading,
   onOpenSession,
   onSelectPlan,
+  planDetailError,
   planDetail,
   plans,
   selectedPlanId,
@@ -379,6 +403,7 @@ function PlansView({
   detailLoading: boolean;
   onOpenSession: OpenSessionHandler;
   onSelectPlan: (id: string) => void;
+  planDetailError: string | null;
   planDetail: PlanDetailsResponse | null;
   plans: PlanSummary[];
   selectedPlanId: string | null;
@@ -446,6 +471,8 @@ function PlansView({
       <div className="plans-tasks-pane custom-scrollbar overflow-y-auto rounded-md border border-hairline-soft/70 bg-canvas">
         {detailLoading ? (
           <LoadingPanel label="Loading plan details..." />
+        ) : planDetailError ? (
+          <DetailErrorPanel label={planDetailError} />
         ) : selectedPlanId && planDetail ? (
           <PlanDetail detail={planDetail} onOpenSession={onOpenSession} />
         ) : selectedPlanId ? (
@@ -595,6 +622,7 @@ function TasksView({
   onOpenSession,
   onSelectTask,
   selectedTaskId,
+  taskDetailError,
   taskDetail,
   tasks,
   tasksByStatus,
@@ -603,6 +631,7 @@ function TasksView({
   onOpenSession: OpenSessionHandler;
   onSelectTask: (id: string) => void;
   selectedTaskId: string | null;
+  taskDetailError: string | null;
   taskDetail: TaskDetailsResponse | null;
   tasks: TaskSummary[];
   tasksByStatus: Map<string, TaskSummary[]>;
@@ -644,6 +673,8 @@ function TasksView({
       <div className="plans-tasks-pane custom-scrollbar overflow-y-auto rounded-md border border-hairline-soft/70 bg-canvas">
         {detailLoading ? (
           <LoadingPanel label="Loading task details..." />
+        ) : taskDetailError ? (
+          <DetailErrorPanel label={taskDetailError} />
         ) : selectedTaskId && taskDetail ? (
           <TaskDetail detail={taskDetail} onOpenSession={onOpenSession} />
         ) : selectedTaskId ? (
@@ -813,12 +844,155 @@ function LoadingPanel({ label }: { label: string }) {
   );
 }
 
+function DetailErrorPanel({ label }: { label: string }) {
+  return (
+    <div className="flex min-h-[300px] items-center justify-center px-6 py-8 text-center" role="alert">
+      <div className="max-w-md">
+        <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-md border border-warning/25 bg-warning/10 text-warning">
+          <AlertTriangle className="h-5 w-5" aria-hidden="true" />
+        </div>
+        <p className="mt-3 text-sm font-semibold text-ink">{label}</p>
+        <p className="mt-1 text-xs leading-relaxed text-muted">
+          Refresh this page or select another item to try again.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function EmptyPanel({ compact = false, label }: { compact?: boolean; label: string }) {
   return (
     <div className={cn('flex items-center justify-center rounded-md border border-dashed border-hairline-soft bg-surface-soft/30 px-6 text-center text-sm text-muted', compact ? 'min-h-[300px] py-8' : 'min-h-[320px] py-12')}>
       {label}
     </div>
   );
+}
+
+function normalizePlanSummaries(value: unknown): PlanSummary[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map(normalizePlanSummary);
+}
+
+function normalizePlanDetailsResponse(value: unknown): PlanDetailsResponse {
+  const raw: Record<string, unknown> = isRecord(value) ? value : {};
+  const rawPlan: Record<string, unknown> = isRecord(raw.plan) ? raw.plan : {};
+  return {
+    plan: {
+      ...normalizePlanSummary(rawPlan),
+      content: stringOr(rawPlan.content, ''),
+    },
+    diagnostics: normalizeDiagnostics(raw.diagnostics),
+  };
+}
+
+function normalizePlanSummary(value: Record<string, unknown>): PlanSummary {
+  const id = stringOr(value.id, 'unknown-plan');
+  const checklist = isRecord(value.checklist) ? value.checklist : {};
+  return {
+    id,
+    title: stringOr(value.title, id),
+    exists: booleanOr(value.exists, false),
+    modifiedAt: stringOr(value.modifiedAt, new Date(0).toISOString()),
+    sizeBytes: numberOrZero(value.sizeBytes),
+    wordCount: numberOrZero(value.wordCount),
+    lineCount: numberOrZero(value.lineCount),
+    preview: stringOr(value.preview, ''),
+    checklist: {
+      total: numberOrZero(checklist.total),
+      completed: numberOrZero(checklist.completed),
+      pending: numberOrZero(checklist.pending),
+    },
+    sessionIds: stringArray(value.sessionIds),
+    sessions: normalizeArtifactSessions(value.sessions),
+    latestSessionAt: stringOrNull(value.latestSessionAt),
+  };
+}
+
+function normalizeTaskSummaries(value: unknown): TaskSummary[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map(normalizeTaskSummary);
+}
+
+function normalizeTaskDetailsResponse(value: unknown): TaskDetailsResponse {
+  const raw: Record<string, unknown> = isRecord(value) ? value : {};
+  const rawTask: Record<string, unknown> = isRecord(raw.task) ? raw.task : {};
+  return {
+    task: {
+      ...normalizeTaskSummary(rawTask),
+      content: stringOr(rawTask.content, ''),
+    },
+    diagnostics: normalizeDiagnostics(raw.diagnostics),
+  };
+}
+
+function normalizeTaskSummary(value: Record<string, unknown>): TaskSummary {
+  const sessionId = stringOr(value.sessionId, 'unknown-session');
+  const taskId = stringOr(value.taskId, 'unknown-task');
+  return {
+    id: stringOr(value.id, `${sessionId}:${taskId}`),
+    taskId,
+    title: stringOr(value.title, `Task ${taskId}`),
+    status: stringOr(value.status, 'unknown'),
+    description: stringOr(value.description, ''),
+    activeForm: stringOrNull(value.activeForm),
+    sessionId,
+    sessionTitle: stringOr(value.sessionTitle, `Session ${sessionId.slice(0, 8)}`),
+    modifiedAt: stringOr(value.modifiedAt, new Date(0).toISOString()),
+    sizeBytes: numberOrZero(value.sizeBytes),
+  };
+}
+
+function normalizeArtifactSessions(value: unknown): ArtifactSessionSummary[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map((session) => {
+    const id = stringOr(session.id, 'unknown-session');
+    return {
+      id,
+      title: stringOr(session.title, `Session ${id.slice(0, 8)}`),
+      lastTimestamp: stringOr(session.lastTimestamp, new Date(0).toISOString()),
+    };
+  });
+}
+
+function normalizeDiagnostics(value: unknown): Diagnostic[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).flatMap((diagnostic) => {
+    if (diagnostic.level !== 'info' && diagnostic.level !== 'warn' && diagnostic.level !== 'error') return [];
+    return [{
+      level: diagnostic.level,
+      message: stringOr(diagnostic.message, 'Unknown diagnostic.'),
+      ...(typeof diagnostic.path === 'string' ? { path: diagnostic.path } : {}),
+    }];
+  });
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  const detail = error instanceof Error ? error.message.trim() : '';
+  return detail ? `${fallback} ${detail}` : fallback;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stringOr(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function booleanOr(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
 }
 
 function MarkdownContent({ content }: { content: string }) {

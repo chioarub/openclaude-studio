@@ -7,6 +7,7 @@ import type { ProjectSummary } from '@openclaude-studio/shared';
 
 import { createOpenClaudePaths, encodeProjectPath } from './paths.js';
 import { listProjectTasks, readProjectTask } from './tasks.js';
+import { isUnsupportedSymlinkError } from '../test-support/symlink.js';
 
 type ProjectInput = Pick<ProjectSummary, 'id' | 'name' | 'path' | 'exists'>;
 
@@ -137,8 +138,9 @@ describe('project tasks', () => {
     );
     try {
       await symlink(outsideTasksDir, symlinkSessionDir, 'dir');
-    } catch {
-      return;
+    } catch (error) {
+      if (isUnsupportedSymlinkError(error)) return;
+      throw error;
     }
     await writeTranscript(paths, project.path, 'session-selected', 'Use selected task');
 
@@ -229,6 +231,41 @@ describe('project tasks', () => {
     expect(details.task.content).toContain('"token": "<redacted>"');
     expect(details.task.content).not.toContain('plain-secret-value');
     expect(details.task.content).not.toContain('nested-secret-value');
+  });
+
+  test('reports truncated oversized task files in list and detail flows', async () => {
+    const { paths, project } = await makeTasksHome();
+    const taskPath = await writeRawTask(
+      paths,
+      'session-selected',
+      'large',
+      `${JSON.stringify({ subject: 'Large task', status: 'pending' })}\n${' '.repeat(300_000)}`,
+    );
+    await writeTranscript(paths, project.path, 'session-selected', 'Use large task');
+
+    const result = await listProjectTasks(paths, project);
+
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0]).toMatchObject({
+      id: 'session-selected:large',
+      title: 'Large task',
+      status: 'pending',
+    });
+    expect(result.diagnostics).toContainEqual({
+      level: 'warn',
+      message: 'File was truncated to 262144 bytes.',
+      path: taskPath,
+    });
+
+    const details = await readProjectTask(paths, project, 'session-selected', 'large');
+
+    expect(details.task.title).toBe('Large task');
+    expect(details.task.content).toContain('"subject": "Large task"');
+    expect(details.diagnostics).toContainEqual({
+      level: 'warn',
+      message: 'File was truncated to 262144 bytes.',
+      path: taskPath,
+    });
   });
 });
 

@@ -7,6 +7,7 @@ import type { ProjectSummary } from '@openclaude-studio/shared';
 
 import { createOpenClaudePaths, encodeProjectPath } from './paths.js';
 import { listProjectPlans, readProjectPlan } from './plans.js';
+import { isUnsupportedSymlinkError } from '../test-support/symlink.js';
 
 type ProjectInput = Pick<ProjectSummary, 'id' | 'name' | 'path' | 'exists'>;
 
@@ -117,8 +118,9 @@ describe('project plans', () => {
     await writeFile(outsidePlan, '# Outside Plan\n\noutside secret\n');
     try {
       await symlink(outsidePlan, symlinkPlan);
-    } catch {
-      return;
+    } catch (error) {
+      if (isUnsupportedSymlinkError(error)) return;
+      throw error;
     }
     await writeTranscript(paths, project.path, 'session-symlink', 'symlink-plan', 'Use symlink plan');
 

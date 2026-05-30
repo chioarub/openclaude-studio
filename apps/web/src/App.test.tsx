@@ -274,6 +274,87 @@ describe('App', () => {
     expect(screen.getByText('/tmp/.openclaude/tasks/session-1/broken.json')).toBeInTheDocument();
   });
 
+  test('shows a route-level error when plans and tasks list loading fails', async () => {
+    vi.stubGlobal('fetch', mockApi({ failPlansListOnce: true }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Plans & Tasks$/i })[0]!);
+
+    expect(await screen.findByText('Failed to load plans and tasks')).toBeInTheDocument();
+    expect(screen.getByText('Injected plans failure')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByRole('heading', { name: 'Plans & Tasks' })).toBeInTheDocument();
+    expect(screen.getAllByText('Launch plan').length).toBeGreaterThan(0);
+  });
+
+  test('handles partial plans and tasks payloads without crashing', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      plansResponse: {
+        ...plansFixture(),
+        plans: [
+          {
+            id: 'legacy-plan',
+            title: 'Legacy plan',
+            exists: true,
+            modifiedAt: '2026-05-28T08:00:00.000Z',
+          },
+        ],
+        diagnostics: undefined,
+      },
+      tasksResponse: {
+        ...tasksFixture(),
+        tasks: [
+          {
+            id: 'session-1:legacy',
+            taskId: 'legacy',
+            title: 'Legacy task',
+            sessionId: 'session-1',
+            sessionTitle: 'Build the API',
+            modifiedAt: '2026-05-28T08:02:00.000Z',
+          },
+        ],
+        diagnostics: undefined,
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Plans & Tasks$/i })[0]!);
+
+    expect(await screen.findByRole('heading', { name: 'Plans & Tasks' })).toBeInTheDocument();
+    expect(screen.getByText('Legacy plan')).toBeInTheDocument();
+
+    const tablist = screen.getByRole('tablist', { name: /plans and tasks/i });
+    await user.click(within(tablist).getByRole('tab', { name: /tasks/i }));
+
+    expect(screen.getByText('Legacy task')).toBeInTheDocument();
+    expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
+  });
+
+  test('surfaces plan and task detail fetch failures as degraded panels', async () => {
+    vi.stubGlobal('fetch', mockApi({ failPlanDetails: true, failTaskDetails: true }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Plans & Tasks$/i })[0]!);
+
+    expect(await screen.findByText(/Unable to load plan details\. Injected plan detail failure/i)).toBeInTheDocument();
+
+    const tablist = screen.getByRole('tablist', { name: /plans and tasks/i });
+    await user.click(within(tablist).getByRole('tab', { name: /tasks/i }));
+
+    expect(await screen.findByText(/Unable to load task details\. Injected task detail failure/i)).toBeInTheDocument();
+  });
+
   test('renders legacy partial session details without crashing', async () => {
     vi.stubGlobal('fetch', mockApi({ sessionDetails: legacySessionDetailsFixture() }));
     const user = userEvent.setup();
@@ -553,6 +634,9 @@ function storageStub(kind: 'local' | 'session'): Storage {
 
 type MockApiOptions = {
   baseUrl?: string;
+  failPlanDetails?: boolean;
+  failPlansListOnce?: boolean;
+  failTaskDetails?: boolean;
   failLogWindowStartOnce?: number;
   logTotalLines?: number;
   omitOverviewUsageSeries?: boolean;
@@ -567,6 +651,7 @@ type MockApiOptions = {
 function mockApi(options: MockApiOptions = {}) {
   const baseUrl = options.baseUrl ?? 'http://127.0.0.1:43110';
   let failedLogWindowStart = false;
+  let failedPlansList = false;
 
   return vi.fn(async (input: RequestInfo | URL) => {
     const requestUrl = new URL(String(input), baseUrl);
@@ -643,10 +728,17 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/projects/project-1/plans') {
+      if (options.failPlansListOnce && !failedPlansList) {
+        failedPlansList = true;
+        return jsonResponse({ error: 'Injected plans failure' }, 500);
+      }
       return jsonResponse(options.plansResponse ?? plansFixture());
     }
 
     if (path === '/api/projects/project-1/plans/launch-plan') {
+      if (options.failPlanDetails) {
+        return jsonResponse({ error: 'Injected plan detail failure' }, 500);
+      }
       return jsonResponse(planDetailsFixture());
     }
 
@@ -655,6 +747,9 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/projects/project-1/tasks/session-1/1') {
+      if (options.failTaskDetails) {
+        return jsonResponse({ error: 'Injected task detail failure' }, 500);
+      }
       return jsonResponse(taskDetailsFixture());
     }
 
