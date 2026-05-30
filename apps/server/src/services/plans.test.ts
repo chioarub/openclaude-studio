@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -63,6 +63,37 @@ describe('project plans', () => {
     });
     expect(JSON.stringify(result.plans)).not.toContain('Other Plan');
     expect(JSON.stringify(result.plans)).not.toContain('Orphan Plan');
+  });
+
+  test('keeps readable plan references when another transcript file is unreadable', async () => {
+    const { paths, project } = await makePlansHome();
+    await writePlan(paths.plansDir, 'selected-plan', '# Selected Plan\n\nReadable reference.\n');
+    await writeTranscript(paths, project.path, 'session-selected', 'selected-plan', 'Use selected plan');
+    const unreadablePath = await writeTranscriptRows(paths, project.path, 'session-unreadable', [
+      {
+        type: 'user',
+        timestamp: '2026-05-16T10:01:00.000Z',
+        sessionId: 'session-unreadable',
+        cwd: project.path,
+        slug: 'unreadable-plan',
+        message: { role: 'user', content: 'Unreadable transcript' },
+      },
+    ]);
+
+    await chmod(unreadablePath, 0);
+    try {
+      const result = await listProjectPlans(paths, project);
+
+      expect(result.plans).toHaveLength(1);
+      expect(result.plans[0]?.id).toBe('selected-plan');
+      expect(result.diagnostics).toContainEqual({
+        level: 'warn',
+        message: 'Transcript file could not be read.',
+        path: unreadablePath,
+      });
+    } finally {
+      await chmod(unreadablePath, 0o600).catch(() => undefined);
+    }
   });
 
   test('lists plans referenced by selected-project worktree sessions', async () => {
@@ -278,8 +309,10 @@ async function writeTranscriptRows(
 ) {
   const transcriptDir = join(paths.projectsDir, encodeProjectPath(projectPath));
   await mkdir(transcriptDir, { recursive: true });
+  const transcriptPath = join(transcriptDir, `${fileName}.jsonl`);
   await writeFile(
-    join(transcriptDir, `${fileName}.jsonl`),
+    transcriptPath,
     `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`,
   );
+  return transcriptPath;
 }

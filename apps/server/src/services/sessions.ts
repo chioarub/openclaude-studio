@@ -2,7 +2,7 @@ import { lstat, readdir } from 'node:fs/promises';
 import type { Stats } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import type { ProjectSummary, SessionSummary } from '@openclaude-studio/shared';
+import type { Diagnostic, ProjectSummary, SessionSummary } from '@openclaude-studio/shared';
 
 import {
   encodeProjectPath,
@@ -58,6 +58,11 @@ export type ParsedTranscriptEntry = {
   toolUses: ParsedToolUse[];
   toolResult: ParsedToolResult | null;
   sourcePath: string;
+};
+
+export type ParsedTranscriptFilesResult = {
+  entries: ParsedTranscriptEntry[];
+  diagnostics: Diagnostic[];
 };
 
 const maxTranscriptBytes = 10 * 1024 * 1024;
@@ -154,7 +159,7 @@ export async function parseTranscriptFile(
   filePath: string,
   projectPath: string,
 ): Promise<ParsedTranscriptEntry[]> {
-  const rows = await readTranscriptRows(filePath);
+  const { rows } = await readTranscriptRows(filePath);
   return filterTranscriptRowsForProject(rows, projectPath);
 }
 
@@ -162,23 +167,38 @@ export async function parseTranscriptFilesForProject(
   filePaths: string[],
   projectPath: string,
 ): Promise<ParsedTranscriptEntry[]> {
-  const rowGroups = await Promise.all(
+  return (await parseTranscriptFilesForProjectWithDiagnostics(filePaths, projectPath)).entries;
+}
+
+export async function parseTranscriptFilesForProjectWithDiagnostics(
+  filePaths: string[],
+  projectPath: string,
+): Promise<ParsedTranscriptFilesResult> {
+  const reads = await Promise.all(
     filePaths.map(async (filePath) => {
       try {
         return await readTranscriptRows(filePath);
-      } catch {
-        return [];
+      } catch (error) {
+        return {
+          rows: [],
+          diagnostics: [transcriptReadDiagnostic(filePath, error)],
+        };
       }
     }),
   );
 
-  return filterTranscriptRowsForProject(rowGroups.flat(), projectPath);
+  return {
+    entries: filterTranscriptRowsForProject(reads.flatMap((read) => read.rows), projectPath),
+    diagnostics: reads.flatMap((read) => read.diagnostics),
+  };
 }
 
-async function readTranscriptRows(filePath: string): Promise<ParsedTranscriptRow[]> {
+async function readTranscriptRows(
+  filePath: string,
+): Promise<{ rows: ParsedTranscriptRow[]; diagnostics: Diagnostic[] }> {
   const result = await readBoundedTextFile(filePath, { maxBytes: maxTranscriptBytes });
   if (!result.exists) {
-    return [];
+    return { rows: [], diagnostics: result.diagnostics };
   }
 
   const rows: ParsedTranscriptRow[] = [];
@@ -198,7 +218,15 @@ async function readTranscriptRows(filePath: string): Promise<ParsedTranscriptRow
     }
   }
 
-  return rows;
+  return { rows, diagnostics: result.diagnostics };
+}
+
+function transcriptReadDiagnostic(filePath: string, _error: unknown): Diagnostic {
+  return {
+    level: 'warn',
+    message: 'Transcript file could not be read.',
+    path: filePath,
+  };
 }
 
 function filterTranscriptRowsForProject(

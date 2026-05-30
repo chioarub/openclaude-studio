@@ -17,7 +17,7 @@ import { readContainedBoundedTextFile } from './safeFile.js';
 import { findAmbiguousSessionArtifactIds } from './sessionArtifacts.js';
 import {
   findTranscriptFilesForProject,
-  parseTranscriptFilesForProject,
+  parseTranscriptFilesForProjectWithDiagnostics,
   type ParsedTranscriptEntry,
 } from './sessions.js';
 
@@ -53,8 +53,9 @@ export async function listProjectTasks(
   }
 
   const sessionRefs = await readTaskSessionReferences(paths, project.path);
+  diagnostics.push(...sessionRefs.diagnostics);
   const candidates: TaskCandidate[] = [];
-  for (const session of sessionRefs) {
+  for (const session of sessionRefs.sessions) {
     const sessionDir = safeChildPath(paths.tasksDir, session.id);
     if (!sessionDir) continue;
 
@@ -152,7 +153,7 @@ export async function readProjectTask(
       ...task,
       content: redactTaskContent(file.content, parsed.data),
     },
-    diagnostics: [...file.diagnostics, ...parsed.diagnostics],
+    diagnostics: [...listed.diagnostics, ...file.diagnostics, ...parsed.diagnostics],
   };
 }
 
@@ -164,6 +165,11 @@ type SessionRef = {
   lastTimestamp: string;
 };
 
+type SessionRefsRead = {
+  sessions: SessionRef[];
+  diagnostics: Diagnostic[];
+};
+
 type TaskRead = {
   summary: TaskSummary;
   diagnostics: Diagnostic[];
@@ -172,20 +178,16 @@ type TaskRead = {
 async function readTaskSessionReferences(
   paths: OpenClaudePaths,
   projectPath: string,
-): Promise<SessionRef[]> {
+): Promise<SessionRefsRead> {
   let files: string[];
   try {
     files = await findTranscriptFilesForProject(paths.projectsDir, projectPath);
   } catch {
-    return [];
+    return { sessions: [], diagnostics: [] };
   }
 
-  let allEntries: ParsedTranscriptEntry[];
-  try {
-    allEntries = await parseTranscriptFilesForProject(files, projectPath);
-  } catch {
-    return [];
-  }
+  const parsed = await parseTranscriptFilesForProjectWithDiagnostics(files, projectPath);
+  const allEntries: ParsedTranscriptEntry[] = parsed.entries;
 
   const bySession = new Map<string, ParsedTranscriptEntry[]>();
   for (const entry of allEntries) {
@@ -209,7 +211,10 @@ async function readTaskSessionReferences(
     });
   }
 
-  return refs.sort((a, b) => b.lastTimestamp.localeCompare(a.lastTimestamp));
+  return {
+    sessions: refs.sort((a, b) => b.lastTimestamp.localeCompare(a.lastTimestamp)),
+    diagnostics: parsed.diagnostics,
+  };
 }
 
 async function readTaskFile(
