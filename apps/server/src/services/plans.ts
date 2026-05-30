@@ -16,7 +16,7 @@ import { redactTextSecrets } from './redaction.js';
 import { readBoundedTextFile } from './safeFile.js';
 import {
   findTranscriptFilesForProject,
-  parseTranscriptFile,
+  parseTranscriptFilesForProject,
   type ParsedTranscriptEntry,
 } from './sessions.js';
 
@@ -272,16 +272,10 @@ async function buildPlanSessionMap(
   }
 
   const entriesBySession = new Map<string, ParsedTranscriptEntry[]>();
-  for (const file of files) {
-    try {
-      for (const entry of await parseTranscriptFile(file, projectPath)) {
-        const rows = entriesBySession.get(entry.sessionId) ?? [];
-        rows.push(entry);
-        entriesBySession.set(entry.sessionId, rows);
-      }
-    } catch {
-      continue;
-    }
+  for (const entry of await parseTranscriptFilesForProject(files, projectPath)) {
+    const rows = entriesBySession.get(entry.sessionId) ?? [];
+    rows.push(entry);
+    entriesBySession.set(entry.sessionId, rows);
   }
 
   for (const [sessionId, entries] of entriesBySession) {

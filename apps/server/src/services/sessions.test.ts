@@ -247,6 +247,47 @@ describe('session summaries', () => {
     });
   });
 
+  test('keeps pathless rows from split transcript files after the session is scoped to the project', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-sessions-'));
+    const projectPath = join(home, 'project-a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'session-split-root.jsonl'),
+      jsonl({
+        type: 'user',
+        sessionId: 'session-split',
+        timestamp: '2026-05-28T09:00:00.000Z',
+        cwd: projectPath,
+        message: { role: 'user', content: 'Keep all transcript chunks' },
+      }),
+      'utf8',
+    );
+    await writeFile(
+      join(projectDir, 'agent-session-split.jsonl'),
+      jsonl({
+        type: 'assistant',
+        sessionId: 'session-split',
+        timestamp: '2026-05-28T09:01:00.000Z',
+        message: {
+          role: 'assistant',
+          usage: { input_tokens: 5, output_tokens: 11 },
+          content: 'Pathless split chunk.',
+        },
+      }),
+      'utf8',
+    );
+
+    const sessions = await readSessionSummaries(paths, projectSummary(projectPath));
+
+    expect(sessions[0]).toMatchObject({
+      id: 'session-split',
+      lastTimestamp: '2026-05-28T09:01:00.000Z',
+      tokens: expect.objectContaining({ input: 5, output: 11 }),
+    });
+  });
+
   test('drops pathless rows when encoded project path collisions make the session ambiguous', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-sessions-'));
     const projectPath = join(home, 'project-a');

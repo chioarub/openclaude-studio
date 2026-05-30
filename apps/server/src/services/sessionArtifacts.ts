@@ -7,6 +7,12 @@ import { readBoundedTextFile } from './safeFile.js';
 const ARTIFACT_SCOPE_SCAN_MAX_DEPTH = 10;
 const TRANSCRIPT_SCAN_MAX_BYTES = 10 * 1024 * 1024;
 
+type TranscriptSessionScope = {
+  hasPathlessSessionRow: boolean;
+  hasProjectSessionRow: boolean;
+  hasOutsideProjectRow: boolean;
+};
+
 export async function isUnambiguousSessionArtifactScope(
   projectsDir: string,
   projectPath: string,
@@ -337,30 +343,39 @@ async function transcriptFileContainsSessionOutsideProject(
       return false;
     }
 
+    let hasPathlessSessionRow = false;
+    let hasProjectSessionRow = false;
     for (const line of file.content.split(/\r?\n/)) {
       if (!line.trim()) {
         continue;
       }
       try {
         const parsed = JSON.parse(line) as unknown;
-        const cwd = isRecord(parsed) ? transcriptCwdFromRecord(parsed) : null;
-        if (
-          isRecord(parsed) &&
-          parsed.sessionId === sessionId &&
-          cwd &&
-          !isProjectTranscriptCwd(projectPath, cwd)
-        ) {
-          return true;
+        if (!isRecord(parsed) || parsed.sessionId !== sessionId) {
+          continue;
         }
+
+        const cwd = transcriptCwdFromRecord(parsed);
+        if (!cwd) {
+          hasPathlessSessionRow = true;
+          continue;
+        }
+
+        if (isProjectTranscriptCwd(projectPath, cwd)) {
+          hasProjectSessionRow = true;
+          continue;
+        }
+
+        return true;
       } catch {
         continue;
       }
     }
+
+    return hasPathlessSessionRow && !hasProjectSessionRow;
   } catch {
     return false;
   }
-
-  return false;
 }
 
 async function transcriptFileSessionIdsInSet(filePath: string, sessionIds: Set<string>): Promise<Set<string>> {
@@ -423,6 +438,7 @@ async function transcriptFileSessionIdsOutsideProject(
       return found;
     }
     const candidateSet = new Set(candidateIds);
+    const scopes = new Map<string, TranscriptSessionScope>();
 
     for (const line of file.content.split(/\r?\n/)) {
       if (!line.trim()) {
@@ -434,15 +450,28 @@ async function transcriptFileSessionIdsOutsideProject(
           continue;
         }
 
+        const scope = scopes.get(parsed.sessionId) ?? {
+          hasPathlessSessionRow: false,
+          hasProjectSessionRow: false,
+          hasOutsideProjectRow: false,
+        };
         const cwd = transcriptCwdFromRecord(parsed);
-        if (cwd && !isProjectTranscriptCwd(projectPath, cwd)) {
-          found.add(parsed.sessionId);
-          if (found.size === candidateSet.size) {
-            return found;
-          }
+        if (!cwd) {
+          scope.hasPathlessSessionRow = true;
+        } else if (isProjectTranscriptCwd(projectPath, cwd)) {
+          scope.hasProjectSessionRow = true;
+        } else {
+          scope.hasOutsideProjectRow = true;
         }
+        scopes.set(parsed.sessionId, scope);
       } catch {
         continue;
+      }
+    }
+
+    for (const [sessionId, scope] of scopes) {
+      if (scope.hasOutsideProjectRow || (scope.hasPathlessSessionRow && !scope.hasProjectSessionRow)) {
+        found.add(sessionId);
       }
     }
   } catch {

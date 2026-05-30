@@ -59,4 +59,8 @@ describe('OpenClaude paths', () => {
     expect(isProjectTranscriptCwd(projectPath, join('/tmp', 'project-b'))).toBe(false);
     expect(isProjectTranscriptCwd(join('/tmp', 'openclaude'), join('/tmp', 'openclaude-studio'))).toBe(false);
   });
+
+  test('matches children when the selected project path is the filesystem root', () => {
+    expect(isProjectTranscriptCwd('/', join('/tmp', 'project-a'))).toBe(true);
+  });
 });

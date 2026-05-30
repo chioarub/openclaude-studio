@@ -68,10 +68,7 @@ export async function readSessionSummaries(
   project: SessionProject,
 ): Promise<SessionSummary[]> {
   const files = await findTranscriptFilesForProject(paths.projectsDir, project.path);
-  const entries: ParsedTranscriptEntry[] = [];
-  for (const file of files) {
-    entries.push(...(await parseTranscriptFile(file, project.path)));
-  }
+  const entries = await parseTranscriptFilesForProject(files, project.path);
 
   return summarizeSessions(entries, project).sort((left, right) =>
     right.lastTimestamp.localeCompare(left.lastTimestamp),
@@ -157,6 +154,28 @@ export async function parseTranscriptFile(
   filePath: string,
   projectPath: string,
 ): Promise<ParsedTranscriptEntry[]> {
+  const rows = await readTranscriptRows(filePath);
+  return filterTranscriptRowsForProject(rows, projectPath);
+}
+
+export async function parseTranscriptFilesForProject(
+  filePaths: string[],
+  projectPath: string,
+): Promise<ParsedTranscriptEntry[]> {
+  const rowGroups = await Promise.all(
+    filePaths.map(async (filePath) => {
+      try {
+        return await readTranscriptRows(filePath);
+      } catch {
+        return [];
+      }
+    }),
+  );
+
+  return filterTranscriptRowsForProject(rowGroups.flat(), projectPath);
+}
+
+async function readTranscriptRows(filePath: string): Promise<ParsedTranscriptRow[]> {
   const result = await readBoundedTextFile(filePath, { maxBytes: maxTranscriptBytes });
   if (!result.exists) {
     return [];
@@ -179,6 +198,13 @@ export async function parseTranscriptFile(
     }
   }
 
+  return rows;
+}
+
+function filterTranscriptRowsForProject(
+  rows: ParsedTranscriptRow[],
+  projectPath: string,
+): ParsedTranscriptEntry[] {
   const sessionScopes = sessionScopesFromRows(rows, projectPath);
 
   return rows

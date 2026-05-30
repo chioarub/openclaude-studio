@@ -243,6 +243,70 @@ describe('project tasks', () => {
     ]);
   });
 
+  test('keeps task artifacts when the selected transcript has pathless continuation rows', async () => {
+    const { paths, project } = await makeTasksHome();
+    await writeTask(paths, 'session-pathless', '1', {
+      subject: 'Selected pathless task',
+      status: 'pending',
+    });
+    await writeTranscriptRows(paths, project.path, 'session-pathless', [
+      {
+        type: 'user',
+        timestamp: '2026-05-16T10:00:00.000Z',
+        sessionId: 'session-pathless',
+        cwd: project.path,
+        message: { role: 'user', content: 'Selected project session' },
+      },
+      {
+        type: 'assistant',
+        timestamp: '2026-05-16T10:01:00.000Z',
+        sessionId: 'session-pathless',
+        message: { role: 'assistant', content: 'Continuation without cwd.' },
+      },
+    ]);
+
+    const result = await listProjectTasks(paths, project);
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.tasks).toEqual([
+      expect.objectContaining({
+        id: 'session-pathless:1',
+        title: 'Selected pathless task',
+        sessionTitle: 'Selected project session',
+      }),
+    ]);
+  });
+
+  test('does not expose task artifacts when a colliding transcript row is pathless', async () => {
+    const { paths, project, home } = await makeTasksHome();
+    const collidingProjectPath = join(home, 'selected', 'project');
+    await writeTask(paths, 'session-collision', '1', {
+      subject: 'Ambiguous pathless task',
+      status: 'pending',
+    });
+    await writeTranscript(paths, project.path, 'session-collision', 'Selected project session');
+    await writeTranscriptRows(paths, collidingProjectPath, 'pathless-session-collision', [
+      {
+        type: 'user',
+        timestamp: '2026-05-16T10:01:00.000Z',
+        sessionId: 'session-collision',
+        message: { role: 'user', content: 'Pathless colliding session' },
+      },
+    ]);
+
+    const result = await listProjectTasks(paths, project);
+
+    expect(encodeProjectPath(collidingProjectPath)).toBe(encodeProjectPath(project.path));
+    expect(result.tasks).toEqual([]);
+    expect(result.diagnostics).toEqual([
+      {
+        level: 'warn',
+        message: 'Task artifacts are hidden because this session ID also appears in another project.',
+        path: join(paths.tasksDir, 'session-collision'),
+      },
+    ]);
+  });
+
   test('detects ambiguous task artifacts when another project stores the session in a differently named transcript', async () => {
     const { paths, project, otherProjectPath } = await makeTasksHome();
     await writeTask(paths, 'session-collision', '1', {

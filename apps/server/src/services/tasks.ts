@@ -17,7 +17,7 @@ import { readContainedBoundedTextFile } from './safeFile.js';
 import { findAmbiguousSessionArtifactIds } from './sessionArtifacts.js';
 import {
   findTranscriptFilesForProject,
-  parseTranscriptFile,
+  parseTranscriptFilesForProject,
   type ParsedTranscriptEntry,
 } from './sessions.js';
 
@@ -180,14 +180,7 @@ async function readTaskSessionReferences(
     return [];
   }
 
-  const allEntries: ParsedTranscriptEntry[] = [];
-  for (const file of files) {
-    try {
-      allEntries.push(...(await parseTranscriptFile(file, projectPath)));
-    } catch {
-      continue;
-    }
-  }
+  const allEntries: ParsedTranscriptEntry[] = await parseTranscriptFilesForProject(files, projectPath);
 
   const bySession = new Map<string, ParsedTranscriptEntry[]>();
   for (const entry of allEntries) {

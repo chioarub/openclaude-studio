@@ -970,6 +970,69 @@ describe('readSessionDetails', () => {
     }
   });
 
+  test('reads file-history snapshots from every transcript chunk in a session', async () => {
+    const { projectPath, paths, cleanup } = await setup();
+    try {
+      const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+      await mkdir(projectDir, { recursive: true });
+      await mkdir(join(paths.fileHistoryDir, 'session-history-chunks'), { recursive: true });
+      await writeFile(join(paths.fileHistoryDir, 'session-history-chunks', 'abc123@v1'), 'old content\n', 'utf8');
+      await writeFile(
+        join(projectDir, 'session-history-chunks.jsonl'),
+        jsonl({
+          type: 'user',
+          sessionId: 'session-history-chunks',
+          timestamp: '2026-05-28T18:00:00.000Z',
+          cwd: projectPath,
+          message: { role: 'user', content: 'Track file history across chunks' },
+        }),
+        'utf8',
+      );
+      await writeFile(
+        join(projectDir, 'agent-session-history-chunks.jsonl'),
+        [
+          jsonl({
+            type: 'assistant',
+            sessionId: 'session-history-chunks',
+            timestamp: '2026-05-28T18:01:00.000Z',
+            cwd: projectPath,
+            message: {
+              role: 'assistant',
+              model: 'claude-sonnet',
+              content: [{ type: 'text', text: 'Updated file history.' }],
+            },
+          }),
+          jsonl(fileHistorySnapshot({
+            timestamp: '2026-05-28T18:02:00.000Z',
+            trackedFileBackups: {
+              'src/App.tsx': {
+                backupFileName: 'abc123@v1',
+                version: 1,
+                backupTime: '2026-05-28T18:02:00.000Z',
+              },
+            },
+          })),
+        ].join('\n'),
+        'utf8',
+      );
+
+      const result = await readSessionDetails(paths, projectSummary(projectPath), 'session-history-chunks');
+
+      expect(result).not.toBeNull();
+      expect(result!.session.fileHistory).toEqual([
+        expect.objectContaining({
+          filePath: 'src/App.tsx',
+          backupFileName: 'abc123@v1',
+          version: 1,
+          backupExists: true,
+        }),
+      ]);
+      expect(result!.session.fileHistoryAvailable).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
   test('deduplicates repeated cumulative file-history snapshots by backup identity', async () => {
     const { projectPath, paths, cleanup } = await setup();
     try {

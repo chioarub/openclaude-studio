@@ -19,7 +19,7 @@ import {
   type ParsedToolUse,
   type ParsedTranscriptEntry,
   findTranscriptFilesForProject,
-  parseTranscriptFile,
+  parseTranscriptFilesForProject,
 } from './sessions.js';
 import { isUnambiguousSessionArtifactScope } from './sessionArtifacts.js';
 
@@ -39,11 +39,7 @@ export async function readSessionDetails(
   sessionId: string,
 ): Promise<SessionDetailsResponse | null> {
   const files = await findTranscriptFilesForProject(paths.projectsDir, project.path);
-  const allEntries: ParsedTranscriptEntry[] = [];
-
-  for (const file of files) {
-    allEntries.push(...(await parseTranscriptFile(file, project.path)));
-  }
+  const allEntries = await parseTranscriptFilesForProject(files, project.path);
 
   const entries = allEntries.filter((entry) => entry.sessionId === sessionId);
   if (entries.length === 0) {
@@ -72,7 +68,9 @@ async function buildSessionDetails(
     .filter((row) => row.role === 'user')
     .map((row) => cleanDetailTitle(row.text))
     .find(Boolean);
-  const sourcePath = entries[0]?.sourcePath ?? '';
+  const sourcePaths = unique(
+    entries.map((entry) => entry.sourcePath).filter((path): path is string => Boolean(path)),
+  );
   const linkedPlans = await readLinkedPlans(entries, paths.plansDir);
   const artifactScopeIsUnambiguous = await isUnambiguousSessionArtifactScope(
     paths.projectsDir,
@@ -83,7 +81,7 @@ async function buildSessionDetails(
     artifactScopeIsUnambiguous
       ? await Promise.all([
           readLinkedTasks(paths.tasksDir, sessionId),
-          readFileHistory(paths.fileHistoryDir, sessionId, sourcePath),
+          readFileHistory(paths.fileHistoryDir, sessionId, sourcePaths),
           hasSafeSessionDirectoryEntries(paths.fileHistoryDir, sessionId),
         ])
       : [[], [], false];
@@ -435,35 +433,37 @@ function markdownTitle(content: string): string | null {
 async function readFileHistory(
   fileHistoryDir: string,
   sessionId: string,
-  transcriptPath: string,
+  transcriptPaths: string[],
 ): Promise<SessionFileHistoryEntry[]> {
   const sessionHistoryDir = safeChildPath(fileHistoryDir, sessionId);
-  if (!sessionHistoryDir || !transcriptPath) {
-    return [];
-  }
-
-  let content = '';
-  try {
-    const transcript = await readBoundedTextFile(transcriptPath, { maxBytes: FILE_HISTORY_TRANSCRIPT_MAX_BYTES });
-    if (!transcript.exists) {
-      return [];
-    }
-    content = transcript.content;
-  } catch {
+  if (!sessionHistoryDir || transcriptPaths.length === 0) {
     return [];
   }
 
   const historyEntries: Array<Omit<SessionFileHistoryEntry, 'backupExists'>> = [];
-  for (const line of content.split(/\r?\n/)) {
-    if (!line.trim()) {
+  for (const transcriptPath of transcriptPaths) {
+    let content = '';
+    try {
+      const transcript = await readBoundedTextFile(transcriptPath, { maxBytes: FILE_HISTORY_TRANSCRIPT_MAX_BYTES });
+      if (!transcript.exists) {
+        continue;
+      }
+      content = transcript.content;
+    } catch {
       continue;
     }
 
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      historyEntries.push(...fileHistoryEntriesFromUnknown(parsed));
-    } catch {
-      continue;
+    for (const line of content.split(/\r?\n/)) {
+      if (!line.trim()) {
+        continue;
+      }
+
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        historyEntries.push(...fileHistoryEntriesFromUnknown(parsed));
+      } catch {
+        continue;
+      }
     }
   }
 

@@ -53,5 +53,6 @@ export function isProjectTranscriptCwd(projectPath: string, cwd: string): boolea
 }
 
 function isSameOrChildPath(candidate: string, parent: string): boolean {
-  return candidate === parent || candidate.startsWith(`${parent}${sep}`);
+  const parentPrefix = parent.endsWith(sep) ? parent : `${parent}${sep}`;
+  return candidate === parent || candidate.startsWith(parentPrefix);
 }
