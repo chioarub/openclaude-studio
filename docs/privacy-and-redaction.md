@@ -13,7 +13,7 @@ The local API may read:
 - `~/.openclaude/file-history/`
 - `~/.openclaude/debug/`
 
-The app is read-only in the current MVP line. It should not write OpenClaude config, sessions, logs, provider profiles, project files, tasks, or plans.
+The app is read-only in the current MVP line. It should not write OpenClaude config, sessions, logs, provider profiles, project files, tasks, plans, or file-history data.
 
 ## Redaction Scope
 

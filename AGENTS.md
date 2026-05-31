@@ -14,7 +14,7 @@ OpenClaude Studio has three important boundaries:
 
 Do not weaken these boundaries.
 
-The local API may read OpenClaude config, project/session data, and debug logs, but it must not mutate OpenClaude settings, sessions, logs, provider profiles, project files, tasks, or plans.
+The local API may read OpenClaude config, project/session data, plans, tasks, file-history metadata, and debug logs, but it must not mutate OpenClaude settings, sessions, logs, provider profiles, project files, tasks, plans, or file-history data.
 
 ## Repository map
 
@@ -22,7 +22,7 @@ The local API may read OpenClaude config, project/session data, and debug logs, 
 * `apps/web`: Vite + React + Tailwind CSS dashboard.
 * `packages/shared`: shared TypeScript API response contracts.
 * `tests/e2e`: Playwright end-to-end tests.
-* `docs`: architecture, local server, deployment, privacy, and release notes.
+* `docs`: architecture, local server, troubleshooting, deployment, privacy, and release notes.
 * `.github/workflows`: CI, release, npm publishing, and deployment automation.
 
 ## Read first
@@ -52,7 +52,7 @@ Prefer existing patterns over new abstractions.
 Do not proceed without explicit maintainer direction if a task requires any of the following:
 
 * Adding write-capable behavior.
-* Editing OpenClaude config, sessions, logs, provider profiles, project files, tasks, or plans.
+* Editing OpenClaude config, sessions, logs, provider profiles, project files, tasks, plans, or file-history data.
 * Expanding the local file read scope beyond the documented OpenClaude data locations.
 * Exposing the local server beyond loopback by default.
 * Weakening CORS, private-network handling, token checks, path validation, symlink protection, bounded file reads, or redaction.

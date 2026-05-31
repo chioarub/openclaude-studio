@@ -25,7 +25,7 @@ The project supports Node.js 22 or newer. CI and releases run on Node.js 22 to v
 
 ## Scope
 
-The current MVP line is intentionally read-only. Changes that write OpenClaude settings, sessions, logs, provider profiles, or project files should wait until the write model has explicit design and security review.
+The current MVP line is intentionally read-only. Changes that write OpenClaude settings, sessions, logs, provider profiles, project files, tasks, plans, or file-history data should wait until the write model has explicit design, review UX, backup behavior, rollback behavior, and security review.
 
 Roadmap discussions are welcome. For larger features, open an issue first so the data access model, UI scope, and testing plan can be discussed before implementation.
 
@@ -56,6 +56,8 @@ The local API package is published from GitHub Actions when a `v*` tag is pushed
 The same release workflow deploys the web app to Cloudflare Pages after validation and npm publishing succeed. Cloudflare Pages Git integration should keep automatic production deployments disabled and preview branch deployments set to `None`; production deploys are handled by the release workflow.
 
 Release tags must match the server package version, for example `v0.0.4` for `apps/server/package.json` version `0.0.4`. If the exact npm package version was already published, the workflow skips npm publishing and still deploys the web app.
+
+The release workflow also creates a GitHub Release from the matching `CHANGELOG.md` section when one does not already exist.
 
 The release workflow needs these repository secrets:
 
