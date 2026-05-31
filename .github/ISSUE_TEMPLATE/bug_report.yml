@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible problem.
+description: Report a reproducible problem. Do not paste real OpenClaude logs, prompts, provider credentials, local session contents, or screenshots containing private data.
 title: "[Bug]: "
 labels: ["bug"]
 body:
@@ -23,13 +23,52 @@ body:
       label: Expected behavior
     validations:
       required: true
-  - type: input
-    id: version
+  - type: markdown
     attributes:
-      label: Version
+      value: |
+        Do not paste real OpenClaude logs, prompts, provider credentials, local session contents, or screenshots containing private data.
+  - type: input
+    id: studio_version
+    attributes:
+      label: OpenClaude Studio version
       placeholder: 0.0.1
+  - type: input
+    id: openclaude_version
+    attributes:
+      label: OpenClaude version
+      description: If known.
+      placeholder: 0.0.0
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 15, Windows 11, Ubuntu 24.04
+  - type: input
+    id: node_version
+    attributes:
+      label: Node.js version
+      placeholder: 22.18.0
+  - type: input
+    id: browser
+    attributes:
+      label: Browser
+      placeholder: Chrome 126, Firefox 127, Safari 18
+  - type: dropdown
+    id: dashboard_source
+    attributes:
+      label: Dashboard
+      options:
+        - Hosted dashboard
+        - Local web dev server
+        - Other
+  - type: input
+    id: local_api_url
+    attributes:
+      label: Local API URL/port
+      description: Include the host and port only. Do not include tokens or secrets.
+      placeholder: http://127.0.0.1:43110
   - type: textarea
     id: environment
     attributes:
-      label: Environment
-      description: OS, Node.js version, browser, and OpenClaude version.
+      label: Additional environment details
+      description: Include only details needed to reproduce the issue. Redact private paths and local data.

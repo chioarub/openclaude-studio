@@ -15,10 +15,23 @@ afterEach(async () => {
 });
 
 describe('HTTP server', () => {
+  test('serves a safe local API landing page without an API token', async () => {
+    const server = await testServer();
+
+    const response = await server.inject({ method: 'GET', url: '/?source=browser' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/plain');
+    expect(response.body).toContain('OpenClaude Studio local API is running.');
+    expect(response.body).toContain('https://openclaude-studio.pages.dev/');
+    expect(response.body).toContain('/api/health');
+    expect(response.body).toContain('This API is read-only.');
+  });
+
   test('serves health without an API token', async () => {
     const server = await testServer();
 
-    const response = await server.inject({ method: 'GET', url: '/api/health' });
+    const response = await server.inject({ method: 'GET', url: '/api/health?poll=1' });
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ status: 'ok', version: '0.0.1-test' });

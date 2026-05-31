@@ -6,6 +6,7 @@ import { buildServer, defaultAllowedOrigins } from './http/server.js';
 
 const version = readPackageVersion();
 const options = readCliOptions(process.argv.slice(2));
+const dashboardUrl = 'https://openclaude-studio.pages.dev/';
 
 if (options.help) {
   printHelp();
@@ -37,12 +38,16 @@ const server = await buildServer({
 await server.listen({ host, port });
 
 console.log('OpenClaude Studio local API');
-console.log(`  URL: http://${host}:${port}`);
+console.log(`  API: http://${host}:${port}`);
+console.log(`  Dashboard: ${dashboardUrl}`);
 console.log('  Mode: read-only');
 console.log(`  Allowed browser origins: loopback plus ${displayedAllowedOrigins.join(', ')}`);
 if (authToken) {
   console.log('  API token protection: enabled');
 }
+console.log('');
+console.log('Next step:');
+console.log('  Open the dashboard in your browser and keep this terminal running.');
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
@@ -122,6 +127,9 @@ function printHelp() {
 
 Usage:
   openclaude-studio [options]
+
+Dashboard:
+  ${dashboardUrl}
 
 Options:
   --host <host>                 Host to bind. Defaults to OPENCLAUDE_STUDIO_HOST or 127.0.0.1.

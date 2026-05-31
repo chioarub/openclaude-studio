@@ -4,6 +4,15 @@ All notable changes to OpenClaude Studio are documented here.
 
 This project uses semantic versioning for the published `openclaude-studio` npm package.
 
+## Unreleased
+
+- Refreshed launch-facing README, troubleshooting, package, and privacy documentation.
+- Added a safe local API landing page at `/`.
+- Improved CLI startup/help output with the hosted dashboard URL and next-step guidance.
+- Added a visible local API URL control for custom local server ports.
+- Added web metadata and tightened GitHub issue and pull request templates.
+- Added synthetic screenshot assets for README launch previews.
+
 ## 0.1.0
 
 - Added a session details inspector with conversation timeline, tool calls, changed files, token breakdowns, and related activity context.

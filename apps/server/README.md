@@ -22,7 +22,29 @@ The server binds to `127.0.0.1:43110` by default and reads:
 
 - `~/.openclaude.json`
 - `~/.openclaude/projects/`
+- `~/.openclaude/plans/`
+- `~/.openclaude/tasks/`
 - `~/.openclaude/debug/`
+- project-local `.openclaude/file-history/`
+
+Startup output includes the local API URL, the hosted dashboard URL, read-only mode, and the allowed browser origins:
+
+```text
+OpenClaude Studio local API
+  API: http://127.0.0.1:43110
+  Dashboard: https://openclaude-studio.pages.dev/
+  Mode: read-only
+  Allowed browser origins: loopback plus https://openclaude-studio.pages.dev
+
+Next step:
+  Open the dashboard in your browser and keep this terminal running.
+```
+
+If `OPENCLAUDE_STUDIO_TOKEN` is enabled, startup output says token protection is enabled but never prints the token.
+
+Opening the local API root in a browser shows a small read-only landing page with dashboard and health-check links.
+
+For connection and setup help, see the repository [troubleshooting guide](https://github.com/chioarub/openclaude-studio/blob/main/docs/troubleshooting.md).
 
 ## Hosted Frontend Origins
 

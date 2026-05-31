@@ -47,7 +47,11 @@ try {
     cwd: tempDir,
     maxBuffer: 1024 * 1024,
   });
-  if (!helpOutput.includes('--port <port>') || !helpOutput.includes('--allowed-origin <origin>')) {
+  if (
+    !helpOutput.includes('--port <port>') ||
+    !helpOutput.includes('--allowed-origin <origin>') ||
+    !helpOutput.includes('https://openclaude-studio.pages.dev/')
+  ) {
     throw new Error('CLI help output is missing expected options.');
   }
 

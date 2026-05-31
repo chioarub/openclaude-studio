@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest a focused improvement.
+description: Suggest a focused improvement. Write-capable features need an explicit safety and rollback model.
 title: "[Feature]: "
 labels: ["enhancement"]
 body:
@@ -21,6 +21,7 @@ body:
     id: read_model
     attributes:
       label: Data access
+      description: Write-capable features need an explicit safety, review, backup, and rollback model.
       options:
         - Read-only
         - Requires writes

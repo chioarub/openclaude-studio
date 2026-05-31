@@ -202,7 +202,7 @@ export default function App() {
 }
 
 function StudioApp() {
-  const [baseUrl] = useState(() => normalizeBaseUrl(loadServerUrl()));
+  const [baseUrl, setBaseUrl] = useState(() => normalizeBaseUrl(loadServerUrl()));
   const [selectedProjectId, setSelectedProjectId] = useState(() => loadActiveProjectId());
   const [selectedLogFile, setSelectedLogFile] = useState<string | undefined>();
   const [logQuery, setLogQuery] = useState('');
@@ -213,6 +213,7 @@ function StudioApp() {
   const [health, setHealth] = useState<HealthState>(null);
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [plansTasksDiagnostics, setPlansTasksDiagnostics] = useState<Diagnostic[]>([]);
+  const healthRequestIdRef = useRef(0);
   const workspaceRequestIdRef = useRef(0);
   const logsRequestIdRef = useRef(0);
 
@@ -232,10 +233,18 @@ function StudioApp() {
   }, [selectedProjectId]);
 
   async function refreshHealth() {
+    const requestId = healthRequestIdRef.current + 1;
+    healthRequestIdRef.current = requestId;
+
     try {
-      setHealth(await api.health());
+      const nextHealth = await api.health();
+      if (requestId === healthRequestIdRef.current) {
+        setHealth(nextHealth);
+      }
     } catch {
-      setHealth({ status: 'error' });
+      if (requestId === healthRequestIdRef.current) {
+        setHealth({ status: 'error' });
+      }
     }
   }
 
@@ -352,6 +361,26 @@ function StudioApp() {
     }
   }
 
+  function updateServerUrl(nextBaseUrl: string) {
+    const normalizedBaseUrl = normalizeBaseUrl(nextBaseUrl);
+    saveServerUrl(normalizedBaseUrl);
+
+    if (normalizedBaseUrl === baseUrl) {
+      void refreshHealth();
+      void loadWorkspace();
+      return;
+    }
+
+    healthRequestIdRef.current += 1;
+    workspaceRequestIdRef.current += 1;
+    logsRequestIdRef.current += 1;
+    setHealth(null);
+    setError(null);
+    setSelectedLogFile(undefined);
+    setSnapshot(emptySnapshot);
+    setBaseUrl(normalizedBaseUrl);
+  }
+
   useEffect(() => {
     void refreshHealth();
     void loadWorkspace();
@@ -361,9 +390,9 @@ function StudioApp() {
     }, 30_000);
 
     return () => window.clearInterval(interval);
-    // Initial load only; explicit refreshes own later state updates.
+    // Initial load and base URL changes only; explicit refreshes own later state updates.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [baseUrl]);
 
   return (
     <div className="min-h-screen bg-canvas text-ink md:flex">
@@ -385,7 +414,14 @@ function StudioApp() {
           }}
         />
         <main className="mx-auto w-full max-w-[1420px] px-4 py-5 md:px-6 lg:px-8">
-          {error ? <StatusBanner baseUrl={baseUrl} error={error} isConnected={health?.status === 'ok'} /> : null}
+          {error ? (
+            <StatusBanner
+              baseUrl={baseUrl}
+              error={error}
+              isConnected={health?.status === 'ok'}
+              onServerUrlChange={updateServerUrl}
+            />
+          ) : null}
           <Routes>
             <Route
               path="/"
@@ -1917,14 +1953,49 @@ function PageStack({ children }: { children: ReactNode }) {
   return <div className="space-y-5">{children}</div>;
 }
 
-function StatusBanner({ baseUrl, error, isConnected }: { baseUrl: string; error: string; isConnected: boolean }) {
+function StatusBanner({
+  baseUrl,
+  error,
+  isConnected,
+  onServerUrlChange,
+}: {
+  baseUrl: string;
+  error: string;
+  isConnected: boolean;
+  onServerUrlChange: (baseUrl: string) => void;
+}) {
   const likelyConnectionError = !isConnected || /failed to fetch|load failed|networkerror/i.test(error);
   const command = 'npx openclaude-studio';
   const [copiedCommand, setCopiedCommand] = useState(false);
+  const [draftBaseUrl, setDraftBaseUrl] = useState(baseUrl);
+  const [urlError, setUrlError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraftBaseUrl(baseUrl);
+    setUrlError(null);
+  }, [baseUrl]);
 
   function copyCommand() {
     void window.navigator.clipboard?.writeText(command);
     setCopiedCommand(true);
+  }
+
+  function saveDraftBaseUrl() {
+    const normalizedBaseUrl = normalizeBaseUrl(draftBaseUrl);
+    if (!isHttpBaseUrl(normalizedBaseUrl)) {
+      setUrlError('Enter a valid http:// or https:// URL.');
+      return;
+    }
+
+    setUrlError(null);
+    setDraftBaseUrl(normalizedBaseUrl);
+    onServerUrlChange(normalizedBaseUrl);
+  }
+
+  function resetBaseUrl() {
+    setUrlError(null);
+    setDraftBaseUrl(defaultServerUrl);
+    onServerUrlChange(defaultServerUrl);
   }
 
   return (
@@ -1965,6 +2036,36 @@ function StatusBanner({ baseUrl, error, isConnected }: { baseUrl: string; error:
           <span>Expected API: {baseUrl}</span>
           <span title={error}>Last error: {error}</span>
         </div>
+        {likelyConnectionError ? (
+          <form
+            className="status-banner-connection"
+            onSubmit={(event) => {
+              event.preventDefault();
+              saveDraftBaseUrl();
+            }}
+          >
+            <label className="status-banner-field" htmlFor="local-api-url">
+              <span>Local API URL</span>
+              <input
+                className="field-input status-banner-input"
+                id="local-api-url"
+                onChange={(event) => setDraftBaseUrl(event.target.value)}
+                spellCheck={false}
+                type="url"
+                value={draftBaseUrl}
+              />
+            </label>
+            <div className="status-banner-actions">
+              <button className="status-banner-action status-banner-action-primary" type="submit">
+                Save API URL
+              </button>
+              <button className="status-banner-action" onClick={resetBaseUrl} type="button">
+                Reset API URL
+              </button>
+            </div>
+            {urlError ? <div className="status-banner-validation" role="alert">{urlError}</div> : null}
+          </form>
+        ) : null}
       </div>
     </div>
   );
@@ -2161,14 +2262,21 @@ function loadServerUrl(): string {
   const storage = safeStorage('localStorage');
   const value = storage?.getItem(serverUrlStorageKey);
   if (value) {
-    return value;
+    const normalizedValue = normalizeBaseUrl(value);
+    if (isHttpBaseUrl(normalizedValue)) {
+      return normalizedValue;
+    }
+    storage?.removeItem(serverUrlStorageKey);
   }
 
   const legacyConnection = readLegacyConnection(storage);
   if (legacyConnection.baseUrl) {
-    storage?.setItem(serverUrlStorageKey, normalizeBaseUrl(legacyConnection.baseUrl));
     storage?.removeItem(legacyConnectionStorageKey);
-    return legacyConnection.baseUrl;
+    const normalizedLegacyBaseUrl = normalizeBaseUrl(legacyConnection.baseUrl);
+    if (isHttpBaseUrl(normalizedLegacyBaseUrl)) {
+      storage?.setItem(serverUrlStorageKey, normalizedLegacyBaseUrl);
+      return normalizedLegacyBaseUrl;
+    }
   }
 
   return defaultServerUrl;
@@ -2176,6 +2284,15 @@ function loadServerUrl(): string {
 
 function saveServerUrl(baseUrl: string) {
   safeStorage('localStorage')?.setItem(serverUrlStorageKey, normalizeBaseUrl(baseUrl));
+}
+
+function isHttpBaseUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.host.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function loadActiveProjectId(): string | null {

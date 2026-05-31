@@ -42,6 +42,88 @@ describe('App', () => {
     expect(writeText).toHaveBeenCalledWith('npx openclaude-studio');
     expect(within(status).getByText('Expected API: http://127.0.0.1:43110')).toBeInTheDocument();
     expect(within(status).getByText('Last error: Failed to fetch')).toBeInTheDocument();
+
+    const apiInput = within(status).getByLabelText('Local API URL');
+    expect(apiInput).toHaveValue('http://127.0.0.1:43110');
+    await user.clear(apiInput);
+    await user.type(apiInput, 'http://127.0.0.1:43111/');
+    await user.click(within(status).getByRole('button', { name: /save api url/i }));
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem(serverUrlStorageKey)).toBe('http://127.0.0.1:43111');
+    });
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://127.0.0.1:43111/api/projects',
+        expect.objectContaining({ headers: { accept: 'application/json' } }),
+      );
+    });
+  });
+
+  test('resets a custom local API URL to the default from the disconnected banner', async () => {
+    window.localStorage.setItem(serverUrlStorageKey, 'http://127.0.0.1:43112');
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+
+    render(<App />);
+
+    const status = await screen.findByRole('status');
+    const apiInput = within(status).getByLabelText('Local API URL');
+    expect(apiInput).toHaveValue('http://127.0.0.1:43112');
+
+    await user.click(within(status).getByRole('button', { name: /reset api url/i }));
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem(serverUrlStorageKey)).toBe('http://127.0.0.1:43110');
+    });
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://127.0.0.1:43110/api/projects',
+        expect.objectContaining({ headers: { accept: 'application/json' } }),
+      );
+    });
+  });
+
+  test('ignores stale health responses after changing the local API URL', async () => {
+    window.localStorage.setItem(serverUrlStorageKey, 'http://127.0.0.1:43112');
+    const staleHealth = deferred<Response>();
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'http://127.0.0.1:43112/api/health') {
+        return staleHealth.promise;
+      }
+      return Promise.reject(new TypeError('Failed to fetch'));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+
+    render(<App />);
+
+    const status = await screen.findByRole('status');
+    const apiInput = within(status).getByLabelText('Local API URL');
+    await user.clear(apiInput);
+    await user.type(apiInput, 'http://127.0.0.1:43111');
+    await user.click(within(status).getByRole('button', { name: /save api url/i }));
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem(serverUrlStorageKey)).toBe('http://127.0.0.1:43111');
+    });
+
+    await act(async () => {
+      staleHealth.resolve(jsonResponse({
+        status: 'ok',
+        version: 'stale-health',
+        serverTime: '2026-05-28T08:00:00.000Z',
+        uptime: 1,
+      }));
+      await staleHealth.promise;
+    });
+
+    expect(screen.queryByText(/vstale-health/i)).not.toBeInTheDocument();
+    expect(await screen.findByText('Expected API: http://127.0.0.1:43111')).toBeInTheDocument();
   });
 
   test('loads the read-only workspace from the local API without a token prompt', async () => {
@@ -130,6 +212,21 @@ describe('App', () => {
     );
     expect(window.localStorage.getItem(serverUrlStorageKey)).toBe('http://127.0.0.1:43112');
     expect(window.localStorage.getItem(legacyConnectionStorageKey)).toBeNull();
+  });
+
+  test('ignores invalid saved server URLs before loading the workspace', async () => {
+    window.localStorage.setItem(serverUrlStorageKey, 'javascript:alert(1)');
+    const fetchMock = mockApi();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:43110/api/projects',
+      expect.objectContaining({ headers: { accept: 'application/json' } }),
+    );
+    expect(window.localStorage.getItem(serverUrlStorageKey)).toBe('http://127.0.0.1:43110');
   });
 
   test('keeps logs and sessions on their own routes', async () => {
