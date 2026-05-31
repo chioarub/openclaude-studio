@@ -428,6 +428,30 @@ describe('project tasks', () => {
     expect(details.task.content).not.toContain('nested-secret-value');
   });
 
+  test('does not include unrelated list diagnostics in successful task details', async () => {
+    const { paths, project } = await makeTasksHome();
+    await writeTask(paths, 'session-selected', 'valid', {
+      subject: 'Valid task',
+      status: 'pending',
+    });
+    const brokenTaskPath = await writeRawTask(paths, 'session-selected', 'broken', '{not json');
+    await writeTranscript(paths, project.path, 'session-selected', 'Use selected task');
+
+    const result = await listProjectTasks(paths, project);
+
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        path: brokenTaskPath,
+      }),
+    ]);
+
+    const details = await readProjectTask(paths, project, 'session-selected', 'valid');
+
+    expect(details.task.title).toBe('Valid task');
+    expect(details.diagnostics).toEqual([]);
+  });
+
   test('reports truncated oversized task files in list and detail flows', async () => {
     const { paths, project } = await makeTasksHome();
     const taskPath = await writeRawTask(
@@ -456,11 +480,13 @@ describe('project tasks', () => {
 
     expect(details.task.title).toBe('Large task');
     expect(details.task.content).toContain('"subject": "Large task"');
-    expect(details.diagnostics).toContainEqual({
-      level: 'warn',
-      message: 'File was truncated to 262144 bytes.',
-      path: taskPath,
-    });
+    expect(details.diagnostics).toEqual([
+      {
+        level: 'warn',
+        message: 'File was truncated to 262144 bytes.',
+        path: taskPath,
+      },
+    ]);
   });
 });
 

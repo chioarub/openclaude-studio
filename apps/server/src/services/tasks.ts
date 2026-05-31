@@ -153,7 +153,7 @@ export async function readProjectTask(
       ...task,
       content: redactTaskContent(file.content, parsed.data),
     },
-    diagnostics: [...listed.diagnostics, ...file.diagnostics, ...parsed.diagnostics],
+    diagnostics: [...file.diagnostics, ...parsed.diagnostics],
   };
 }
 
