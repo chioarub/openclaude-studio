@@ -81,7 +81,7 @@ export async function readProjectPlan(
   const sessionRefs = await buildPlanSessionMap(paths, project.path);
   const sessions = sessionRefs.sessionsByPlan.get(planId);
   if (!sessions) {
-    throw planNotFound(planPath);
+    throw planNotFound(planPath, sessionRefs.diagnostics);
   }
 
   const exists = await directoryExists(paths.plansDir);
@@ -274,7 +274,16 @@ async function buildPlanSessionMap(
   try {
     files = await findTranscriptFilesForProject(paths.projectsDir, projectPath);
   } catch {
-    return { sessionsByPlan: map, diagnostics: [] };
+    return {
+      sessionsByPlan: map,
+      diagnostics: [
+        diagnostic(
+          'warn',
+          'Transcript files could not be discovered for the selected project.',
+          paths.projectsDir,
+        ),
+      ],
+    };
   }
 
   const parsed = await parseTranscriptFilesForProjectWithDiagnostics(files, projectPath);
@@ -378,8 +387,9 @@ function comparePlans(left: PlanSummary, right: PlanSummary): number {
   return right.modifiedAt.localeCompare(left.modifiedAt) || left.title.localeCompare(right.title);
 }
 
-function planNotFound(path?: string): ApiError {
+function planNotFound(path?: string, diagnostics: Diagnostic[] = []): ApiError {
   return new ApiError(404, 'PLAN_NOT_FOUND', 'Plan not found', [
+    ...diagnostics,
     diagnostic('error', 'Plan not found for the selected project.', path),
   ]);
 }

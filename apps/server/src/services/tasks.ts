@@ -138,7 +138,7 @@ export async function readProjectTask(
     (item) => item.sessionId === sessionId && item.taskId === taskId,
   );
   if (!task) {
-    throw taskNotFound(taskPath);
+    throw taskNotFound(taskPath, listed.diagnostics);
   }
 
   const file = await readContainedBoundedTextFile(paths.tasksDir, taskPath, { maxBytes: TASK_MAX_BYTES });
@@ -183,7 +183,16 @@ async function readTaskSessionReferences(
   try {
     files = await findTranscriptFilesForProject(paths.projectsDir, projectPath);
   } catch {
-    return { sessions: [], diagnostics: [] };
+    return {
+      sessions: [],
+      diagnostics: [
+        diagnostic(
+          'warn',
+          'Transcript files could not be discovered for the selected project.',
+          paths.projectsDir,
+        ),
+      ],
+    };
   }
 
   const parsed = await parseTranscriptFilesForProjectWithDiagnostics(files, projectPath);
@@ -357,8 +366,9 @@ async function directoryExists(path: string): Promise<boolean> {
   }
 }
 
-function taskNotFound(path?: string): ApiError {
+function taskNotFound(path?: string, diagnostics: Diagnostic[] = []): ApiError {
   return new ApiError(404, 'TASK_NOT_FOUND', 'Task not found', [
+    ...diagnostics,
     diagnostic('error', 'Task not found for the selected project.', path),
   ]);
 }

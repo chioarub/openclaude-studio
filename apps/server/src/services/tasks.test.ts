@@ -97,6 +97,39 @@ describe('project tasks', () => {
     }
   });
 
+  test('reports transcript discovery failures in task list and detail responses', async () => {
+    const { paths, project } = await makeTasksHome();
+    await writeTask(paths, 'session-selected', '1', {
+      subject: 'Selected task',
+      status: 'pending',
+    });
+    await mkdir(paths.projectsDir, { recursive: true });
+
+    await chmod(paths.projectsDir, 0);
+    try {
+      const result = await listProjectTasks(paths, project);
+
+      expect(result.tasks).toEqual([]);
+      expect(result.diagnostics).toContainEqual({
+        level: 'warn',
+        message: 'Transcript files could not be discovered for the selected project.',
+        path: paths.projectsDir,
+      });
+      await expect(readProjectTask(paths, project, 'session-selected', '1')).rejects.toMatchObject({
+        code: 'TASK_NOT_FOUND',
+        diagnostics: expect.arrayContaining([
+          {
+            level: 'warn',
+            message: 'Transcript files could not be discovered for the selected project.',
+            path: paths.projectsDir,
+          },
+        ]),
+      });
+    } finally {
+      await chmod(paths.projectsDir, 0o700).catch(() => undefined);
+    }
+  });
+
   test('lists tasks linked to selected-project worktree sessions', async () => {
     const { paths, project } = await makeTasksHome();
     const worktreePath = join(project.path, '.claude', 'worktrees', 'feature-a');

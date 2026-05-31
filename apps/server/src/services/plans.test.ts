@@ -96,6 +96,36 @@ describe('project plans', () => {
     }
   });
 
+  test('reports transcript discovery failures in plan list and detail responses', async () => {
+    const { paths, project } = await makePlansHome();
+    await writePlan(paths.plansDir, 'selected-plan', '# Selected Plan\n\nReadable reference.\n');
+    await mkdir(paths.projectsDir, { recursive: true });
+
+    await chmod(paths.projectsDir, 0);
+    try {
+      const result = await listProjectPlans(paths, project);
+
+      expect(result.plans).toEqual([]);
+      expect(result.diagnostics).toContainEqual({
+        level: 'warn',
+        message: 'Transcript files could not be discovered for the selected project.',
+        path: paths.projectsDir,
+      });
+      await expect(readProjectPlan(paths, project, 'selected-plan')).rejects.toMatchObject({
+        code: 'PLAN_NOT_FOUND',
+        diagnostics: expect.arrayContaining([
+          {
+            level: 'warn',
+            message: 'Transcript files could not be discovered for the selected project.',
+            path: paths.projectsDir,
+          },
+        ]),
+      });
+    } finally {
+      await chmod(paths.projectsDir, 0o700).catch(() => undefined);
+    }
+  });
+
   test('lists plans referenced by selected-project worktree sessions', async () => {
     const { paths, project } = await makePlansHome();
     const worktreePath = join(project.path, '.claude', 'worktrees', 'feature-a');
