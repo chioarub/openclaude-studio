@@ -18,6 +18,7 @@ The workflow:
 3. Runs lint, unit tests, build, package inspection, packed-package smoke test, and e2e tests.
 4. Publishes `openclaude-studio` to npm if that exact version is not already published.
 5. Deploys `apps/web/dist` to Cloudflare Pages.
+6. Creates a GitHub Release from the matching changelog section if one does not already exist.
 
 Release tags must match the npm package version. For example, `v0.0.4` must match `apps/server/package.json` version `0.0.4`.
 
@@ -31,6 +32,8 @@ The release workflow needs:
 The Cloudflare API token should grant account-level `Cloudflare Pages:Edit` permission for the target account.
 
 The npm package should use trusted publishing through GitHub Actions. Do not add long-lived npm tokens to repository secrets.
+
+The workflow denies default token permissions and grants GitHub token scopes only at the job level. The publish/deploy job grants `contents: read`, `deployments: write`, and `id-token: write`; the GitHub Release job grants `contents: write` so `GITHUB_TOKEN` can create releases for already-pushed tags.
 
 ## Cloudflare Pages Settings
 

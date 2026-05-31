@@ -15,7 +15,8 @@
     "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w openclaude-studio\" \"npm run dev -w @openclaude-studio/web\"",
     "lint": "npm run lint -w @openclaude-studio/shared && npm run lint -w openclaude-studio && npm run lint -w @openclaude-studio/web",
     "smoke:package": "node scripts/smoke-package.mjs",
-    "test": "npm run test -w openclaude-studio && npm run test -w @openclaude-studio/web",
+    "test": "npm run test:release-workflow && npm run test -w openclaude-studio && npm run test -w @openclaude-studio/web",
+    "test:release-workflow": "node scripts/validate-release-workflow.mjs",
     "test:e2e": "playwright test"
   },
   "devDependencies": {
