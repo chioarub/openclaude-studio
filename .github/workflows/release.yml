@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
   deployments: write
   id-token: write
 
@@ -127,3 +127,59 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy apps/web/dist --project-name=openclaude-studio --branch=main --commit-hash=${{ github.sha }}
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check GitHub release status
+        id: github-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ steps.package.outputs.version }}"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build GitHub release notes
+        if: steps.github-release.outputs.exists == 'false'
+        run: |
+          version="${{ steps.package.outputs.version }}"
+          awk -v version="$version" '
+            $0 == "## " version { capture = 1; next }
+            capture && /^## / { exit }
+            capture { print }
+          ' CHANGELOG.md > release-notes-changelog.md
+
+          if [ ! -s release-notes-changelog.md ]; then
+            echo "No CHANGELOG.md section found for $version."
+            exit 1
+          fi
+
+          {
+            echo "## Highlights"
+            cat release-notes-changelog.md
+            echo
+            echo "## Release Artifacts"
+            echo
+            echo "- npm package: https://www.npmjs.com/package/openclaude-studio/v/$version"
+            echo "- Release workflow: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "## Validation"
+            echo
+            echo "The release workflow completed successfully, including lint, unit tests, build, package dry-run, packed-package smoke test, end-to-end tests, npm publish, and Cloudflare Pages deploy."
+          } > release-notes.md
+
+      - name: Create GitHub release
+        if: steps.github-release.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${{ steps.package.outputs.version }}"
+          gh release create "v$version" \
+            --title "OpenClaude Studio v$version" \
+            --latest \
+            --notes-file release-notes.md
+
+      - name: Skip GitHub release creation
+        if: steps.github-release.outputs.exists == 'true'
+        run: echo "GitHub release v${{ steps.package.outputs.version }} already exists."
