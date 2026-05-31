@@ -6,6 +6,11 @@ This project uses semantic versioning for the published `openclaude-studio` npm 
 
 ## Unreleased
 
+## 0.2.0
+
+- Added the Plans & Tasks control tower with project plan files, task status groups, checklist progress, detail panes, and linked session context.
+- Fixed project transcript data scoping so project summaries, plans, tasks, and session details avoid leaking similarly named or outside-project transcript data.
+- Improved transcript discovery diagnostics for inaccessible, malformed, ambiguous, and outside-project session data.
 - Refreshed launch-facing README, troubleshooting, package, and privacy documentation.
 - Added a safe local API landing page at `/`.
 - Improved CLI startup/help output with the hosted dashboard URL and next-step guidance.
