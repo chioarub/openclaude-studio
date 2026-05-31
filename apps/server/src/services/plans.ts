@@ -16,7 +16,7 @@ import { redactTextSecrets } from './redaction.js';
 import { readBoundedTextFile } from './safeFile.js';
 import {
   findTranscriptFilesForProject,
-  parseTranscriptFile,
+  parseTranscriptFilesForProjectWithDiagnostics,
   type ParsedTranscriptEntry,
 } from './sessions.js';
 
@@ -39,14 +39,15 @@ export async function listProjectPlans(
   }
 
   const sessionRefs = await buildPlanSessionMap(paths, project.path);
+  diagnostics.push(...sessionRefs.diagnostics);
   const plans: PlanSummary[] = [];
 
   if (exists) {
-    const linkedFiles = await linkedPlanFiles(paths.plansDir, new Set(sessionRefs.keys()));
+    const linkedFiles = await linkedPlanFiles(paths.plansDir, new Set(sessionRefs.sessionsByPlan.keys()));
     diagnostics.push(...linkedFiles.diagnostics);
 
     for (const id of linkedFiles.ids) {
-      const sessions = sessionRefs.get(id);
+      const sessions = sessionRefs.sessionsByPlan.get(id);
       if (!sessions) continue;
       const result = await summarizeReferencedPlan(paths.plansDir, id, sessions);
       diagnostics.push(...result.diagnostics);
@@ -78,9 +79,9 @@ export async function readProjectPlan(
   }
 
   const sessionRefs = await buildPlanSessionMap(paths, project.path);
-  const sessions = sessionRefs.get(planId);
+  const sessions = sessionRefs.sessionsByPlan.get(planId);
   if (!sessions) {
-    throw planNotFound(planPath);
+    throw planNotFound(planPath, sessionRefs.diagnostics);
   }
 
   const exists = await directoryExists(paths.plansDir);
@@ -128,7 +129,7 @@ export async function readProjectPlan(
     content: redactTextSecrets(content),
   };
 
-  return { plan, diagnostics: file.diagnostics };
+  return { plan, diagnostics: [...sessionRefs.diagnostics, ...file.diagnostics] };
 }
 
 // --- Internal helpers ---
@@ -137,6 +138,11 @@ type SessionRef = {
   id: string;
   title: string;
   lastTimestamp: string;
+};
+
+type PlanSessionMapRead = {
+  sessionsByPlan: Map<string, SessionRef[]>;
+  diagnostics: Diagnostic[];
 };
 
 type PlanRead = {
@@ -261,27 +267,33 @@ async function linkedPlanFiles(
 async function buildPlanSessionMap(
   paths: OpenClaudePaths,
   projectPath: string,
-): Promise<Map<string, SessionRef[]>> {
+): Promise<PlanSessionMapRead> {
   const map = new Map<string, SessionRef[]>();
 
   let files: string[];
   try {
     files = await findTranscriptFilesForProject(paths.projectsDir, projectPath);
   } catch {
-    return map;
+    return {
+      sessionsByPlan: map,
+      diagnostics: [
+        diagnostic(
+          'warn',
+          'Transcript files could not be discovered for the selected project.',
+          paths.projectsDir,
+        ),
+      ],
+    };
   }
 
+  const parsed = await parseTranscriptFilesForProjectWithDiagnostics(files, projectPath);
+  const entries: ParsedTranscriptEntry[] = parsed.entries;
+
   const entriesBySession = new Map<string, ParsedTranscriptEntry[]>();
-  for (const file of files) {
-    try {
-      for (const entry of await parseTranscriptFile(file, projectPath)) {
-        const rows = entriesBySession.get(entry.sessionId) ?? [];
-        rows.push(entry);
-        entriesBySession.set(entry.sessionId, rows);
-      }
-    } catch {
-      continue;
-    }
+  for (const entry of entries) {
+    const rows = entriesBySession.get(entry.sessionId) ?? [];
+    rows.push(entry);
+    entriesBySession.set(entry.sessionId, rows);
   }
 
   for (const [sessionId, entries] of entriesBySession) {
@@ -313,7 +325,7 @@ async function buildPlanSessionMap(
     refs.sort((a, b) => b.lastTimestamp.localeCompare(a.lastTimestamp));
   }
 
-  return map;
+  return { sessionsByPlan: map, diagnostics: parsed.diagnostics };
 }
 
 function sessionTitle(entries: ParsedTranscriptEntry[], sessionId: string): string {
@@ -375,8 +387,9 @@ function comparePlans(left: PlanSummary, right: PlanSummary): number {
   return right.modifiedAt.localeCompare(left.modifiedAt) || left.title.localeCompare(right.title);
 }
 
-function planNotFound(path?: string): ApiError {
+function planNotFound(path?: string, diagnostics: Diagnostic[] = []): ApiError {
   return new ApiError(404, 'PLAN_NOT_FOUND', 'Plan not found', [
+    ...diagnostics,
     diagnostic('error', 'Plan not found for the selected project.', path),
   ]);
 }

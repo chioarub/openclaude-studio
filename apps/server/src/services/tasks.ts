@@ -17,7 +17,7 @@ import { readContainedBoundedTextFile } from './safeFile.js';
 import { findAmbiguousSessionArtifactIds } from './sessionArtifacts.js';
 import {
   findTranscriptFilesForProject,
-  parseTranscriptFile,
+  parseTranscriptFilesForProjectWithDiagnostics,
   type ParsedTranscriptEntry,
 } from './sessions.js';
 
@@ -53,8 +53,9 @@ export async function listProjectTasks(
   }
 
   const sessionRefs = await readTaskSessionReferences(paths, project.path);
+  diagnostics.push(...sessionRefs.diagnostics);
   const candidates: TaskCandidate[] = [];
-  for (const session of sessionRefs) {
+  for (const session of sessionRefs.sessions) {
     const sessionDir = safeChildPath(paths.tasksDir, session.id);
     if (!sessionDir) continue;
 
@@ -137,7 +138,7 @@ export async function readProjectTask(
     (item) => item.sessionId === sessionId && item.taskId === taskId,
   );
   if (!task) {
-    throw taskNotFound(taskPath);
+    throw taskNotFound(taskPath, listed.diagnostics);
   }
 
   const file = await readContainedBoundedTextFile(paths.tasksDir, taskPath, { maxBytes: TASK_MAX_BYTES });
@@ -164,6 +165,11 @@ type SessionRef = {
   lastTimestamp: string;
 };
 
+type SessionRefsRead = {
+  sessions: SessionRef[];
+  diagnostics: Diagnostic[];
+};
+
 type TaskRead = {
   summary: TaskSummary;
   diagnostics: Diagnostic[];
@@ -172,22 +178,25 @@ type TaskRead = {
 async function readTaskSessionReferences(
   paths: OpenClaudePaths,
   projectPath: string,
-): Promise<SessionRef[]> {
+): Promise<SessionRefsRead> {
   let files: string[];
   try {
     files = await findTranscriptFilesForProject(paths.projectsDir, projectPath);
   } catch {
-    return [];
+    return {
+      sessions: [],
+      diagnostics: [
+        diagnostic(
+          'warn',
+          'Transcript files could not be discovered for the selected project.',
+          paths.projectsDir,
+        ),
+      ],
+    };
   }
 
-  const allEntries: ParsedTranscriptEntry[] = [];
-  for (const file of files) {
-    try {
-      allEntries.push(...(await parseTranscriptFile(file, projectPath)));
-    } catch {
-      continue;
-    }
-  }
+  const parsed = await parseTranscriptFilesForProjectWithDiagnostics(files, projectPath);
+  const allEntries: ParsedTranscriptEntry[] = parsed.entries;
 
   const bySession = new Map<string, ParsedTranscriptEntry[]>();
   for (const entry of allEntries) {
@@ -211,7 +220,10 @@ async function readTaskSessionReferences(
     });
   }
 
-  return refs.sort((a, b) => b.lastTimestamp.localeCompare(a.lastTimestamp));
+  return {
+    sessions: refs.sort((a, b) => b.lastTimestamp.localeCompare(a.lastTimestamp)),
+    diagnostics: parsed.diagnostics,
+  };
 }
 
 async function readTaskFile(
@@ -354,8 +366,9 @@ async function directoryExists(path: string): Promise<boolean> {
   }
 }
 
-function taskNotFound(path?: string): ApiError {
+function taskNotFound(path?: string, diagnostics: Diagnostic[] = []): ApiError {
   return new ApiError(404, 'TASK_NOT_FOUND', 'Task not found', [
+    ...diagnostics,
     diagnostic('error', 'Task not found for the selected project.', path),
   ]);
 }

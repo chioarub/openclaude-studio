@@ -2,15 +2,24 @@ import { lstat, readdir } from 'node:fs/promises';
 import type { Stats } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import type { ProjectSummary, SessionSummary } from '@openclaude-studio/shared';
+import type { Diagnostic, ProjectSummary, SessionSummary } from '@openclaude-studio/shared';
 
-import { encodeProjectPath, type OpenClaudePaths } from './paths.js';
+import {
+  encodeProjectPath,
+  isProjectTranscriptCwd,
+  isProjectTranscriptDirectoryName,
+  type OpenClaudePaths,
+} from './paths.js';
 import { redactTextSecrets } from './redaction.js';
 import { readBoundedTextFile } from './safeFile.js';
 
 type UnknownRecord = Record<string, unknown>;
 
 type SessionProject = Pick<ProjectSummary, 'path' | 'usage'>;
+
+type ParsedTranscriptRow = ParsedTranscriptEntry & {
+  cwd: string | null;
+};
 
 export type ParsedToolUse = {
   id: string | null;
@@ -51,6 +60,11 @@ export type ParsedTranscriptEntry = {
   sourcePath: string;
 };
 
+export type ParsedTranscriptFilesResult = {
+  entries: ParsedTranscriptEntry[];
+  diagnostics: Diagnostic[];
+};
+
 const maxTranscriptBytes = 10 * 1024 * 1024;
 const mutationTools = new Set(['Edit', 'MultiEdit', 'NotebookEdit', 'Write']);
 
@@ -59,10 +73,7 @@ export async function readSessionSummaries(
   project: SessionProject,
 ): Promise<SessionSummary[]> {
   const files = await findTranscriptFilesForProject(paths.projectsDir, project.path);
-  const entries: ParsedTranscriptEntry[] = [];
-  for (const file of files) {
-    entries.push(...(await parseTranscriptFile(file, project.path)));
-  }
+  const entries = await parseTranscriptFilesForProject(files, project.path);
 
   return summarizeSessions(entries, project).sort((left, right) =>
     right.lastTimestamp.localeCompare(left.lastTimestamp),
@@ -73,11 +84,17 @@ export async function findTranscriptFilesForProject(
   projectsDir: string,
   projectPath: string,
 ): Promise<string[]> {
-  const projectDir = join(projectsDir, encodeProjectPath(projectPath));
-  return collectJsonlFiles(projectDir);
+  const roots = await findTranscriptRootsForProject(projectsDir, projectPath);
+  const files = await Promise.all(roots.map((root) => collectJsonlFiles(root)));
+  return unique(files.flat()).sort((left, right) => left.localeCompare(right));
 }
 
 async function collectJsonlFiles(root: string): Promise<string[]> {
+  const rootStats = await safeLstat(root);
+  if (!rootStats || !rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+    return [];
+  }
+
   let entries;
   try {
     entries = await readdir(root, { withFileTypes: true });
@@ -106,16 +123,85 @@ async function collectJsonlFiles(root: string): Promise<string[]> {
   return files.sort((left, right) => left.localeCompare(right));
 }
 
+async function findTranscriptRootsForProject(
+  projectsDir: string,
+  projectPath: string,
+): Promise<string[]> {
+  const roots = [join(projectsDir, encodeProjectPath(projectPath))];
+
+  let entries;
+  try {
+    entries = await readdir(projectsDir, { withFileTypes: true });
+  } catch (error) {
+    if (isNodeFileError(error, 'ENOENT') || isNodeFileError(error, 'ENOTDIR')) {
+      return roots;
+    }
+    throw error;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !isProjectTranscriptDirectoryName(projectPath, entry.name)) {
+      continue;
+    }
+
+    const root = join(projectsDir, entry.name);
+    if (roots.includes(root)) {
+      continue;
+    }
+
+    roots.push(root);
+  }
+
+  return roots;
+}
+
 export async function parseTranscriptFile(
   filePath: string,
   projectPath: string,
 ): Promise<ParsedTranscriptEntry[]> {
+  const { rows } = await readTranscriptRows(filePath);
+  return filterTranscriptRowsForProject(rows, projectPath);
+}
+
+export async function parseTranscriptFilesForProject(
+  filePaths: string[],
+  projectPath: string,
+): Promise<ParsedTranscriptEntry[]> {
+  return (await parseTranscriptFilesForProjectWithDiagnostics(filePaths, projectPath)).entries;
+}
+
+export async function parseTranscriptFilesForProjectWithDiagnostics(
+  filePaths: string[],
+  projectPath: string,
+): Promise<ParsedTranscriptFilesResult> {
+  const reads = await Promise.all(
+    filePaths.map(async (filePath) => {
+      try {
+        return await readTranscriptRows(filePath);
+      } catch (error) {
+        return {
+          rows: [],
+          diagnostics: [transcriptReadDiagnostic(filePath, error)],
+        };
+      }
+    }),
+  );
+
+  return {
+    entries: filterTranscriptRowsForProject(reads.flatMap((read) => read.rows), projectPath),
+    diagnostics: reads.flatMap((read) => read.diagnostics),
+  };
+}
+
+async function readTranscriptRows(
+  filePath: string,
+): Promise<{ rows: ParsedTranscriptRow[]; diagnostics: Diagnostic[] }> {
   const result = await readBoundedTextFile(filePath, { maxBytes: maxTranscriptBytes });
   if (!result.exists) {
-    return [];
+    return { rows: [], diagnostics: result.diagnostics };
   }
 
-  const entries: ParsedTranscriptEntry[] = [];
+  const rows: ParsedTranscriptRow[] = [];
   for (const line of result.content.split(/\r?\n/)) {
     if (!line.trim()) {
       continue;
@@ -123,30 +209,82 @@ export async function parseTranscriptFile(
 
     try {
       const parsed = JSON.parse(line) as unknown;
-      const entry = transcriptEntryFromUnknown(parsed, projectPath);
+      const entry = transcriptEntryFromUnknown(parsed);
       if (entry) {
-        entries.push({ ...entry, sourcePath: filePath });
+        rows.push({ ...entry, sourcePath: filePath });
       }
     } catch {
       continue;
     }
   }
 
-  return entries;
+  return { rows, diagnostics: result.diagnostics };
 }
 
-function transcriptEntryFromUnknown(
-  value: unknown,
+function transcriptReadDiagnostic(filePath: string, _error: unknown): Diagnostic {
+  return {
+    level: 'warn',
+    message: 'Transcript file could not be read.',
+    path: filePath,
+  };
+}
+
+function filterTranscriptRowsForProject(
+  rows: ParsedTranscriptRow[],
   projectPath: string,
-): ParsedTranscriptEntry | null {
+): ParsedTranscriptEntry[] {
+  const sessionScopes = sessionScopesFromRows(rows, projectPath);
+
+  return rows
+    .filter((row) => shouldKeepTranscriptRow(row, projectPath, sessionScopes))
+    .map(toParsedTranscriptEntry);
+}
+
+function sessionScopesFromRows(
+  rows: ParsedTranscriptRow[],
+  projectPath: string,
+): Map<string, { hasProjectRows: boolean; hasOtherProjectRows: boolean }> {
+  const scopes = new Map<string, { hasProjectRows: boolean; hasOtherProjectRows: boolean }>();
+  for (const row of rows) {
+    if (!row.cwd) {
+      continue;
+    }
+
+    const scope = scopes.get(row.sessionId) ?? { hasProjectRows: false, hasOtherProjectRows: false };
+    if (isProjectTranscriptCwd(projectPath, row.cwd)) {
+      scope.hasProjectRows = true;
+    } else {
+      scope.hasOtherProjectRows = true;
+    }
+    scopes.set(row.sessionId, scope);
+  }
+  return scopes;
+}
+
+function shouldKeepTranscriptRow(
+  row: ParsedTranscriptRow,
+  projectPath: string,
+  sessionScopes: Map<string, { hasProjectRows: boolean; hasOtherProjectRows: boolean }>,
+): boolean {
+  const scope = sessionScopes.get(row.sessionId);
+  if (!scope?.hasProjectRows) {
+    return false;
+  }
+  if (row.cwd) {
+    return isProjectTranscriptCwd(projectPath, row.cwd);
+  }
+  return !scope.hasOtherProjectRows;
+}
+
+function transcriptEntryFromUnknown(value: unknown): ParsedTranscriptRow | null {
   if (!isRecord(value) || value.isMeta === true) {
     return null;
   }
 
   const sessionId = stringFromUnknown(value.sessionId);
   const timestamp = normalizeTimestamp(value.timestamp);
-  const cwd = stringFromUnknown(value.cwd);
-  if (!sessionId || !timestamp || !cwd || resolve(cwd) !== resolve(projectPath)) {
+  const cwd = readTranscriptCwd(value);
+  if (!sessionId || !timestamp) {
     return null;
   }
 
@@ -193,8 +331,21 @@ function transcriptEntryFromUnknown(
     toolUses,
     toolResult,
     failed,
+    cwd,
     sourcePath: '',
   };
+}
+
+function readTranscriptCwd(value: UnknownRecord): string | null {
+  const cwd =
+    stringFromUnknown(value.cwd) ??
+    stringFromUnknown(value.projectPath) ??
+    stringFromUnknown(value.project_path);
+  return cwd ? resolve(cwd) : null;
+}
+
+function toParsedTranscriptEntry({ cwd: _cwd, ...entry }: ParsedTranscriptRow): ParsedTranscriptEntry {
+  return entry;
 }
 
 function summarizeSessions(

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -57,6 +57,106 @@ describe('project tasks', () => {
       sessionTitle: 'Use selected task',
     });
     expect(JSON.stringify(result.tasks)).not.toContain('Other task');
+  });
+
+  test('keeps readable task sessions when another transcript file is unreadable', async () => {
+    const { paths, project } = await makeTasksHome();
+    await writeTask(paths, 'session-selected', '1', {
+      subject: 'Selected task',
+      status: 'pending',
+    });
+    await writeTranscript(paths, project.path, 'session-selected', 'Use selected task');
+    const unreadablePath = await writeTranscriptRows(paths, project.path, 'session-unreadable', [
+      {
+        type: 'user',
+        timestamp: '2026-05-16T10:01:00.000Z',
+        sessionId: 'session-unreadable',
+        cwd: project.path,
+        message: { role: 'user', content: 'Unreadable transcript' },
+      },
+    ]);
+
+    await chmod(unreadablePath, 0);
+    try {
+      const result = await listProjectTasks(paths, project);
+
+      expect(result.tasks).toEqual([
+        expect.objectContaining({
+          id: 'session-selected:1',
+          title: 'Selected task',
+          sessionTitle: 'Use selected task',
+        }),
+      ]);
+      expect(result.diagnostics).toContainEqual({
+        level: 'warn',
+        message: 'Transcript file could not be read.',
+        path: unreadablePath,
+      });
+    } finally {
+      await chmod(unreadablePath, 0o600).catch(() => undefined);
+    }
+  });
+
+  test('reports transcript discovery failures in task list and detail responses', async () => {
+    const { paths, project } = await makeTasksHome();
+    await writeTask(paths, 'session-selected', '1', {
+      subject: 'Selected task',
+      status: 'pending',
+    });
+    await mkdir(paths.projectsDir, { recursive: true });
+
+    await chmod(paths.projectsDir, 0);
+    try {
+      const result = await listProjectTasks(paths, project);
+
+      expect(result.tasks).toEqual([]);
+      expect(result.diagnostics).toContainEqual({
+        level: 'warn',
+        message: 'Transcript files could not be discovered for the selected project.',
+        path: paths.projectsDir,
+      });
+      await expect(readProjectTask(paths, project, 'session-selected', '1')).rejects.toMatchObject({
+        code: 'TASK_NOT_FOUND',
+        diagnostics: expect.arrayContaining([
+          {
+            level: 'warn',
+            message: 'Transcript files could not be discovered for the selected project.',
+            path: paths.projectsDir,
+          },
+        ]),
+      });
+    } finally {
+      await chmod(paths.projectsDir, 0o700).catch(() => undefined);
+    }
+  });
+
+  test('lists tasks linked to selected-project worktree sessions', async () => {
+    const { paths, project } = await makeTasksHome();
+    const worktreePath = join(project.path, '.claude', 'worktrees', 'feature-a');
+    await writeTask(paths, 'session-worktree', '1', {
+      subject: 'Worktree task',
+      status: 'in_progress',
+      description: 'Task created from a project worktree.',
+    });
+    await writeTranscriptRows(paths, worktreePath, 'session-worktree', [
+      {
+        type: 'user',
+        timestamp: '2026-05-16T10:00:00.000Z',
+        sessionId: 'session-worktree',
+        cwd: worktreePath,
+        message: { role: 'user', content: 'Use worktree task' },
+      },
+    ]);
+
+    const result = await listProjectTasks(paths, project);
+
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0]).toMatchObject({
+      id: 'session-worktree:1',
+      title: 'Worktree task',
+      sessionTitle: 'Use worktree task',
+    });
+    expect(result.diagnostics).toEqual([]);
   });
 
   test('restricts task details to selected-project session tasks', async () => {
@@ -183,6 +283,101 @@ describe('project tasks', () => {
     );
   });
 
+  test('does not expose task artifacts when encoded project path collisions share a session id', async () => {
+    const { paths, project, home } = await makeTasksHome();
+    const collidingProjectPath = join(home, 'selected', 'project');
+    await writeTask(paths, 'session-collision', '1', {
+      subject: 'Ambiguous task',
+      status: 'pending',
+    });
+    await writeTranscript(paths, project.path, 'session-collision', 'Selected project session');
+    await writeTranscriptRows(paths, collidingProjectPath, 'other-session-collision', [
+      {
+        type: 'user',
+        timestamp: '2026-05-16T10:01:00.000Z',
+        sessionId: 'session-collision',
+        cwd: collidingProjectPath,
+        message: { role: 'user', content: 'Other project session' },
+      },
+    ]);
+
+    const result = await listProjectTasks(paths, project);
+
+    expect(encodeProjectPath(collidingProjectPath)).toBe(encodeProjectPath(project.path));
+    expect(result.tasks).toEqual([]);
+    expect(result.diagnostics).toEqual([
+      {
+        level: 'warn',
+        message: 'Task artifacts are hidden because this session ID also appears in another project.',
+        path: join(paths.tasksDir, 'session-collision'),
+      },
+    ]);
+  });
+
+  test('keeps task artifacts when the selected transcript has pathless continuation rows', async () => {
+    const { paths, project } = await makeTasksHome();
+    await writeTask(paths, 'session-pathless', '1', {
+      subject: 'Selected pathless task',
+      status: 'pending',
+    });
+    await writeTranscriptRows(paths, project.path, 'session-pathless', [
+      {
+        type: 'user',
+        timestamp: '2026-05-16T10:00:00.000Z',
+        sessionId: 'session-pathless',
+        cwd: project.path,
+        message: { role: 'user', content: 'Selected project session' },
+      },
+      {
+        type: 'assistant',
+        timestamp: '2026-05-16T10:01:00.000Z',
+        sessionId: 'session-pathless',
+        message: { role: 'assistant', content: 'Continuation without cwd.' },
+      },
+    ]);
+
+    const result = await listProjectTasks(paths, project);
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.tasks).toEqual([
+      expect.objectContaining({
+        id: 'session-pathless:1',
+        title: 'Selected pathless task',
+        sessionTitle: 'Selected project session',
+      }),
+    ]);
+  });
+
+  test('does not expose task artifacts when a colliding transcript row is pathless', async () => {
+    const { paths, project, home } = await makeTasksHome();
+    const collidingProjectPath = join(home, 'selected', 'project');
+    await writeTask(paths, 'session-collision', '1', {
+      subject: 'Ambiguous pathless task',
+      status: 'pending',
+    });
+    await writeTranscript(paths, project.path, 'session-collision', 'Selected project session');
+    await writeTranscriptRows(paths, collidingProjectPath, 'pathless-session-collision', [
+      {
+        type: 'user',
+        timestamp: '2026-05-16T10:01:00.000Z',
+        sessionId: 'session-collision',
+        message: { role: 'user', content: 'Pathless colliding session' },
+      },
+    ]);
+
+    const result = await listProjectTasks(paths, project);
+
+    expect(encodeProjectPath(collidingProjectPath)).toBe(encodeProjectPath(project.path));
+    expect(result.tasks).toEqual([]);
+    expect(result.diagnostics).toEqual([
+      {
+        level: 'warn',
+        message: 'Task artifacts are hidden because this session ID also appears in another project.',
+        path: join(paths.tasksDir, 'session-collision'),
+      },
+    ]);
+  });
+
   test('detects ambiguous task artifacts when another project stores the session in a differently named transcript', async () => {
     const { paths, project, otherProjectPath } = await makeTasksHome();
     await writeTask(paths, 'session-collision', '1', {
@@ -233,6 +428,30 @@ describe('project tasks', () => {
     expect(details.task.content).not.toContain('nested-secret-value');
   });
 
+  test('does not include unrelated list diagnostics in successful task details', async () => {
+    const { paths, project } = await makeTasksHome();
+    await writeTask(paths, 'session-selected', 'valid', {
+      subject: 'Valid task',
+      status: 'pending',
+    });
+    const brokenTaskPath = await writeRawTask(paths, 'session-selected', 'broken', '{not json');
+    await writeTranscript(paths, project.path, 'session-selected', 'Use selected task');
+
+    const result = await listProjectTasks(paths, project);
+
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        path: brokenTaskPath,
+      }),
+    ]);
+
+    const details = await readProjectTask(paths, project, 'session-selected', 'valid');
+
+    expect(details.task.title).toBe('Valid task');
+    expect(details.diagnostics).toEqual([]);
+  });
+
   test('reports truncated oversized task files in list and detail flows', async () => {
     const { paths, project } = await makeTasksHome();
     const taskPath = await writeRawTask(
@@ -261,11 +480,13 @@ describe('project tasks', () => {
 
     expect(details.task.title).toBe('Large task');
     expect(details.task.content).toContain('"subject": "Large task"');
-    expect(details.diagnostics).toContainEqual({
-      level: 'warn',
-      message: 'File was truncated to 262144 bytes.',
-      path: taskPath,
-    });
+    expect(details.diagnostics).toEqual([
+      {
+        level: 'warn',
+        message: 'File was truncated to 262144 bytes.',
+        path: taskPath,
+      },
+    ]);
   });
 });
 
@@ -333,8 +554,10 @@ async function writeTranscriptRows(
 ) {
   const transcriptDir = join(paths.projectsDir, encodeProjectPath(projectPath));
   await mkdir(transcriptDir, { recursive: true });
+  const transcriptPath = join(transcriptDir, `${fileName}.jsonl`);
   await writeFile(
-    join(transcriptDir, `${fileName}.jsonl`),
+    transcriptPath,
     `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`,
   );
+  return transcriptPath;
 }

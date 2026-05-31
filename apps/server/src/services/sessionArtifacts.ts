@@ -1,11 +1,17 @@
 import { lstat, readdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 
-import { encodeProjectPath } from './paths.js';
+import { isProjectTranscriptCwd, isProjectTranscriptDirectoryName } from './paths.js';
 import { readBoundedTextFile } from './safeFile.js';
 
 const ARTIFACT_SCOPE_SCAN_MAX_DEPTH = 10;
 const TRANSCRIPT_SCAN_MAX_BYTES = 10 * 1024 * 1024;
+
+type TranscriptSessionScope = {
+  hasPathlessSessionRow: boolean;
+  hasProjectSessionRow: boolean;
+  hasOutsideProjectRow: boolean;
+};
 
 export async function isUnambiguousSessionArtifactScope(
   projectsDir: string,
@@ -16,7 +22,6 @@ export async function isUnambiguousSessionArtifactScope(
     return false;
   }
 
-  const selectedProjectDir = resolve(join(projectsDir, encodeProjectPath(projectPath)));
   let entries;
   try {
     entries = await readdir(projectsDir, { withFileTypes: true });
@@ -37,7 +42,10 @@ export async function isUnambiguousSessionArtifactScope(
     if (!stats || !stats.isDirectory() || stats.isSymbolicLink()) {
       continue;
     }
-    if (resolve(candidateDir) === selectedProjectDir) {
+    if (isProjectTranscriptDirectoryName(projectPath, entry.name)) {
+      if (await directoryContainsSessionOutsideProject(candidateDir, projectPath, sessionId, 0)) {
+        return false;
+      }
       continue;
     }
     if (await directoryContainsSessionTranscript(candidateDir, sessionId, 0)) {
@@ -60,7 +68,6 @@ export async function findAmbiguousSessionArtifactIds(
     return ambiguous;
   }
 
-  const selectedProjectDir = resolve(join(projectsDir, encodeProjectPath(projectPath)));
   let entries;
   try {
     entries = await readdir(projectsDir, { withFileTypes: true });
@@ -84,7 +91,8 @@ export async function findAmbiguousSessionArtifactIds(
     if (!stats || !stats.isDirectory() || stats.isSymbolicLink()) {
       continue;
     }
-    if (resolve(candidateDir) === selectedProjectDir) {
+    if (isProjectTranscriptDirectoryName(projectPath, entry.name)) {
+      await collectSessionProjectMismatches(candidateDir, projectPath, remaining, ambiguous, 0);
       continue;
     }
 
@@ -92,6 +100,101 @@ export async function findAmbiguousSessionArtifactIds(
   }
 
   return ambiguous;
+}
+
+async function directoryContainsSessionOutsideProject(
+  root: string,
+  projectPath: string,
+  sessionId: string,
+  depth: number,
+): Promise<boolean> {
+  if (depth > ARTIFACT_SCOPE_SCAN_MAX_DEPTH) {
+    return true;
+  }
+
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+
+  for (const entry of entries) {
+    const entryPath = join(root, entry.name);
+    const stats = await safeLstat(entryPath);
+    if (!stats || stats.isSymbolicLink()) {
+      continue;
+    }
+
+    if (stats.isDirectory()) {
+      if (await directoryContainsSessionOutsideProject(entryPath, projectPath, sessionId, depth + 1)) {
+        return true;
+      }
+      continue;
+    }
+
+    if (!stats.isFile() || !entry.name.endsWith('.jsonl')) {
+      continue;
+    }
+    if (await transcriptFileContainsSessionOutsideProject(entryPath, projectPath, sessionId)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function collectSessionProjectMismatches(
+  root: string,
+  projectPath: string,
+  remaining: Set<string>,
+  ambiguous: Set<string>,
+  depth: number,
+): Promise<void> {
+  if (remaining.size === 0) {
+    return;
+  }
+  if (depth > ARTIFACT_SCOPE_SCAN_MAX_DEPTH) {
+    for (const sessionId of remaining) {
+      ambiguous.add(sessionId);
+    }
+    remaining.clear();
+    return;
+  }
+
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (remaining.size === 0) {
+      return;
+    }
+
+    const entryPath = join(root, entry.name);
+    const stats = await safeLstat(entryPath);
+    if (!stats || stats.isSymbolicLink()) {
+      continue;
+    }
+
+    if (stats.isDirectory()) {
+      await collectSessionProjectMismatches(entryPath, projectPath, remaining, ambiguous, depth + 1);
+      continue;
+    }
+
+    if (!stats.isFile() || !entry.name.endsWith('.jsonl')) {
+      continue;
+    }
+
+    const mismatchedIds = await transcriptFileSessionIdsOutsideProject(entryPath, projectPath, remaining);
+    for (const sessionId of mismatchedIds) {
+      ambiguous.add(sessionId);
+      remaining.delete(sessionId);
+    }
+  }
 }
 
 function isSafeSessionScopedArtifactId(value: string): boolean {
@@ -229,6 +332,52 @@ async function transcriptFileContainsSessionId(filePath: string, sessionId: stri
   return false;
 }
 
+async function transcriptFileContainsSessionOutsideProject(
+  filePath: string,
+  projectPath: string,
+  sessionId: string,
+): Promise<boolean> {
+  try {
+    const file = await readBoundedTextFile(filePath, { maxBytes: TRANSCRIPT_SCAN_MAX_BYTES });
+    if (!file.exists || !file.content.includes(sessionId)) {
+      return false;
+    }
+
+    let hasPathlessSessionRow = false;
+    let hasProjectSessionRow = false;
+    for (const line of file.content.split(/\r?\n/)) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        if (!isRecord(parsed) || parsed.sessionId !== sessionId) {
+          continue;
+        }
+
+        const cwd = transcriptCwdFromRecord(parsed);
+        if (!cwd) {
+          hasPathlessSessionRow = true;
+          continue;
+        }
+
+        if (isProjectTranscriptCwd(projectPath, cwd)) {
+          hasProjectSessionRow = true;
+          continue;
+        }
+
+        return true;
+      } catch {
+        continue;
+      }
+    }
+
+    return hasPathlessSessionRow && !hasProjectSessionRow;
+  } catch {
+    return false;
+  }
+}
+
 async function transcriptFileSessionIdsInSet(filePath: string, sessionIds: Set<string>): Promise<Set<string>> {
   const found = new Set<string>();
   if (sessionIds.size === 0) {
@@ -269,6 +418,77 @@ async function transcriptFileSessionIdsInSet(filePath: string, sessionIds: Set<s
   return found;
 }
 
+async function transcriptFileSessionIdsOutsideProject(
+  filePath: string,
+  projectPath: string,
+  sessionIds: Set<string>,
+): Promise<Set<string>> {
+  const found = new Set<string>();
+  if (sessionIds.size === 0) {
+    return found;
+  }
+
+  try {
+    const file = await readBoundedTextFile(filePath, { maxBytes: TRANSCRIPT_SCAN_MAX_BYTES });
+    if (!file.exists) {
+      return found;
+    }
+    const candidateIds = [...sessionIds].filter((sessionId) => file.content.includes(sessionId));
+    if (candidateIds.length === 0) {
+      return found;
+    }
+    const candidateSet = new Set(candidateIds);
+    const scopes = new Map<string, TranscriptSessionScope>();
+
+    for (const line of file.content.split(/\r?\n/)) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        if (!isRecord(parsed) || typeof parsed.sessionId !== 'string' || !candidateSet.has(parsed.sessionId)) {
+          continue;
+        }
+
+        const scope = scopes.get(parsed.sessionId) ?? {
+          hasPathlessSessionRow: false,
+          hasProjectSessionRow: false,
+          hasOutsideProjectRow: false,
+        };
+        const cwd = transcriptCwdFromRecord(parsed);
+        if (!cwd) {
+          scope.hasPathlessSessionRow = true;
+        } else if (isProjectTranscriptCwd(projectPath, cwd)) {
+          scope.hasProjectSessionRow = true;
+        } else {
+          scope.hasOutsideProjectRow = true;
+        }
+        scopes.set(parsed.sessionId, scope);
+      } catch {
+        continue;
+      }
+    }
+
+    for (const [sessionId, scope] of scopes) {
+      if (scope.hasOutsideProjectRow || (scope.hasPathlessSessionRow && !scope.hasProjectSessionRow)) {
+        found.add(sessionId);
+      }
+    }
+  } catch {
+    return found;
+  }
+
+  return found;
+}
+
+function transcriptCwdFromRecord(value: Record<string, unknown>): string | null {
+  return (
+    stringFromUnknown(value.cwd) ??
+    stringFromUnknown(value.projectPath) ??
+    stringFromUnknown(value.project_path)
+  );
+}
+
 async function safeLstat(path: string) {
   try {
     return await lstat(path);
@@ -279,6 +499,10 @@ async function safeLstat(path: string) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stringFromUnknown(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 function isNodeFileError(error: unknown, code: string): error is NodeJS.ErrnoException {

@@ -12,7 +12,6 @@ import type {
 } from '@openclaude-studio/shared';
 
 import type { OpenClaudePaths } from './paths.js';
-import { encodeProjectPath } from './paths.js';
 import { redactTextSecrets } from './redaction.js';
 import { readBoundedTextFile } from './safeFile.js';
 import {
@@ -20,7 +19,7 @@ import {
   type ParsedToolUse,
   type ParsedTranscriptEntry,
   findTranscriptFilesForProject,
-  parseTranscriptFile,
+  parseTranscriptFilesForProject,
 } from './sessions.js';
 import { isUnambiguousSessionArtifactScope } from './sessionArtifacts.js';
 
@@ -39,12 +38,8 @@ export async function readSessionDetails(
   project: SessionProject,
   sessionId: string,
 ): Promise<SessionDetailsResponse | null> {
-  const files = await findCandidateTranscriptFiles(paths.projectsDir, project.path, sessionId);
-  const allEntries: ParsedTranscriptEntry[] = [];
-
-  for (const file of files) {
-    allEntries.push(...(await parseTranscriptFile(file, project.path)));
-  }
+  const files = await findTranscriptFilesForProject(paths.projectsDir, project.path);
+  const allEntries = await parseTranscriptFilesForProject(files, project.path);
 
   const entries = allEntries.filter((entry) => entry.sessionId === sessionId);
   if (entries.length === 0) {
@@ -60,29 +55,6 @@ export async function readSessionDetails(
   };
 }
 
-async function findCandidateTranscriptFiles(
-  projectsDir: string,
-  projectPath: string,
-  sessionId: string,
-): Promise<string[]> {
-  const projectDir = join(projectsDir, encodeProjectPath(projectPath));
-  const directFile = safeChildPath(projectDir, `${sessionId}.jsonl`);
-  if (directFile) {
-    try {
-      const stats = await lstat(directFile);
-      if (stats.isFile() && !stats.isSymbolicLink()) {
-        return [directFile];
-      }
-    } catch (error) {
-      if (!isNodeFileError(error, 'ENOENT')) {
-        throw error;
-      }
-    }
-  }
-
-  return findTranscriptFilesForProject(projectsDir, projectPath);
-}
-
 async function buildSessionDetails(
   sessionId: string,
   entries: ParsedTranscriptEntry[],
@@ -96,7 +68,9 @@ async function buildSessionDetails(
     .filter((row) => row.role === 'user')
     .map((row) => cleanDetailTitle(row.text))
     .find(Boolean);
-  const sourcePath = entries[0]?.sourcePath ?? '';
+  const sourcePaths = unique(
+    entries.map((entry) => entry.sourcePath).filter((path): path is string => Boolean(path)),
+  );
   const linkedPlans = await readLinkedPlans(entries, paths.plansDir);
   const artifactScopeIsUnambiguous = await isUnambiguousSessionArtifactScope(
     paths.projectsDir,
@@ -107,7 +81,7 @@ async function buildSessionDetails(
     artifactScopeIsUnambiguous
       ? await Promise.all([
           readLinkedTasks(paths.tasksDir, sessionId),
-          readFileHistory(paths.fileHistoryDir, sessionId, sourcePath),
+          readFileHistory(paths.fileHistoryDir, sessionId, sourcePaths),
           hasSafeSessionDirectoryEntries(paths.fileHistoryDir, sessionId),
         ])
       : [[], [], false];
@@ -459,35 +433,37 @@ function markdownTitle(content: string): string | null {
 async function readFileHistory(
   fileHistoryDir: string,
   sessionId: string,
-  transcriptPath: string,
+  transcriptPaths: string[],
 ): Promise<SessionFileHistoryEntry[]> {
   const sessionHistoryDir = safeChildPath(fileHistoryDir, sessionId);
-  if (!sessionHistoryDir || !transcriptPath) {
-    return [];
-  }
-
-  let content = '';
-  try {
-    const transcript = await readBoundedTextFile(transcriptPath, { maxBytes: FILE_HISTORY_TRANSCRIPT_MAX_BYTES });
-    if (!transcript.exists) {
-      return [];
-    }
-    content = transcript.content;
-  } catch {
+  if (!sessionHistoryDir || transcriptPaths.length === 0) {
     return [];
   }
 
   const historyEntries: Array<Omit<SessionFileHistoryEntry, 'backupExists'>> = [];
-  for (const line of content.split(/\r?\n/)) {
-    if (!line.trim()) {
+  for (const transcriptPath of transcriptPaths) {
+    let content = '';
+    try {
+      const transcript = await readBoundedTextFile(transcriptPath, { maxBytes: FILE_HISTORY_TRANSCRIPT_MAX_BYTES });
+      if (!transcript.exists) {
+        continue;
+      }
+      content = transcript.content;
+    } catch {
       continue;
     }
 
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      historyEntries.push(...fileHistoryEntriesFromUnknown(parsed));
-    } catch {
-      continue;
+    for (const line of content.split(/\r?\n/)) {
+      if (!line.trim()) {
+        continue;
+      }
+
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        historyEntries.push(...fileHistoryEntriesFromUnknown(parsed));
+      } catch {
+        continue;
+      }
     }
   }
 
@@ -723,8 +699,4 @@ function stringFromUnknown(value: unknown): string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isNodeFileError(error: unknown, code: string): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error && error.code === code;
 }

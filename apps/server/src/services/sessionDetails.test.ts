@@ -89,6 +89,52 @@ describe('readSessionDetails', () => {
     }
   });
 
+  test('includes same-session transcript chunks when the direct transcript file exists', async () => {
+    const { projectPath, paths, cleanup } = await setup();
+    try {
+      const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(
+        join(projectDir, 'session-chunks.jsonl'),
+        jsonl({
+          type: 'user',
+          sessionId: 'session-chunks',
+          timestamp: '2026-05-28T08:00:00.000Z',
+          cwd: projectPath,
+          message: { role: 'user', content: 'Inspect all chunks' },
+        }),
+        'utf8',
+      );
+      await writeFile(
+        join(projectDir, 'agent-session-chunks.jsonl'),
+        jsonl({
+          type: 'assistant',
+          sessionId: 'session-chunks',
+          timestamp: '2026-05-28T08:01:00.000Z',
+          cwd: projectPath,
+          message: {
+            role: 'assistant',
+            model: 'claude-sonnet',
+            usage: { input_tokens: 4, output_tokens: 9 },
+            content: [{ type: 'text', text: 'Included side transcript chunk.' }],
+          },
+        }),
+        'utf8',
+      );
+
+      const result = await readSessionDetails(paths, projectSummary(projectPath), 'session-chunks');
+
+      expect(result).not.toBeNull();
+      expect(result!.session.tokens).toMatchObject({ input: 4, output: 9 });
+      expect(result!.timeline.map((event) => event.content)).toEqual([
+        'Inspect all chunks',
+        'Included side transcript chunk.',
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   test('returns null when session ID does not exist', async () => {
     const { projectPath, paths, cleanup } = await setup();
     try {
@@ -799,6 +845,189 @@ describe('readSessionDetails', () => {
       expect(result!.session.linkedTasks).toEqual([]);
       expect(result!.session.fileHistory).toEqual([]);
       expect(result!.session.fileHistoryAvailable).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('skips global session artifacts when encoded project path collisions share a session id', async () => {
+    const { home, projectPath, paths, cleanup } = await setup();
+    try {
+      const collidingProjectPath = join(home, 'project', 'a');
+      const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+      await mkdir(projectDir, { recursive: true });
+      await mkdir(join(paths.tasksDir, 'session-collision'), { recursive: true });
+      await mkdir(join(paths.fileHistoryDir, 'session-collision'), { recursive: true });
+      await writeFile(
+        join(paths.tasksDir, 'session-collision', '1.json'),
+        JSON.stringify({
+          id: '1',
+          subject: 'Ambiguous task',
+          status: 'pending',
+          description: 'This must not be exposed when project path encoding collides.',
+        }),
+        'utf8',
+      );
+      await writeFile(join(paths.fileHistoryDir, 'session-collision', 'abc123@v1'), 'old content\n', 'utf8');
+      await writeFile(
+        join(projectDir, 'session-collision.jsonl'),
+        [
+          jsonl({
+            type: 'user',
+            sessionId: 'session-collision',
+            timestamp: '2026-05-28T17:10:00.000Z',
+            cwd: projectPath,
+            message: { role: 'user', content: 'Selected project session' },
+          }),
+          jsonl(fileHistorySnapshot({
+            timestamp: '2026-05-28T17:11:00.000Z',
+            trackedFileBackups: {
+              'src/App.tsx': {
+                backupFileName: 'abc123@v1',
+                version: 1,
+                backupTime: '2026-05-28T17:11:00.000Z',
+              },
+            },
+          })),
+          jsonl({
+            type: 'user',
+            sessionId: 'session-collision',
+            timestamp: '2026-05-28T17:12:00.000Z',
+            cwd: collidingProjectPath,
+            message: { role: 'user', content: 'Other project session' },
+          }),
+        ].join('\n'),
+        'utf8',
+      );
+
+      const result = await readSessionDetails(paths, projectSummary(projectPath), 'session-collision');
+
+      expect(encodeProjectPath(collidingProjectPath)).toBe(encodeProjectPath(projectPath));
+      expect(result).not.toBeNull();
+      expect(result!.session.linkedTasks).toEqual([]);
+      expect(result!.session.fileHistory).toEqual([]);
+      expect(result!.session.fileHistoryAvailable).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('keeps session-scoped artifacts for selected project worktree transcripts', async () => {
+    const { projectPath, paths, cleanup } = await setup();
+    try {
+      const worktreePath = join(projectPath, '.claude', 'worktrees', 'feature-a');
+      const worktreeDir = join(paths.projectsDir, encodeProjectPath(worktreePath));
+      await mkdir(worktreeDir, { recursive: true });
+      await mkdir(join(paths.tasksDir, 'session-worktree'), { recursive: true });
+      await mkdir(join(paths.fileHistoryDir, 'session-worktree'), { recursive: true });
+      await writeFile(
+        join(paths.tasksDir, 'session-worktree', '1.json'),
+        JSON.stringify({
+          id: '1',
+          subject: 'Review worktree session',
+          status: 'pending',
+          description: 'Task linked to the worktree session.',
+        }),
+        'utf8',
+      );
+      await writeFile(join(paths.fileHistoryDir, 'session-worktree', 'abc123@v1'), 'old content\n', 'utf8');
+      await writeFile(
+        join(worktreeDir, 'session-worktree.jsonl'),
+        [
+          jsonl({
+            type: 'user',
+            sessionId: 'session-worktree',
+            timestamp: '2026-05-28T17:10:00.000Z',
+            cwd: worktreePath,
+            message: { role: 'user', content: 'Inspect the worktree session' },
+          }),
+          jsonl(fileHistorySnapshot({
+            timestamp: '2026-05-28T17:11:00.000Z',
+            trackedFileBackups: {
+              'src/App.tsx': {
+                backupFileName: 'abc123@v1',
+                version: 1,
+                backupTime: '2026-05-28T17:11:00.000Z',
+              },
+            },
+          })),
+        ].join('\n'),
+        'utf8',
+      );
+
+      const result = await readSessionDetails(paths, projectSummary(projectPath), 'session-worktree');
+
+      expect(result).not.toBeNull();
+      expect(result!.session.linkedTasks).toEqual([
+        expect.objectContaining({ id: '1', title: 'Review worktree session' }),
+      ]);
+      expect(result!.session.fileHistory).toEqual([
+        expect.objectContaining({ filePath: 'src/App.tsx', backupExists: true }),
+      ]);
+      expect(result!.session.fileHistoryAvailable).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('reads file-history snapshots from every transcript chunk in a session', async () => {
+    const { projectPath, paths, cleanup } = await setup();
+    try {
+      const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+      await mkdir(projectDir, { recursive: true });
+      await mkdir(join(paths.fileHistoryDir, 'session-history-chunks'), { recursive: true });
+      await writeFile(join(paths.fileHistoryDir, 'session-history-chunks', 'abc123@v1'), 'old content\n', 'utf8');
+      await writeFile(
+        join(projectDir, 'session-history-chunks.jsonl'),
+        jsonl({
+          type: 'user',
+          sessionId: 'session-history-chunks',
+          timestamp: '2026-05-28T18:00:00.000Z',
+          cwd: projectPath,
+          message: { role: 'user', content: 'Track file history across chunks' },
+        }),
+        'utf8',
+      );
+      await writeFile(
+        join(projectDir, 'agent-session-history-chunks.jsonl'),
+        [
+          jsonl({
+            type: 'assistant',
+            sessionId: 'session-history-chunks',
+            timestamp: '2026-05-28T18:01:00.000Z',
+            cwd: projectPath,
+            message: {
+              role: 'assistant',
+              model: 'claude-sonnet',
+              content: [{ type: 'text', text: 'Updated file history.' }],
+            },
+          }),
+          jsonl(fileHistorySnapshot({
+            timestamp: '2026-05-28T18:02:00.000Z',
+            trackedFileBackups: {
+              'src/App.tsx': {
+                backupFileName: 'abc123@v1',
+                version: 1,
+                backupTime: '2026-05-28T18:02:00.000Z',
+              },
+            },
+          })),
+        ].join('\n'),
+        'utf8',
+      );
+
+      const result = await readSessionDetails(paths, projectSummary(projectPath), 'session-history-chunks');
+
+      expect(result).not.toBeNull();
+      expect(result!.session.fileHistory).toEqual([
+        expect.objectContaining({
+          filePath: 'src/App.tsx',
+          backupFileName: 'abc123@v1',
+          version: 1,
+          backupExists: true,
+        }),
+      ]);
+      expect(result!.session.fileHistoryAvailable).toBe(true);
     } finally {
       await cleanup();
     }

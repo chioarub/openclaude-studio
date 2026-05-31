@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 export type PathOptions = {
   home?: string;
@@ -36,4 +36,23 @@ export function createOpenClaudePaths(options: PathOptions = {}) {
 
 export function encodeProjectPath(projectPath: string): string {
   return resolve(projectPath).replace(/[^a-zA-Z0-9]/g, '-');
+}
+
+export function isProjectTranscriptDirectoryName(projectPath: string, directoryName: string): boolean {
+  const encodedProjectPath = encodeProjectPath(projectPath);
+  return (
+    directoryName === encodedProjectPath ||
+    directoryName.startsWith(`${encodedProjectPath}--claude-worktrees-`)
+  );
+}
+
+export function isProjectTranscriptCwd(projectPath: string, cwd: string): boolean {
+  const resolvedProjectPath = resolve(projectPath);
+  const resolvedCwd = resolve(cwd);
+  return isSameOrChildPath(resolvedCwd, resolvedProjectPath);
+}
+
+function isSameOrChildPath(candidate: string, parent: string): boolean {
+  const parentPrefix = parent.endsWith(sep) ? parent : `${parent}${sep}`;
+  return candidate === parent || candidate.startsWith(parentPrefix);
 }
