@@ -6,6 +6,12 @@ This project uses semantic versioning for the published `openclaude-studio` npm 
 
 ## Unreleased
 
+## 0.2.1
+
+- Added GitHub Release creation to the release workflow from the matching changelog section, with job-scoped token permissions and idempotent behavior when the npm version already exists.
+- Pinned the GitHub Release job checkout action and added release workflow validation coverage for the pinned checkout and release safety checks.
+- Aligned contributor, security, architecture, privacy, and README documentation with the current read-only scope for plans, tasks, and file-history data.
+
 ## 0.2.0
 
 - Added the Plans & Tasks control tower with project plan files, task status groups, checklist progress, detail panes, and linked session context.
