@@ -68,8 +68,8 @@ Local server on 127.0.0.1:43110
 ~/.openclaude/projects/
 ~/.openclaude/plans/
 ~/.openclaude/tasks/
+~/.openclaude/file-history/
 ~/.openclaude/debug/
-<project>/.openclaude/file-history/
 ```
 
 The web UI can run locally during development or be hosted as static assets. The server should run on the same machine as OpenClaude because it reads local OpenClaude files.

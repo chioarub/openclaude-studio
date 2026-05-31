@@ -24,8 +24,8 @@ The server binds to `127.0.0.1:43110` by default and reads:
 - `~/.openclaude/projects/`
 - `~/.openclaude/plans/`
 - `~/.openclaude/tasks/`
+- `~/.openclaude/file-history/`
 - `~/.openclaude/debug/`
-- project-local `.openclaude/file-history/`
 
 Startup output includes the local API URL, the hosted dashboard URL, read-only mode, and the allowed browser origins:
 

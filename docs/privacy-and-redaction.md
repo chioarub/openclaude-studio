@@ -10,7 +10,7 @@ The local API may read:
 - `~/.openclaude/projects/`
 - `~/.openclaude/plans/`
 - `~/.openclaude/tasks/`
-- project-local `.openclaude/file-history/`
+- `~/.openclaude/file-history/`
 - `~/.openclaude/debug/`
 
 The app is read-only in the current MVP line. It should not write OpenClaude config, sessions, logs, provider profiles, project files, tasks, or plans.

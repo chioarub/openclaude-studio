@@ -21,8 +21,8 @@ Local API on 127.0.0.1:43110
 ~/.openclaude/projects/
 ~/.openclaude/plans/
 ~/.openclaude/tasks/
+~/.openclaude/file-history/
 ~/.openclaude/debug/
-<project>/.openclaude/file-history/
 ```
 
 ## Server Responsibilities
@@ -31,7 +31,7 @@ The server is intentionally narrow:
 
 - Discover OpenClaude projects from local config.
 - Read session summaries and rich session details from local project session files.
-- Read project-scoped plans, tasks, and file-history context.
+- Read project-scoped plans and tasks, plus session file-history context.
 - Read provider configuration with secret fields redacted.
 - Read debug logs through bounded, indexed windows.
 - Scope logs and diagnostics to the selected project where possible.
