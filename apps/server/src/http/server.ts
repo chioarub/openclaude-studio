@@ -78,7 +78,7 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
       return reply.code(204).header('Content-Length', '0').send();
     }
 
-    if (!authToken || request.url.startsWith('/api/health')) {
+    if (!authToken || isRootRequestUrl(request.url) || isHealthRequestUrl(request.url)) {
       return;
     }
 
@@ -113,6 +113,21 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
     serverTime: new Date().toISOString(),
     uptime: process.uptime(),
   }));
+
+  app.get('/', async (_request, reply) => {
+    return reply.type('text/plain; charset=utf-8').send([
+      'OpenClaude Studio local API is running.',
+      '',
+      'Open the dashboard:',
+      'https://openclaude-studio.pages.dev/',
+      '',
+      'Health:',
+      '/api/health',
+      '',
+      'This API is read-only. Keep it bound to 127.0.0.1 unless you know what you are doing.',
+      '',
+    ].join('\n'));
+  });
 
   app.get('/api/projects', async (): Promise<ProjectsResponse> => {
     return readProjectSummariesWithDiagnostics(paths);
@@ -367,4 +382,20 @@ function isLoopbackBrowserOrigin(origin: string): boolean {
 
 function isAllowedBrowserOrigin(origin: string | undefined, configuredAllowedOrigins: ReadonlySet<string>): boolean {
   return !origin || configuredAllowedOrigins.has(origin) || isLoopbackBrowserOrigin(origin);
+}
+
+function isRootRequestUrl(requestUrl: string): boolean {
+  return requestPathname(requestUrl) === '/';
+}
+
+function isHealthRequestUrl(requestUrl: string): boolean {
+  return requestPathname(requestUrl) === '/api/health';
+}
+
+function requestPathname(requestUrl: string): string | null {
+  try {
+    return new URL(requestUrl, 'http://127.0.0.1').pathname;
+  } catch {
+    return null;
+  }
 }

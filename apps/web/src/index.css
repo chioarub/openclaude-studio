@@ -1293,6 +1293,74 @@ body {
   line-height: 1.4;
 }
 
+.status-banner-connection {
+  display: grid;
+  max-width: 760px;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.status-banner-field {
+  display: grid;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.status-banner-input {
+  min-height: 38px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.status-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.status-banner-action {
+  min-height: 34px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 6px;
+  background: var(--bg-canvas);
+  color: var(--text-ink);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 7px 10px;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.status-banner-action:hover,
+.status-banner-action:focus-visible {
+  border-color: rgb(204 120 92 / 45%);
+  background: var(--bg-surface-soft);
+  color: #cc785c;
+  outline: none;
+}
+
+.status-banner-action-primary {
+  border-color: rgb(204 120 92 / 45%);
+  background: #a9583e;
+  color: #ffffff;
+}
+
+.status-banner-action-primary:hover,
+.status-banner-action-primary:focus-visible {
+  background: #8f4630;
+  color: #ffffff;
+}
+
+.status-banner-validation {
+  color: #c64545;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .diagnostics-list {
   display: grid;
   gap: 8px;

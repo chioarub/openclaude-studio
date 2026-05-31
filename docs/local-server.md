@@ -16,6 +16,10 @@ http://127.0.0.1:43110
 
 Keep the command running while using the dashboard. Stopping the process stops the local API.
 
+Startup output includes the local API URL, hosted dashboard URL, read-only mode, and allowed browser origins. It also reminds users to keep the terminal running.
+
+Opening `http://127.0.0.1:43110/` in a browser shows a small read-only landing page with dashboard and health-check links. It does not read local OpenClaude data.
+
 ## CLI Options
 
 ```text
@@ -61,3 +65,7 @@ OPENCLAUDE_STUDIO_ALLOWED_ORIGINS=https://studio.example.com npx openclaude-stud
 ## Safety Notes
 
 Keep the server bound to loopback unless you have a trusted network and an explicit access-control model. The server reads local OpenClaude files and should not be exposed to public networks.
+
+## Troubleshooting
+
+See [Troubleshooting](troubleshooting.md) for connection failures, custom ports, token mode, missing projects, and safe bug-reporting guidance.
