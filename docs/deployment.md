@@ -33,7 +33,7 @@ The Cloudflare API token should grant account-level `Cloudflare Pages:Edit` perm
 
 The npm package should use trusted publishing through GitHub Actions. Do not add long-lived npm tokens to repository secrets.
 
-The workflow grants `contents: write` so `GITHUB_TOKEN` can create GitHub Releases. Keep other workflow permissions least-privilege.
+The workflow denies default token permissions and grants GitHub token scopes only at the job level. The publish/deploy job grants `contents: read`, `deployments: write`, and `id-token: write`; the GitHub Release job grants `contents: write` so `GITHUB_TOKEN` can create releases for already-pushed tags.
 
 ## Cloudflare Pages Settings
 

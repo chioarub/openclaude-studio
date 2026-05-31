@@ -5,10 +5,8 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
-  deployments: write
-  id-token: write
+# Deny default token permissions. Jobs grant only the scopes they need.
+permissions: {}
 
 env:
   CI: true
@@ -24,6 +22,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     if: github.repository == 'chioarub/openclaude-studio'
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+    # Required for checkout, npm trusted publishing, and Cloudflare deployment records.
+    permissions:
+      contents: read
+      deployments: write
+      id-token: write
 
     steps:
       - name: Check out repository
@@ -56,8 +61,10 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Check tag matches package version
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
         run: |
-          expected="refs/tags/v${{ steps.package.outputs.version }}"
+          expected="refs/tags/v$VERSION"
           if [ "$GITHUB_REF" != "$expected" ]; then
             echo "Release tag $GITHUB_REF does not match package version $expected."
             exit 1
@@ -97,8 +104,10 @@ jobs:
 
       - name: Check npm publication status
         id: npm
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
         run: |
-          if npm view "openclaude-studio@${{ steps.package.outputs.version }}" version > /dev/null 2>&1; then
+          if npm view "openclaude-studio@$VERSION" version > /dev/null 2>&1; then
             echo "published=true" >> "$GITHUB_OUTPUT"
           else
             echo "published=false" >> "$GITHUB_OUTPUT"
@@ -118,7 +127,9 @@ jobs:
 
       - name: Skip npm publish
         if: steps.npm.outputs.published == 'true'
-        run: echo "openclaude-studio@${{ steps.package.outputs.version }} is already published."
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+        run: echo "openclaude-studio@$VERSION is already published."
 
       - name: Deploy web to Cloudflare Pages
         uses: cloudflare/wrangler-action@v4
@@ -128,12 +139,27 @@ jobs:
           command: pages deploy apps/web/dist --project-name=openclaude-studio --branch=main --commit-hash=${{ github.sha }}
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
 
+  create-github-release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: release
+    if: github.repository == 'chioarub/openclaude-studio'
+    # Required to create GitHub Releases for already-pushed release tags.
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
       - name: Check GitHub release status
         id: github-release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.release.outputs.version }}
         run: |
-          tag="v${{ steps.package.outputs.version }}"
+          tag="v$VERSION"
           if gh release view "$tag" > /dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
@@ -142,8 +168,10 @@ jobs:
 
       - name: Build GitHub release notes
         if: steps.github-release.outputs.exists == 'false'
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
         run: |
-          version="${{ steps.package.outputs.version }}"
+          version="$VERSION"
           awk -v version="$version" '
             $0 == "## " version { capture = 1; next }
             capture && /^## / { exit }
@@ -173,13 +201,16 @@ jobs:
         if: steps.github-release.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.release.outputs.version }}
         run: |
-          version="${{ steps.package.outputs.version }}"
+          version="$VERSION"
           gh release create "v$version" \
             --title "OpenClaude Studio v$version" \
-            --latest \
+            --verify-tag \
             --notes-file release-notes.md
 
       - name: Skip GitHub release creation
         if: steps.github-release.outputs.exists == 'true'
-        run: echo "GitHub release v${{ steps.package.outputs.version }} already exists."
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: echo "GitHub release v$VERSION already exists."
