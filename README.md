@@ -39,7 +39,7 @@ The current MVP line includes:
 - Visible local API URL control for custom local server ports
 - Read-only local API with no write endpoints
 
-It does not currently edit OpenClaude settings, provider profiles, sessions, logs, project files, tasks, or plans.
+It does not currently edit OpenClaude settings, provider profiles, sessions, logs, project files, tasks, plans, or file-history data.
 
 ## Screenshots
 

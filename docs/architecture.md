@@ -37,7 +37,7 @@ The server is intentionally narrow:
 - Scope logs and diagnostics to the selected project where possible.
 - Return typed JSON responses.
 
-The server should not mutate OpenClaude settings, sessions, logs, provider profiles, project files, tasks, or plans in the current MVP line.
+The server should not mutate OpenClaude settings, sessions, logs, provider profiles, project files, tasks, plans, or file-history data in the current MVP line.
 
 ## Web Responsibilities
 
