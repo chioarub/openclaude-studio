@@ -33,6 +33,12 @@ assertIncludes(
 
 assertIncludes(
   workflow,
+  "      - name: Check out repository\n        uses: actions/checkout@v6\n        with:\n          persist-credentials: false",
+  "GitHub release job checkout should not persist git credentials",
+);
+
+assertIncludes(
+  workflow,
   "    permissions:\n      contents: write",
   "GitHub release job should grant contents: write locally",
 );
