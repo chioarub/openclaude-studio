@@ -33,8 +33,8 @@ assertIncludes(
 
 assertIncludes(
   workflow,
-  "      - name: Check out repository\n        uses: actions/checkout@v6\n        with:\n          persist-credentials: false",
-  "GitHub release job checkout should not persist git credentials",
+  "      - name: Check out repository\n        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # actions/checkout v6\n        with:\n          persist-credentials: false",
+  "GitHub release job checkout should be pinned and should not persist git credentials",
 );
 
 assertIncludes(
