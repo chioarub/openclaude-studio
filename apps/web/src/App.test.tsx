@@ -314,9 +314,11 @@ describe('App', () => {
 
     expect(await within(dialog).findByRole('navigation', { name: /changed files/i })).toBeInTheDocument();
     expect(within(dialog).getByRole('region', { name: /file diffs/i })).toBeInTheDocument();
-    const changedFiles = within(dialog).getByRole('tree', { name: /changed files/i });
-    expect(within(changedFiles).getByRole('treeitem', { name: /src folder/i })).toHaveAttribute('aria-expanded', 'true');
-    expect(within(changedFiles).getByRole('treeitem', { name: /src\/api\.ts/i })).toHaveAttribute('aria-current', 'true');
+    expect(within(dialog).getByRole('tabpanel', { name: /review changes/i })).toBeVisible();
+    expect(within(dialog).getByRole('tab', { name: /review changes/i })).toHaveAttribute('aria-controls');
+    const changedFiles = within(dialog).getByRole('navigation', { name: /changed files/i });
+    expect(within(changedFiles).getByRole('button', { name: /src folder/i })).toHaveAttribute('aria-expanded', 'true');
+    expect(within(changedFiles).getByRole('button', { name: /^src\/api\.ts$/i })).toHaveAttribute('aria-current', 'true');
     expect(within(dialog).queryByText('1 diffable')).not.toBeInTheDocument();
     expect(within(dialog).getByText('1 changed file')).toBeInTheDocument();
     expect(within(dialog).getAllByText('+1').length).toBeGreaterThan(0);
@@ -334,6 +336,13 @@ describe('App', () => {
     expect(within(dialog).getByLabelText('Diff for src/api.ts')).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: /show file tree/i }));
     expect(within(dialog).getByRole('navigation', { name: /changed files/i })).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
+    await user.keyboard('{ArrowLeft}');
+    await waitFor(() => expect(within(dialog).getByRole('tab', { name: /conversation/i })).toHaveFocus());
+    expect(within(dialog).getByRole('tabpanel', { name: /conversation/i })).toBeVisible();
+    await user.keyboard('{ArrowRight}');
+    await waitFor(() => expect(within(dialog).getByRole('tab', { name: /review changes/i })).toHaveFocus());
 
     await user.click(within(dialog).getByRole('button', { name: /copy diff for src\/api\.ts/i }));
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining('+export const value = 1;'));
@@ -404,9 +413,9 @@ describe('App', () => {
     expect(within(dialog).queryByText('-0 removed')).not.toBeInTheDocument();
     expect(within(dialog).queryByText('No textual diff')).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: /copy diff for .*eventHub/i })).not.toBeInTheDocument();
-    const changedFiles = within(dialog).getByRole('tree', { name: /changed files/i });
+    const changedFiles = within(dialog).getByRole('navigation', { name: /changed files/i });
     expect(
-      within(changedFiles).getByRole('treeitem', { name: /\.claude\/worktrees\/application-redesign\/apps\/server\/src\/events\/eventHub\.ts/i }),
+      within(changedFiles).getByRole('button', { name: /\.claude\/worktrees\/application-redesign\/apps\/server\/src\/events\/eventHub\.ts/i }),
     ).toBeInTheDocument();
     expect(
       within(dialog).getByLabelText('Change details for .claude/worktrees/application-redesign/apps/server/src/events/eventHub.ts'),
@@ -431,10 +440,29 @@ describe('App', () => {
 
     await user.click(within(dialog).getByRole('button', { name: /retry/i }));
 
-    const changedFiles = await within(dialog).findByRole('tree', { name: /changed files/i });
-    expect(within(changedFiles).getByRole('treeitem', { name: /src\/api\.ts/i })).toBeInTheDocument();
+    const changedFiles = await within(dialog).findByRole('navigation', { name: /changed files/i });
+    expect(within(changedFiles).getByRole('button', { name: /^src\/api\.ts$/i })).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Diff for src/api.ts')).toBeInTheDocument();
     expect(within(dialog).queryByText('Injected change review failure')).not.toBeInTheDocument();
+  });
+
+  test('shows a degraded compatibility state when the local server lacks change review support', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionChangesStatus: 404 }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
+
+    expect(await within(dialog).findByText('Review Changes requires a newer local server')).toBeInTheDocument();
+    expect(within(dialog).getByText(/Update or restart the local OpenClaude Studio server/i)).toBeInTheDocument();
+    expect(within(dialog).queryByText('Unable to load change review')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('No reviewable file changes were derived from this session.')).not.toBeInTheDocument();
   });
 
   test('derives change review totals and renders diagnostics for partial local API responses', async () => {
@@ -450,8 +478,8 @@ describe('App', () => {
     const dialog = await screen.findByRole('dialog', { name: /session details/i });
     await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
 
-    const changedFiles = await within(dialog).findByRole('tree', { name: /changed files/i });
-    expect(within(changedFiles).getByRole('treeitem', { name: /legacy\/change\.ts/i })).toBeInTheDocument();
+    const changedFiles = await within(dialog).findByRole('navigation', { name: /changed files/i });
+    expect(within(changedFiles).getByRole('button', { name: /^legacy\/change\.ts$/i })).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Change details for legacy/change.ts')).toBeInTheDocument();
     expect(within(dialog).getByText('1 changed file')).toBeInTheDocument();
     expect(within(dialog).getAllByText('+2').length).toBeGreaterThan(0);
@@ -908,6 +936,7 @@ type MockApiOptions = {
   projectDiagnostics?: unknown[];
   projects?: unknown[];
   failSessionChangesOnce?: boolean;
+  sessionChangesStatus?: number;
   sessionChangesResponse?: unknown;
   sessionDetails?: unknown;
   tasksResponse?: unknown;
@@ -997,6 +1026,9 @@ function mockApi(options: MockApiOptions = {}) {
       if (options.failSessionChangesOnce && !failedSessionChanges) {
         failedSessionChanges = true;
         return jsonResponse({ error: 'Injected change review failure' }, 500);
+      }
+      if (options.sessionChangesStatus) {
+        return jsonResponse({ error: `Injected change review ${options.sessionChangesStatus}` }, options.sessionChangesStatus);
       }
       return jsonResponse(options.sessionChangesResponse ?? sessionChangesFixture());
     }

@@ -207,7 +207,7 @@ async function readFileHistoryByChangedFile(
   for (const entry of entries) {
     const identity = [entry.key, entry.backupFileName ?? 'new-file', entry.version ?? 0].join('\0');
     const existing = byIdentity.get(identity);
-    if (!existing || compareHistoryEntries(entry, existing) < 0) {
+    if (!existing || compareHistoryEntries(entry, existing) > 0) {
       byIdentity.set(identity, entry);
     }
   }
@@ -286,7 +286,7 @@ async function buildFileReview({
 
   const backupSelection = artifactScopeIsUnambiguous
     ? await selectBackup(paths.fileHistoryDir, sessionId, historyEntries, change.path.displayPath)
-    : { entry: historyEntries[0] ?? null, read: null, diagnostics: [] };
+    : { entry: latestHistoryEntry(historyEntries), read: null, diagnostics: [] };
   diagnostics.push(...backupSelection.diagnostics);
 
   const statusAndDiff = buildStatusAndDiff({
@@ -324,7 +324,7 @@ async function selectBackup(
   displayPath: string,
 ): Promise<BackupSelection> {
   const diagnostics: Diagnostic[] = [];
-  const entriesWithBackups = entries.filter((entry) => entry.backupFileName);
+  const entriesWithBackups = entries.filter((entry) => entry.backupFileName).reverse();
 
   for (const entry of entriesWithBackups) {
     const backupPath = safeSessionBackupPath(fileHistoryDir, sessionId, entry.backupFileName);
@@ -349,10 +349,14 @@ async function selectBackup(
   }
 
   return {
-    entry: entriesWithBackups[0] ?? entries[0] ?? null,
+    entry: entriesWithBackups[0] ?? latestHistoryEntry(entries),
     read: null,
     diagnostics,
   };
+}
+
+function latestHistoryEntry(entries: RawFileHistoryEntry[]): RawFileHistoryEntry | null {
+  return entries.at(-1) ?? null;
 }
 
 function buildStatusAndDiff({

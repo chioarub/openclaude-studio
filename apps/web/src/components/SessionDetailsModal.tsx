@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X,
@@ -32,7 +32,7 @@ import type {
   SessionDetailsResponse,
 } from '@openclaude-studio/shared';
 
-import type { createApiClient } from '../api.js';
+import { ApiRequestError, type createApiClient } from '../api.js';
 import { cn } from '../lib/cn.js';
 import { CopyablePath } from './CopyablePath.js';
 
@@ -70,9 +70,12 @@ type PartialSessionDetails = Partial<SessionDetailsResponse['session']> & {
 };
 type TimelineTool = NonNullable<ConversationTimelineEvent['tool']>;
 type SessionDetailsTab = 'conversation' | 'changes';
+type SessionDetailsTabIds = Record<SessionDetailsTab, { panelId: string; tabId: string }>;
 type PartialSessionChangeReview = Partial<SessionChangeReviewResponse> & {
   totals?: Partial<SessionChangeReviewResponse['totals']>;
 };
+
+const unsupportedChangeReviewMessage = 'Review Changes requires a newer local server. Update or restart the local OpenClaude Studio server to use this tab.';
 
 export type InlineSegment =
   | { type: 'text'; text: string }
@@ -110,6 +113,17 @@ export function SessionDetailsModal({
   const [copied, setCopied] = useState(false);
   const mountedRef = useRef(true);
   const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tabBaseId = useId();
+  const tabIds = useMemo<SessionDetailsTabIds>(() => ({
+    conversation: {
+      tabId: `${tabBaseId}-conversation-tab`,
+      panelId: `${tabBaseId}-conversation-panel`,
+    },
+    changes: {
+      tabId: `${tabBaseId}-changes-tab`,
+      panelId: `${tabBaseId}-changes-panel`,
+    },
+  }), [tabBaseId]);
 
   useEffect(() => {
     return () => {
@@ -171,6 +185,11 @@ export function SessionDetailsModal({
       })
       .catch((err: unknown) => {
         if (!ignore) {
+          if (err instanceof ApiRequestError && (err.status === 404 || err.status === 405)) {
+            setChangeReview(unsupportedChangeReviewResponse(sessionId));
+            setChangeReviewError(null);
+            return;
+          }
           setChangeReview(null);
           setChangeReviewError(err instanceof Error ? err.message : 'Unable to load session change review.');
         }
@@ -263,11 +282,21 @@ export function SessionDetailsModal({
             activeTab={activeTab}
             onChange={setActiveTab}
             changedFileCount={changeReview?.totals.fileCount ?? session.changedFiles.length}
+            tabIds={tabIds}
           />
 
           {/* Body: 8/4 grid */}
-          {activeTab === 'conversation' ? (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 flex-1 min-h-0 overflow-hidden pt-8">
+          <div
+            id={tabIds.conversation.panelId}
+            role="tabpanel"
+            aria-labelledby={tabIds.conversation.tabId}
+            tabIndex={0}
+            hidden={activeTab !== 'conversation'}
+            className={cn(
+              'grid-cols-1 lg:grid-cols-12 gap-8 flex-1 min-h-0 overflow-hidden pt-8 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/15',
+              activeTab === 'conversation' ? 'grid' : 'hidden',
+            )}
+          >
             {/* Left: conversation */}
             <div className="lg:col-span-8 flex min-h-0 flex-col">
               <div className="flex items-center justify-between border-b border-hairline-soft pb-3 mb-4 shrink-0">
@@ -472,14 +501,24 @@ export function SessionDetailsModal({
               </div>
             </div>
           </div>
-          ) : (
+          <div
+            id={tabIds.changes.panelId}
+            role="tabpanel"
+            aria-labelledby={tabIds.changes.tabId}
+            tabIndex={0}
+            hidden={activeTab !== 'changes'}
+            className={cn(
+              'flex-1 min-h-0 overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/15',
+              activeTab === 'changes' ? 'flex' : 'hidden',
+            )}
+          >
             <SessionChangeReviewPanel
               review={changeReview}
               loading={changeReviewLoading}
               error={changeReviewError}
               onRetry={handleRetryChangeReview}
             />
-          )}
+          </div>
         </div>
       ) : error ? (
         <div className="h-full min-h-64 flex flex-col items-center justify-center text-error gap-4 p-6">
@@ -530,6 +569,30 @@ function normalizeSessionDetailsResponse(data: SessionDetailsResponse): SessionD
       linkedPlans: arrayOrEmpty<SessionDetailsResponse['session']['linkedPlans'][number]>(session.linkedPlans),
     },
   };
+}
+
+function unsupportedChangeReviewResponse(sessionId: string): SessionChangeReviewResponse {
+  return {
+    sessionId,
+    files: [],
+    totals: {
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+      backupCount: 0,
+      riskFlagCount: 0,
+    },
+    diagnostics: [
+      {
+        level: 'info',
+        message: unsupportedChangeReviewMessage,
+      },
+    ],
+  };
+}
+
+function isUnsupportedChangeReview(review: SessionChangeReviewResponse): boolean {
+  return review.diagnostics.some((diagnostic) => diagnostic.message === unsupportedChangeReviewMessage);
 }
 
 function normalizeTimelineEvent(value: unknown, index: number): ConversationTimelineEvent {
@@ -727,27 +790,60 @@ function SessionDetailsTabList({
   activeTab,
   onChange,
   changedFileCount,
+  tabIds,
 }: {
   activeTab: SessionDetailsTab;
   onChange: (tab: SessionDetailsTab) => void;
   changedFileCount: number;
+  tabIds: SessionDetailsTabIds;
 }) {
   const tabs: Array<{ id: SessionDetailsTab; label: string; count?: number; icon: ReactNode }> = [
     { id: 'conversation', label: 'Conversation', icon: <MessageSquare className="h-3.5 w-3.5" /> },
     { id: 'changes', label: 'Review Changes', count: changedFileCount, icon: <FileDiff className="h-3.5 w-3.5" /> },
   ];
+  const focusTab = (tabId: string) => {
+    const focus = () => document.getElementById(tabId)?.focus();
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(focus);
+    } else {
+      window.setTimeout(focus, 0);
+    }
+  };
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
+    const lastIndex = tabs.length - 1;
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      nextIndex = index === lastIndex ? 0 : index + 1;
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      nextIndex = index === 0 ? lastIndex : index - 1;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = lastIndex;
+    }
+    if (nextIndex === null) {
+      return;
+    }
+    event.preventDefault();
+    const nextTab = tabs[nextIndex]!;
+    onChange(nextTab.id);
+    focusTab(tabIds[nextTab.id].tabId);
+  };
 
   return (
     <div className="shrink-0 border-b border-hairline-soft pt-4">
       <div role="tablist" aria-label="Session details sections" className="flex flex-wrap gap-2">
-        {tabs.map((tab) => {
+        {tabs.map((tab, index) => {
           const selected = activeTab === tab.id;
           return (
             <button
               key={tab.id}
+              id={tabIds[tab.id].tabId}
               type="button"
               role="tab"
               aria-selected={selected}
+              aria-controls={tabIds[tab.id].panelId}
+              tabIndex={selected ? 0 : -1}
               className={cn(
                 'inline-flex h-9 items-center gap-2 rounded-md border px-3 text-xs font-medium uppercase tracking-[0.12em] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/15',
                 selected
@@ -755,6 +851,7 @@ function SessionDetailsTabList({
                   : 'border-hairline-soft bg-canvas text-muted hover:bg-surface-soft hover:text-ink',
               )}
               onClick={() => onChange(tab.id)}
+              onKeyDown={(event) => handleKeyDown(event, index)}
             >
               {tab.icon}
               {tab.label}
@@ -827,6 +924,24 @@ function SessionChangeReviewPanel({
 
   if (!review) {
     return null;
+  }
+
+  if (isUnsupportedChangeReview(review)) {
+    return (
+      <div className="flex flex-1 min-h-0 items-center justify-center pt-8">
+        <div className="max-w-lg rounded-lg border border-primary/15 bg-primary/[0.04] p-5 text-sm text-ink">
+          <div className="mb-3 flex items-center gap-2 font-medium">
+            <AlertTriangle className="h-4 w-4 text-primary" />
+            Review Changes requires a newer local server
+          </div>
+          <p className="leading-6 text-muted">{unsupportedChangeReviewMessage}</p>
+          <Button variant="secondary" className="mt-4 h-9 px-3 text-xs" onClick={onRetry}>
+            <RefreshCw className="mr-2 h-3.5 w-3.5" />
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   const diffableFiles = files.filter(hasReviewableDiff);
@@ -993,7 +1108,7 @@ function ChangeFileNavigation({
           <span className="text-error">-{sumChangeLines(files, 'deletions')}</span>
         </div>
       </div>
-      <div role="tree" aria-label="Changed files" className="min-h-0 flex-1 overflow-y-auto py-2 pb-8 custom-scrollbar">
+      <div className="min-h-0 flex-1 overflow-y-auto py-2 pb-8 custom-scrollbar">
         {tree.map((node) => (
           <ChangeFileTreeItem
             key={node.path}
@@ -1028,10 +1143,9 @@ function ChangeFileTreeItem({
   if (node.type === 'directory') {
     const collapsed = collapsedPaths.has(node.path);
     return (
-      <div role="none">
+      <div>
         <button
           type="button"
-          role="treeitem"
           aria-expanded={!collapsed}
           aria-label={`${node.path || node.name} folder`}
           onClick={() => onToggleDirectory(node.path)}
@@ -1044,7 +1158,7 @@ function ChangeFileTreeItem({
           <span className="shrink-0 text-[10px] text-muted-soft">{node.fileCount}</span>
         </button>
         {!collapsed && (
-          <div role="group">
+          <div>
             {node.children.map((child) => (
               <ChangeFileTreeItem
                 key={child.path}
@@ -1066,7 +1180,6 @@ function ChangeFileTreeItem({
   return (
     <button
       type="button"
-      role="treeitem"
       aria-label={file.filePath}
       aria-current={file.id === selectedFileId ? 'true' : undefined}
       onClick={() => onSelectFile(file)}
@@ -1330,9 +1443,15 @@ function FileDiagnostics({ file }: { file: SessionChangeFileReview }) {
 
 function DiffHunks({ file }: { file: SessionChangeFileReview }) {
   const hunks = file.diff?.hunks ?? [];
-  const hasOldLineNumbers = hunks.some((hunk) => hunk.lines.some((line) => line.oldLine !== null));
-  const hasNewLineNumbers = hunks.some((hunk) => hunk.lines.some((line) => line.newLine !== null));
-  const gridColumnsClass = diffLineGridColumnsClass(hasOldLineNumbers, hasNewLineNumbers);
+  const { hasOldLineNumbers, hasNewLineNumbers, gridColumnsClass } = useMemo(() => {
+    const hasOldLines = hunks.some((hunk) => hunk.lines.some((line) => line.oldLine !== null));
+    const hasNewLines = hunks.some((hunk) => hunk.lines.some((line) => line.newLine !== null));
+    return {
+      hasOldLineNumbers: hasOldLines,
+      hasNewLineNumbers: hasNewLines,
+      gridColumnsClass: diffLineGridColumnsClass(hasOldLines, hasNewLines),
+    };
+  }, [hunks]);
 
   return (
     <div className="overflow-x-auto custom-scrollbar">

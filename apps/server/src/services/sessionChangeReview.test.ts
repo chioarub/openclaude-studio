@@ -52,6 +52,49 @@ describe('readSessionChangeReview', () => {
     }
   });
 
+  test('uses the most recent readable backup for a changed file', async () => {
+    const { paths, projectPath, cleanup } = await setup();
+    try {
+      await writeProjectFile(projectPath, 'src/api.ts', 'export const value = 3;\n');
+      await writeBackup(paths, 'session-latest-backup', 'api@v1', 'export const value = 1;\n');
+      await writeBackup(paths, 'session-latest-backup', 'api@v2', 'export const value = 2;\n');
+      await writeTranscript(paths, projectPath, 'session-latest-backup', [
+        toolUseRow({ sessionId: 'session-latest-backup', projectPath, timestamp: '2026-05-28T08:05:00.000Z', toolName: 'Edit', filePath: 'src/api.ts' }),
+        fileHistorySnapshot({
+          timestamp: '2026-05-28T08:05:01.000Z',
+          trackedFileBackups: {
+            'src/api.ts': { backupFileName: 'api@v1', version: 1, backupTime: '2026-05-28T08:05:01.000Z' },
+          },
+        }),
+        fileHistorySnapshot({
+          timestamp: '2026-05-28T08:05:02.000Z',
+          trackedFileBackups: {
+            'src/api.ts': { backupFileName: 'api@v2', version: 2, backupTime: '2026-05-28T08:05:02.000Z' },
+          },
+        }),
+      ]);
+
+      const result = await readSessionChangeReview(paths, projectSummary(projectPath), 'session-latest-backup');
+
+      expect(result).not.toBeNull();
+      expect(result!.files[0]).toMatchObject({
+        filePath: 'src/api.ts',
+        backupFileName: 'api@v2',
+        backupVersion: 2,
+        backupExists: true,
+      });
+      expect(result!.files[0]!.diff?.hunks[0]?.lines).toEqual(
+        expect.arrayContaining([
+          { kind: 'remove', oldLine: 1, newLine: null, text: 'export const value = 2;' },
+          { kind: 'add', oldLine: null, newLine: 1, text: 'export const value = 3;' },
+        ]),
+      );
+      expect(JSON.stringify(result)).not.toContain('export const value = 1;');
+    } finally {
+      await cleanup();
+    }
+  });
+
   test('treats a Write tool without a backup as a created file when current content exists', async () => {
     const { paths, projectPath, cleanup } = await setup();
     try {

@@ -166,13 +166,13 @@ test('loads project overview, sessions, provider, and logs', async ({ page }) =>
   await expect(detailsDialog.locator('code').filter({ hasText: /^ok\s*$/ })).toBeVisible();
   await detailsDialog.getByRole('tab', { name: /Review Changes/ }).click();
   await expect(detailsDialog.getByText('Changed files')).toBeVisible();
-  await expect(detailsDialog.getByRole('tree', { name: 'Changed files' }).getByRole('treeitem', { name: 'src/api.ts' })).toBeVisible();
+  await expect(detailsDialog.getByRole('navigation', { name: 'Changed files' }).getByRole('button', { name: 'src/api.ts' })).toBeVisible();
   await expect(detailsDialog.getByRole('article', { name: 'Diff for src/api.ts' })).toBeVisible();
   await detailsDialog.getByRole('button', { name: 'Hide file tree' }).click();
-  await expect(detailsDialog.getByRole('tree', { name: 'Changed files' })).toBeHidden();
+  await expect(detailsDialog.getByRole('navigation', { name: 'Changed files' })).toBeHidden();
   await expect(detailsDialog.getByRole('article', { name: 'Diff for src/api.ts' })).toBeVisible();
   await detailsDialog.getByRole('button', { name: 'Show file tree' }).click();
-  await expect(detailsDialog.getByRole('tree', { name: 'Changed files' })).toBeVisible();
+  await expect(detailsDialog.getByRole('navigation', { name: 'Changed files' })).toBeVisible();
   await expect(detailsDialog.getByText('@@ -1,1 +1,1 @@')).toBeVisible();
   await expect(detailsDialog.getByText('export const value = 0;')).toBeVisible();
   await expect(detailsDialog.getByText('export const value = 1;')).toBeVisible();
