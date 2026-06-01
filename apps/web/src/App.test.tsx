@@ -273,6 +273,7 @@ describe('App', () => {
 
     const dialog = await screen.findByRole('dialog', { name: /session details/i });
     await waitFor(() => expect(within(dialog).getByRole('button', { name: /close dialog/i })).toHaveFocus());
+    expect(within(dialog).queryByRole('tab', { name: /artifacts/i })).not.toBeInTheDocument();
     expect(within(dialog).getAllByText('Build the API').length).toBeGreaterThan(0);
     expect(within(dialog).getByText('Run command')).toBeInTheDocument();
     expect(within(dialog).getByText('npm test')).toBeInTheDocument();
@@ -292,6 +293,171 @@ describe('App', () => {
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /session details/i })).not.toBeInTheDocument());
     expect(sessionRow).toHaveFocus();
+  });
+
+  test('lazy-loads and renders a session change review from the details modal', async () => {
+    const fetchMock = mockApi();
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    expect(fetchCountByPath(fetchMock, '/api/projects/project-1/sessions/session-1/changes')).toBe(0);
+
+    await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
+
+    expect(await within(dialog).findByRole('navigation', { name: /changed files/i })).toBeInTheDocument();
+    expect(within(dialog).getByRole('region', { name: /file diffs/i })).toBeInTheDocument();
+    const changedFiles = within(dialog).getByRole('tree', { name: /changed files/i });
+    expect(within(changedFiles).getByRole('treeitem', { name: /src folder/i })).toHaveAttribute('aria-expanded', 'true');
+    expect(within(changedFiles).getByRole('treeitem', { name: /src\/api\.ts/i })).toHaveAttribute('aria-current', 'true');
+    expect(within(dialog).queryByText('1 diffable')).not.toBeInTheDocument();
+    expect(within(dialog).getByText('1 changed file')).toBeInTheDocument();
+    expect(within(dialog).getAllByText('+1').length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText('-1').length).toBeGreaterThan(0);
+    expect(within(dialog).getByText('Large change')).toBeInTheDocument();
+    expect(within(dialog).getByText(/Edit file/)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Diff for src/api.ts')).toBeInTheDocument();
+    expect(within(dialog).getByText('@@ -1,2 +1,2 @@')).toBeInTheDocument();
+    expect(within(dialog).getByText('export const value = 0;')).toBeInTheDocument();
+    expect(within(dialog).getByText('export const value = 1;')).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: /hide file tree/i }));
+    expect(within(dialog).queryByRole('navigation', { name: /changed files/i })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /show file tree/i })).toHaveAttribute('aria-expanded', 'false');
+    expect(within(dialog).getByLabelText('Diff for src/api.ts')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: /show file tree/i }));
+    expect(within(dialog).getByRole('navigation', { name: /changed files/i })).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: /copy diff for src\/api\.ts/i }));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('+export const value = 1;'));
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:43110/api/projects/project-1/sessions/session-1/changes',
+      expect.objectContaining({ headers: { accept: 'application/json' } }),
+    );
+  });
+
+  test('shows an empty state when a session has no reviewable changed files', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionChangesResponse: emptySessionChangesFixture() }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
+
+    expect(await within(dialog).findByText('No reviewable file changes were derived from this session.')).toBeInTheDocument();
+  });
+
+  test('does not reserve an empty old-line column for add-only diffs', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionChangesResponse: addOnlySessionChangesFixture() }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
+
+    const addedLineText = await within(dialog).findByText('export const created = true;');
+    const addedLineRow = addedLineText.parentElement;
+    expect(addedLineRow).not.toBeNull();
+    expect(addedLineRow?.children).toHaveLength(3);
+    expect(addedLineRow?.children[0]).toHaveTextContent('1');
+    expect(addedLineRow?.children[1]).toHaveTextContent('+');
+  });
+
+  test('summarizes unavailable temporary worktree changes without fake zero-line diff controls', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionChangesResponse: unavailableWorktreeSessionChangesFixture() }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
+
+    expect(await within(dialog).findByLabelText('2 files cannot be diffed')).toBeInTheDocument();
+    expect(within(dialog).getByRole('navigation', { name: /changed files/i })).toBeInTheDocument();
+    expect(within(dialog).getAllByText('2 unavailable')).toHaveLength(1);
+    expect(within(dialog).queryByText('Unavailable 2')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/Studio found these file changes in the session transcript/i)).not.toBeInTheDocument();
+    expect(within(dialog).getAllByText('Cannot show diff')).toHaveLength(2);
+    expect(within(dialog).getAllByText('Temporary worktree unavailable')).toHaveLength(2);
+    expect(within(dialog).queryByText('+0 added')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('-0 removed')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('No textual diff')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: /copy diff for .*eventHub/i })).not.toBeInTheDocument();
+    const changedFiles = within(dialog).getByRole('tree', { name: /changed files/i });
+    expect(
+      within(changedFiles).getByRole('treeitem', { name: /\.claude\/worktrees\/application-redesign\/apps\/server\/src\/events\/eventHub\.ts/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByLabelText('Change details for .claude/worktrees/application-redesign/apps/server/src/events/eventHub.ts'),
+    ).toBeInTheDocument();
+  });
+
+  test('shows a retryable error when session change review loading fails', async () => {
+    vi.stubGlobal('fetch', mockApi({ failSessionChangesOnce: true }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
+
+    expect(await within(dialog).findByText('Unable to load change review')).toBeInTheDocument();
+    expect(within(dialog).getByText('Injected change review failure')).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: /retry/i }));
+
+    const changedFiles = await within(dialog).findByRole('tree', { name: /changed files/i });
+    expect(within(changedFiles).getByRole('treeitem', { name: /src\/api\.ts/i })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Diff for src/api.ts')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Injected change review failure')).not.toBeInTheDocument();
+  });
+
+  test('derives change review totals and renders diagnostics for partial local API responses', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionChangesResponse: legacySessionChangesFixture() }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
+
+    const changedFiles = await within(dialog).findByRole('tree', { name: /changed files/i });
+    expect(within(changedFiles).getByRole('treeitem', { name: /legacy\/change\.ts/i })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Change details for legacy/change.ts')).toBeInTheDocument();
+    expect(within(dialog).getByText('1 changed file')).toBeInTheDocument();
+    expect(within(dialog).getAllByText('+2').length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText('-1').length).toBeGreaterThan(0);
+    expect(within(dialog).getByText('1 risk flag')).toBeInTheDocument();
+    expect(within(dialog).getByText('Legacy diagnostic')).toBeInTheDocument();
   });
 
   test('renders the plans and tasks control tower for the selected project', async () => {
@@ -741,6 +907,8 @@ type MockApiOptions = {
   plansResponse?: unknown;
   projectDiagnostics?: unknown[];
   projects?: unknown[];
+  failSessionChangesOnce?: boolean;
+  sessionChangesResponse?: unknown;
   sessionDetails?: unknown;
   tasksResponse?: unknown;
 };
@@ -749,6 +917,7 @@ function mockApi(options: MockApiOptions = {}) {
   const baseUrl = options.baseUrl ?? 'http://127.0.0.1:43110';
   let failedLogWindowStart = false;
   let failedPlansList = false;
+  let failedSessionChanges = false;
 
   return vi.fn(async (input: RequestInfo | URL) => {
     const requestUrl = new URL(String(input), baseUrl);
@@ -822,6 +991,14 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (path === '/api/projects/project-1/sessions/session-1') {
       return jsonResponse(options.sessionDetails ?? sessionDetailsFixture());
+    }
+
+    if (path === '/api/projects/project-1/sessions/session-1/changes') {
+      if (options.failSessionChangesOnce && !failedSessionChanges) {
+        failedSessionChanges = true;
+        return jsonResponse({ error: 'Injected change review failure' }, 500);
+      }
+      return jsonResponse(options.sessionChangesResponse ?? sessionChangesFixture());
     }
 
     if (path === '/api/projects/project-1/plans') {
@@ -1273,6 +1450,231 @@ function sessionDetailsFixture() {
         },
       },
     ],
+  };
+}
+
+function sessionChangesFixture() {
+  return {
+    sessionId: 'session-1',
+    files: [
+      {
+        id: 'session-1-change-0',
+        filePath: 'src/api.ts',
+        status: 'modified',
+        language: 'typescript',
+        backupFileName: 'abc123@v1',
+        backupExists: true,
+        backupVersion: 1,
+        backupTime: '2026-05-28T08:00:30.000Z',
+        beforeTruncated: false,
+        afterTruncated: false,
+        additions: 1,
+        deletions: 1,
+        riskFlags: [
+          {
+            level: 'warn',
+            label: 'Large change',
+            message: 'This file changed more lines than usual for a single session.',
+          },
+        ],
+        relatedEvents: [
+          {
+            id: 'session-1-2-tool',
+            timestamp: '2026-05-28T08:00:20.000Z',
+            title: 'Edit file',
+            toolName: 'Edit',
+            command: null,
+          },
+        ],
+        diff: {
+          hunks: [
+            {
+              oldStart: 1,
+              oldLines: 2,
+              newStart: 1,
+              newLines: 2,
+              lines: [
+                { kind: 'context', oldLine: 1, newLine: 1, text: 'export const token = "<redacted>";' },
+                { kind: 'remove', oldLine: 2, newLine: null, text: 'export const value = 0;' },
+                { kind: 'add', oldLine: null, newLine: 2, text: 'export const value = 1;' },
+              ],
+            },
+          ],
+        },
+        diagnostics: [],
+      },
+    ],
+    totals: {
+      fileCount: 1,
+      additions: 1,
+      deletions: 1,
+      backupCount: 1,
+      riskFlagCount: 1,
+    },
+    diagnostics: [],
+  };
+}
+
+function emptySessionChangesFixture() {
+  return {
+    sessionId: 'session-1',
+    files: [],
+    totals: {
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+      backupCount: 0,
+      riskFlagCount: 0,
+    },
+    diagnostics: [],
+  };
+}
+
+function addOnlySessionChangesFixture() {
+  return {
+    sessionId: 'session-1',
+    files: [
+      {
+        id: 'session-1-change-created',
+        filePath: 'src/created.ts',
+        status: 'created',
+        language: 'typescript',
+        backupFileName: null,
+        backupExists: false,
+        backupVersion: null,
+        backupTime: null,
+        beforeTruncated: false,
+        afterTruncated: false,
+        additions: 1,
+        deletions: 0,
+        riskFlags: [],
+        relatedEvents: [
+          {
+            id: 'session-1-created-tool',
+            timestamp: '2026-05-28T08:00:20.000Z',
+            title: 'Write file',
+            toolName: 'Write',
+            command: null,
+          },
+        ],
+        diff: {
+          hunks: [
+            {
+              oldStart: 0,
+              oldLines: 0,
+              newStart: 1,
+              newLines: 1,
+              lines: [
+                { kind: 'add', oldLine: null, newLine: 1, text: 'export const created = true;' },
+              ],
+            },
+          ],
+        },
+        diagnostics: [],
+      },
+    ],
+    totals: {
+      fileCount: 1,
+      additions: 1,
+      deletions: 0,
+      backupCount: 0,
+      riskFlagCount: 0,
+    },
+    diagnostics: [],
+  };
+}
+
+function unavailableWorktreeSessionChangesFixture() {
+  return {
+    sessionId: 'session-1',
+    files: [
+      unavailableWorktreeFile(
+        'session-1-change-0',
+        '.claude/worktrees/application-redesign/apps/server/src/events/eventHub.ts',
+        '2026-05-28T14:30:00.000Z',
+      ),
+      unavailableWorktreeFile(
+        'session-1-change-1',
+        '.claude/worktrees/application-redesign/apps/server/src/services/diagnosticsService.ts',
+        '2026-05-28T14:48:00.000Z',
+      ),
+    ],
+    totals: {
+      fileCount: 2,
+      additions: 0,
+      deletions: 0,
+      backupCount: 0,
+      riskFlagCount: 2,
+    },
+    diagnostics: [],
+  };
+}
+
+function unavailableWorktreeFile(id: string, filePath: string, timestamp: string) {
+  return {
+    id,
+    filePath,
+    status: 'unavailable',
+    language: 'typescript',
+    backupFileName: null,
+    backupExists: false,
+    backupVersion: null,
+    backupTime: null,
+    beforeTruncated: false,
+    afterTruncated: false,
+    additions: 0,
+    deletions: 0,
+    riskFlags: [
+      {
+        level: 'warn',
+        label: 'Unavailable content',
+        message: 'Studio could not safely read one side of this change.',
+      },
+    ],
+    relatedEvents: [
+      {
+        id: `${id}-event`,
+        timestamp,
+        title: 'Edit file',
+        toolName: 'Edit',
+        command: null,
+      },
+    ],
+    diff: null,
+    diagnostics: [
+      {
+        level: 'info',
+        message: 'File does not exist.',
+        path: filePath,
+      },
+    ],
+  };
+}
+
+function legacySessionChangesFixture() {
+  return {
+    sessionId: 'session-1',
+    files: [
+      {
+        id: 'legacy-change-0',
+        filePath: 'legacy/change.ts',
+        status: 'modified',
+        backupExists: true,
+        additions: 2,
+        deletions: 1,
+        riskFlags: [
+          {
+            level: 'warn',
+            label: 'Legacy risk',
+            message: 'Legacy response risk flag.',
+          },
+        ],
+        relatedEvents: [],
+        diff: null,
+        diagnostics: [],
+      },
+    ],
+    diagnostics: [{ level: 'warn', message: 'Legacy diagnostic' }],
   };
 }
 

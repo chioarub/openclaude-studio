@@ -30,6 +30,7 @@ The current MVP line includes:
 - Project overview with recent sessions, usage chart, log issue counts, and provider status
 - Session list and rich session inspector
 - Conversation timeline with user messages, assistant messages, tool calls, tool results, and errors
+- Read-only Session Change Review with bounded, redacted diffs from file-history backups and current project files
 - Changed files, token usage, cost summary, linked plans, linked tasks, and file-history context for sessions
 - Plans & Tasks view with checklist progress, linked sessions, task status groups, and detail panes
 - Active provider inspection with secret fields redacted
@@ -218,6 +219,7 @@ Shipped in the MVP line:
 - [x] Project selector and project overview
 - [x] Session summaries for the selected project
 - [x] Rich session timeline with transcript, tool call, file change, usage, and error details
+- [x] Session Change Review with read-only per-session diffs, backup status, diagnostics, and risk flags
 - [x] Plans and tasks views linked back to sessions
 - [x] File history and backup context for selected sessions
 - [x] Active provider inspection with secret fields redacted
@@ -230,7 +232,7 @@ Shipped in the MVP line:
 Planned and open for discussion:
 
 - [ ] Global project search across sessions, logs, config, prompt assets, plans, and tasks
-- [ ] Broader file history and backup inspection across selected projects
+- [ ] Broader file history and backup inventory across selected projects
 - [ ] Config source explorer for user settings, project settings, local settings, and managed config
 - [ ] Prompt asset inventory for instructions, agents, commands, workflows, and output styles
 - [ ] Hooks and permissions diagnostics

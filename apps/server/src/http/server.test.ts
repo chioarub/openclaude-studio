@@ -415,6 +415,102 @@ describe('HTTP server', () => {
     expect(body.timeline).toHaveLength(2);
   });
 
+  test('returns a session change review through the read-only session changes route', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
+    const projectPath = join(home, 'project-a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(join(projectPath, 'src'), { recursive: true });
+    await writeFile(join(projectPath, 'src', 'api.ts'), 'export const value = 1;\n', 'utf8');
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [],
+        projects: {
+          [projectPath]: {
+            lastGracefulShutdown: '2026-05-28T08:00:00.000Z',
+            lastSessionId: 'session-review',
+          },
+        },
+      }),
+      'utf8',
+    );
+    const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(join(paths.fileHistoryDir, 'session-review'), { recursive: true });
+    await writeFile(join(paths.fileHistoryDir, 'session-review', 'api@v1'), 'export const value = 0;\n', 'utf8');
+    await writeFile(
+      join(projectDir, 'session-review.jsonl'),
+      [
+        JSON.stringify({
+          type: 'assistant',
+          sessionId: 'session-review',
+          timestamp: '2026-05-28T08:01:00.000Z',
+          cwd: projectPath,
+          message: {
+            role: 'assistant',
+            model: 'claude-sonnet',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'edit-api',
+                name: 'Edit',
+                input: { file_path: 'src/api.ts' },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: 'file-history-snapshot',
+          timestamp: '2026-05-28T08:01:01.000Z',
+          snapshot: {
+            timestamp: '2026-05-28T08:01:01.000Z',
+            trackedFileBackups: {
+              'src/api.ts': {
+                backupFileName: 'api@v1',
+                version: 1,
+                backupTime: '2026-05-28T08:01:01.000Z',
+              },
+            },
+          },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+    const server = await testServer(home);
+    const headers = tokenHeaders();
+
+    const projects = await server.inject({ method: 'GET', url: '/api/projects', headers });
+    const projectId = projects.json().projects[0].id;
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/sessions/session-review/changes`,
+      headers,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      sessionId: 'session-review',
+      totals: { fileCount: 1, additions: 1, deletions: 1, backupCount: 1 },
+      files: [
+        {
+          filePath: 'src/api.ts',
+          status: 'modified',
+          backupFileName: 'api@v1',
+          diff: {
+            hunks: [
+              {
+                lines: [
+                  { kind: 'remove', text: 'export const value = 0;' },
+                  { kind: 'add', text: 'export const value = 1;' },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
   test('serves project-scoped plans and tasks through read-only endpoints', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
     const projectPath = join(home, 'project-a');
@@ -544,6 +640,37 @@ describe('HTTP server', () => {
     const response = await server.inject({
       method: 'GET',
       url: `/api/projects/${projectId}/sessions/nonexistent`,
+      headers,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  test('returns 404 for nonexistent session change review', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
+    const projectPath = join(home, 'project-a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(projectPath, { recursive: true });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [],
+        projects: {
+          [projectPath]: { lastGracefulShutdown: '2026-05-28T08:00:00.000Z' },
+        },
+      }),
+      'utf8',
+    );
+    await mkdir(join(paths.projectsDir, encodeProjectPath(projectPath)), { recursive: true });
+    const server = await testServer(home);
+    const headers = tokenHeaders();
+
+    const projects = await server.inject({ method: 'GET', url: '/api/projects', headers });
+    const projectId = projects.json().projects[0].id;
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/sessions/nonexistent/changes`,
       headers,
     });
 

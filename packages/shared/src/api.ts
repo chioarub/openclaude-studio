@@ -117,6 +117,80 @@ export type SessionDetailsResponse = {
   timeline: ConversationTimelineEvent[];
 };
 
+export type SessionChangeStatus =
+  | 'modified'
+  | 'created'
+  | 'deleted'
+  | 'unchanged'
+  | 'missing-backup'
+  | 'missing-current'
+  | 'too-large'
+  | 'binary'
+  | 'unavailable';
+
+export type SessionChangeRiskFlag = {
+  level: 'info' | 'warn' | 'error';
+  label: string;
+  message: string;
+};
+
+export type SessionChangeRelatedEvent = {
+  id: string;
+  timestamp: string;
+  title: string;
+  toolName: string;
+  command: string | null;
+};
+
+export type SessionChangeDiffLine = {
+  kind: 'context' | 'add' | 'remove';
+  oldLine: number | null;
+  newLine: number | null;
+  text: string;
+};
+
+export type SessionChangeDiffHunk = {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: SessionChangeDiffLine[];
+};
+
+export type SessionChangeFileReview = {
+  id: string;
+  filePath: string;
+  status: SessionChangeStatus;
+  language: string | null;
+  backupFileName: string | null;
+  backupExists: boolean;
+  backupVersion: number | null;
+  backupTime: string | null;
+  beforeTruncated: boolean;
+  afterTruncated: boolean;
+  additions: number;
+  deletions: number;
+  riskFlags: SessionChangeRiskFlag[];
+  relatedEvents: SessionChangeRelatedEvent[];
+  diff: {
+    hunks: SessionChangeDiffHunk[];
+  } | null;
+  diagnostics: Diagnostic[];
+};
+
+export type SessionChangeReviewResponse = {
+  sessionId: string;
+  files: SessionChangeFileReview[];
+  totals: {
+    fileCount: number;
+    additions: number;
+    deletions: number;
+    backupCount: number;
+    riskFlagCount: number;
+  };
+  diagnostics: Diagnostic[];
+};
+
 export type LogFileSummary = {
   name: string;
   sizeBytes: number;

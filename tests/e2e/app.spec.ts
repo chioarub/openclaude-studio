@@ -17,6 +17,8 @@ test.beforeAll(async () => {
 
   await mkdir(join(projectPath, '.git'), { recursive: true });
   await writeFile(join(projectPath, '.git', 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+  await mkdir(join(projectPath, 'src'), { recursive: true });
+  await writeFile(join(projectPath, 'src', 'api.ts'), 'export const value = 1;\n', 'utf8');
   await writeFile(
     paths.openClaudeConfig,
     JSON.stringify({
@@ -42,6 +44,8 @@ test.beforeAll(async () => {
     'utf8',
   );
   await mkdir(join(paths.projectsDir, encodeProjectPath(projectPath)), { recursive: true });
+  await mkdir(join(paths.fileHistoryDir, 'session-1'), { recursive: true });
+  await writeFile(join(paths.fileHistoryDir, 'session-1', 'api@v1'), 'export const value = 0;\n', 'utf8');
   await writeFile(
     join(paths.projectsDir, encodeProjectPath(projectPath), 'session-1.jsonl'),
     [
@@ -64,8 +68,24 @@ test.beforeAll(async () => {
           usage: { input_tokens: 10, output_tokens: 20 },
           content: [
             { type: 'text', text: 'Done' },
+            { type: 'tool_use', id: 'tool-edit', name: 'Edit', input: { file_path: 'src/api.ts' } },
             { type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'npm test' } },
           ],
+        },
+      }),
+      JSON.stringify({
+        type: 'file-history-snapshot',
+        timestamp: '2026-05-28T08:01:30.000Z',
+        snapshot: {
+          messageId: 'message-1',
+          timestamp: '2026-05-28T08:01:30.000Z',
+          trackedFileBackups: {
+            'src/api.ts': {
+              backupFileName: 'api@v1',
+              version: 1,
+              backupTime: '2026-05-28T08:01:30.000Z',
+            },
+          },
         },
       }),
       JSON.stringify({
@@ -144,6 +164,19 @@ test('loads project overview, sessions, provider, and logs', async ({ page }) =>
   await expect(detailsDialog.getByText('npm test')).toBeVisible();
   await expect(detailsDialog.getByText('Command output')).toBeVisible();
   await expect(detailsDialog.locator('code').filter({ hasText: /^ok\s*$/ })).toBeVisible();
+  await detailsDialog.getByRole('tab', { name: /Review Changes/ }).click();
+  await expect(detailsDialog.getByText('Changed files')).toBeVisible();
+  await expect(detailsDialog.getByRole('tree', { name: 'Changed files' }).getByRole('treeitem', { name: 'src/api.ts' })).toBeVisible();
+  await expect(detailsDialog.getByRole('article', { name: 'Diff for src/api.ts' })).toBeVisible();
+  await detailsDialog.getByRole('button', { name: 'Hide file tree' }).click();
+  await expect(detailsDialog.getByRole('tree', { name: 'Changed files' })).toBeHidden();
+  await expect(detailsDialog.getByRole('article', { name: 'Diff for src/api.ts' })).toBeVisible();
+  await detailsDialog.getByRole('button', { name: 'Show file tree' }).click();
+  await expect(detailsDialog.getByRole('tree', { name: 'Changed files' })).toBeVisible();
+  await expect(detailsDialog.getByText('@@ -1,1 +1,1 @@')).toBeVisible();
+  await expect(detailsDialog.getByText('export const value = 0;')).toBeVisible();
+  await expect(detailsDialog.getByText('export const value = 1;')).toBeVisible();
+  await detailsDialog.getByRole('tab', { name: /Conversation/ }).click();
   await detailsDialog.getByRole('button', { name: /tools used/i }).click();
   await expect(detailsDialog.getByText('Bash x1')).toBeVisible();
   await page.keyboard.press('Escape');

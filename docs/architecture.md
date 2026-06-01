@@ -31,6 +31,7 @@ The server is intentionally narrow:
 
 - Discover OpenClaude projects from local config.
 - Read session summaries and rich session details from local project session files.
+- Produce read-only per-session change reviews from selected-session mutation events, bounded current project file reads, and scoped file-history backups.
 - Read project-scoped plans and tasks, plus session file-history context.
 - Read provider configuration with secret fields redacted.
 - Read debug logs through bounded, indexed windows.
@@ -64,5 +65,6 @@ All public API response shapes should be defined in `packages/shared/src/api.ts`
 - Keep file reads bounded.
 - Avoid following symlinks for sensitive local file reads.
 - Redact likely secrets before sending data to the browser.
+- Build change review diffs only from bounded, redacted text content; report diagnostics instead of returning unsupported or oversized content.
 - Scope project-specific views by project/session identifiers when available.
 - Prefer explicit diagnostics over silent failure when local data is missing or malformed.
