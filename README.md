@@ -46,13 +46,21 @@ It does not currently edit OpenClaude settings, provider profiles, sessions, log
 
 Screenshots use synthetic fixture data only.
 
-![Control Center](docs/assets/control-center.png)
+![Control Center - Light](docs/assets/control-center.png)
 
-![Session Details](docs/assets/session-details.png)
+![Control Center - Dark](docs/assets/control-center-dark.png)
 
-![Plans and Tasks](docs/assets/plans-tasks.png)
+![Session Details Review Changes - Light](docs/assets/session-details.png)
 
-![Logs](docs/assets/logs.png)
+![Session Details Review Changes - Dark](docs/assets/session-details-dark.png)
+
+![Plans and Tasks - Light](docs/assets/plans-tasks.png)
+
+![Plans and Tasks - Dark](docs/assets/plans-tasks-dark.png)
+
+![Logs - Light](docs/assets/logs.png)
+
+![Logs - Dark](docs/assets/logs-dark.png)
 
 ## How It Works
 
