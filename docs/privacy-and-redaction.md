@@ -25,6 +25,8 @@ The server redacts likely secrets before returning data to the browser. Current 
 - Bearer tokens
 - Common API key formats in logs and messages
 
+Session Change Review can display code or configuration text from current project files and OpenClaude file-history backups. Those reads are bounded, symlink-safe, and redacted before diff generation, but redaction remains best effort. Review screenshots, copied diffs, and recordings before sharing them.
+
 Redaction is defense in depth, not a guarantee. New providers, unusual token formats, or arbitrary user content may still contain sensitive data.
 
 ## Contributor Rules

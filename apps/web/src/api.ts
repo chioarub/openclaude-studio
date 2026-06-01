@@ -6,6 +6,7 @@ import type {
   PlanDetailsResponse,
   PlansResponse,
   ProjectsResponse,
+  SessionChangeReviewResponse,
   SessionDetailsResponse,
   SessionSummary,
   TaskDetailsResponse,
@@ -60,6 +61,8 @@ export function createApiClient(settings: ConnectionSettings) {
       request<SessionsResponse>(`/api/projects/${encodeURIComponent(projectId)}/sessions`),
     sessionDetails: (projectId: string, sessionId: string) =>
       request<SessionDetailsResponse>(`/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`),
+    sessionChanges: (projectId: string, sessionId: string) =>
+      request<SessionChangeReviewResponse>(`/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}/changes`),
     logWindow: (input: { fileName?: string; projectId?: string; start?: number; count?: number; tail?: boolean } = {}) =>
       request<LogsWindowResponse>(`/api/logs/window${queryString(input)}`),
     logSearch: (

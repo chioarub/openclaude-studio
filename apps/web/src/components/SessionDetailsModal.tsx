@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X,
@@ -15,11 +15,24 @@ import {
   History,
   ListChecks,
   ChevronDown,
+  ChevronRight,
+  FileDiff,
+  Folder,
+  AlertTriangle,
+  RefreshCw,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 
-import type { ConversationTimelineEvent, SessionDetailsResponse } from '@openclaude-studio/shared';
+import type {
+  ConversationTimelineEvent,
+  Diagnostic,
+  SessionChangeFileReview,
+  SessionChangeReviewResponse,
+  SessionDetailsResponse,
+} from '@openclaude-studio/shared';
 
-import type { createApiClient } from '../api.js';
+import { ApiRequestError, type createApiClient } from '../api.js';
 import { cn } from '../lib/cn.js';
 import { CopyablePath } from './CopyablePath.js';
 
@@ -36,10 +49,33 @@ type FileHistoryGroup = {
   missingBackups: number;
   newFiles: number;
 };
+type ChangeFileTreeNode =
+  | {
+      type: 'directory';
+      name: string;
+      path: string;
+      children: ChangeFileTreeNode[];
+      fileCount: number;
+      additions: number;
+      deletions: number;
+    }
+  | {
+      type: 'file';
+      name: string;
+      path: string;
+      file: SessionChangeFileReview;
+    };
 type PartialSessionDetails = Partial<SessionDetailsResponse['session']> & {
   tokens?: Partial<SessionDetailsResponse['session']['tokens']>;
 };
 type TimelineTool = NonNullable<ConversationTimelineEvent['tool']>;
+type SessionDetailsTab = 'conversation' | 'changes';
+type SessionDetailsTabIds = Record<SessionDetailsTab, { panelId: string; tabId: string }>;
+type PartialSessionChangeReview = Partial<SessionChangeReviewResponse> & {
+  totals?: Partial<SessionChangeReviewResponse['totals']>;
+};
+
+const unsupportedChangeReviewMessage = 'Review Changes requires a newer local server. Update or restart the local OpenClaude Studio server to use this tab.';
 
 export type InlineSegment =
   | { type: 'text'; text: string }
@@ -68,10 +104,26 @@ export function SessionDetailsModal({
 }) {
   const [details, setDetails] = useState<SessionDetailsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<SessionDetailsTab>('conversation');
+  const [changeReview, setChangeReview] = useState<SessionChangeReviewResponse | null>(null);
+  const [changeReviewError, setChangeReviewError] = useState<string | null>(null);
+  const [changeReviewLoading, setChangeReviewLoading] = useState(false);
+  const [changeReviewReloadKey, setChangeReviewReloadKey] = useState(0);
   const [showAll, setShowAll] = useState(false);
   const [copied, setCopied] = useState(false);
   const mountedRef = useRef(true);
   const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tabBaseId = useId();
+  const tabIds = useMemo<SessionDetailsTabIds>(() => ({
+    conversation: {
+      tabId: `${tabBaseId}-conversation-tab`,
+      panelId: `${tabBaseId}-conversation-panel`,
+    },
+    changes: {
+      tabId: `${tabBaseId}-changes-tab`,
+      panelId: `${tabBaseId}-changes-panel`,
+    },
+  }), [tabBaseId]);
 
   useEffect(() => {
     return () => {
@@ -87,12 +139,21 @@ export function SessionDetailsModal({
     if (!sessionId || !isOpen || !projectId) {
       setDetails(null);
       setError(null);
+      setActiveTab('conversation');
+      setChangeReview(null);
+      setChangeReviewError(null);
+      setChangeReviewLoading(false);
       return () => {
         ignore = true;
       };
     }
     setDetails(null);
     setError(null);
+    setActiveTab('conversation');
+    setChangeReview(null);
+    setChangeReviewError(null);
+    setChangeReviewLoading(false);
+    setChangeReviewReloadKey(0);
     setShowAll(false);
     api
       .sessionDetails(projectId, sessionId)
@@ -106,6 +167,41 @@ export function SessionDetailsModal({
       ignore = true;
     };
   }, [sessionId, projectId, isOpen, api]);
+
+  useEffect(() => {
+    let ignore = false;
+    if (!sessionId || !projectId || !isOpen || activeTab !== 'changes') {
+      return () => {
+        ignore = true;
+      };
+    }
+
+    setChangeReviewLoading(true);
+    setChangeReviewError(null);
+    api
+      .sessionChanges(projectId, sessionId)
+      .then((data: SessionChangeReviewResponse) => {
+        if (!ignore) setChangeReview(normalizeSessionChangeReviewResponse(data, sessionId));
+      })
+      .catch((err: unknown) => {
+        if (!ignore) {
+          if (err instanceof ApiRequestError && (err.status === 404 || err.status === 405)) {
+            setChangeReview(unsupportedChangeReviewResponse(sessionId));
+            setChangeReviewError(null);
+            return;
+          }
+          setChangeReview(null);
+          setChangeReviewError(err instanceof Error ? err.message : 'Unable to load session change review.');
+        }
+      })
+      .finally(() => {
+        if (!ignore) setChangeReviewLoading(false);
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [activeTab, sessionId, projectId, isOpen, api, changeReviewReloadKey]);
 
   const timeline = useMemo(
     () => (details?.timeline ?? []).filter(isRenderableTimelineEvent),
@@ -141,13 +237,21 @@ export function SessionDetailsModal({
     () => groupFileHistoryEntries(session?.fileHistory ?? []),
     [session?.fileHistory],
   );
+  const reviewTabFileCount = changeReview && !isUnsupportedChangeReview(changeReview)
+    ? changeReview.totals.fileCount
+    : session?.changedFiles.length ?? 0;
+  const handleRetryChangeReview = () => {
+    setChangeReview(null);
+    setChangeReviewError(null);
+    setChangeReviewReloadKey((value) => value + 1);
+  };
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
       title={details ? 'Session Details' : 'Loading...'}
-      className="max-w-5xl h-[88vh]"
+      className="max-w-[min(96vw,1320px)] h-[90vh]"
       bodyClassName="p-0 overflow-hidden flex-1 min-h-0"
     >
       {details && session ? (
@@ -177,8 +281,25 @@ export function SessionDetailsModal({
             </div>
           </div>
 
+          <SessionDetailsTabList
+            activeTab={activeTab}
+            onChange={setActiveTab}
+            changedFileCount={reviewTabFileCount}
+            tabIds={tabIds}
+          />
+
           {/* Body: 8/4 grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 flex-1 min-h-0 overflow-hidden pt-8">
+          <div
+            id={tabIds.conversation.panelId}
+            role="tabpanel"
+            aria-labelledby={tabIds.conversation.tabId}
+            tabIndex={0}
+            hidden={activeTab !== 'conversation'}
+            className={cn(
+              'grid-cols-1 lg:grid-cols-12 gap-8 flex-1 min-h-0 overflow-hidden pt-8 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/15',
+              activeTab === 'conversation' ? 'grid' : 'hidden',
+            )}
+          >
             {/* Left: conversation */}
             <div className="lg:col-span-8 flex min-h-0 flex-col">
               <div className="flex items-center justify-between border-b border-hairline-soft pb-3 mb-4 shrink-0">
@@ -383,6 +504,24 @@ export function SessionDetailsModal({
               </div>
             </div>
           </div>
+          <div
+            id={tabIds.changes.panelId}
+            role="tabpanel"
+            aria-labelledby={tabIds.changes.tabId}
+            tabIndex={0}
+            hidden={activeTab !== 'changes'}
+            className={cn(
+              'flex-1 min-h-0 overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/15',
+              activeTab === 'changes' ? 'flex' : 'hidden',
+            )}
+          >
+            <SessionChangeReviewPanel
+              review={changeReview}
+              loading={changeReviewLoading}
+              error={changeReviewError}
+              onRetry={handleRetryChangeReview}
+            />
+          </div>
         </div>
       ) : error ? (
         <div className="h-full min-h-64 flex flex-col items-center justify-center text-error gap-4 p-6">
@@ -435,6 +574,30 @@ function normalizeSessionDetailsResponse(data: SessionDetailsResponse): SessionD
   };
 }
 
+function unsupportedChangeReviewResponse(sessionId: string): SessionChangeReviewResponse {
+  return {
+    sessionId,
+    files: [],
+    totals: {
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+      backupCount: 0,
+      riskFlagCount: 0,
+    },
+    diagnostics: [
+      {
+        level: 'info',
+        message: unsupportedChangeReviewMessage,
+      },
+    ],
+  };
+}
+
+function isUnsupportedChangeReview(review: SessionChangeReviewResponse): boolean {
+  return review.diagnostics.some((diagnostic) => diagnostic.message === unsupportedChangeReviewMessage);
+}
+
 function normalizeTimelineEvent(value: unknown, index: number): ConversationTimelineEvent {
   const event = isRecord(value) ? value : {};
   const kind = event.kind;
@@ -483,12 +646,136 @@ function normalizeTimelineTool(value: Record<string, unknown>): TimelineTool {
   };
 }
 
+function normalizeSessionChangeReviewResponse(data: SessionChangeReviewResponse, fallbackSessionId: string): SessionChangeReviewResponse {
+  const review = data as PartialSessionChangeReview;
+  const files = arrayOrEmpty<unknown>(review.files).map(normalizeChangeFileReview);
+  const totals = (isRecord(review.totals) ? review.totals : {}) as Partial<SessionChangeReviewResponse['totals']>;
+  return {
+    sessionId: typeof review.sessionId === 'string' && review.sessionId ? review.sessionId : fallbackSessionId,
+    files,
+    totals: {
+      fileCount: finiteNumberOrFallback(totals.fileCount, files.length),
+      additions: finiteNumberOrFallback(totals.additions, sum(files, (file) => file.additions)),
+      deletions: finiteNumberOrFallback(totals.deletions, sum(files, (file) => file.deletions)),
+      backupCount: finiteNumberOrFallback(totals.backupCount, files.filter((file) => file.backupExists).length),
+      riskFlagCount: finiteNumberOrFallback(totals.riskFlagCount, sum(files, (file) => file.riskFlags.length)),
+    },
+    diagnostics: arrayOrEmpty<unknown>(review.diagnostics).map(normalizeDiagnostic),
+  };
+}
+
+function normalizeChangeFileReview(value: unknown, index: number): SessionChangeFileReview {
+  const file = isRecord(value) ? value : {};
+  const status = normalizeChangeStatus(file.status);
+  return {
+    id: typeof file.id === 'string' && file.id ? file.id : `change-${index}`,
+    filePath: typeof file.filePath === 'string' && file.filePath ? file.filePath : 'unknown file',
+    status,
+    language: typeof file.language === 'string' ? file.language : null,
+    backupFileName: typeof file.backupFileName === 'string' ? file.backupFileName : null,
+    backupExists: Boolean(file.backupExists),
+    backupVersion: finiteNumberOrNull(file.backupVersion),
+    backupTime: typeof file.backupTime === 'string' ? file.backupTime : null,
+    beforeTruncated: Boolean(file.beforeTruncated),
+    afterTruncated: Boolean(file.afterTruncated),
+    additions: finiteNumber(file.additions),
+    deletions: finiteNumber(file.deletions),
+    riskFlags: arrayOrEmpty<unknown>(file.riskFlags).map((flag) => {
+      const item = isRecord(flag) ? flag : {};
+      return {
+        level: item.level === 'error' || item.level === 'warn' || item.level === 'info' ? item.level : 'info',
+        label: typeof item.label === 'string' && item.label ? item.label : 'Review note',
+        message: typeof item.message === 'string' ? item.message : '',
+      };
+    }),
+    relatedEvents: arrayOrEmpty<unknown>(file.relatedEvents).map((event, eventIndex) => {
+      const item = isRecord(event) ? event : {};
+      return {
+        id: typeof item.id === 'string' && item.id ? item.id : `event-${eventIndex}`,
+        timestamp: validTimestampOrFallback(item.timestamp),
+        title: typeof item.title === 'string' && item.title ? item.title : 'Tool event',
+        toolName: typeof item.toolName === 'string' && item.toolName ? item.toolName : 'Tool',
+        command: typeof item.command === 'string' ? item.command : null,
+      };
+    }),
+    diff: normalizeChangeDiff(file.diff),
+    diagnostics: arrayOrEmpty<unknown>(file.diagnostics).map(normalizeDiagnostic),
+  };
+}
+
+function normalizeChangeStatus(value: unknown): SessionChangeFileReview['status'] {
+  return value === 'modified' ||
+    value === 'created' ||
+    value === 'deleted' ||
+    value === 'unchanged' ||
+    value === 'missing-backup' ||
+    value === 'missing-current' ||
+    value === 'too-large' ||
+    value === 'binary' ||
+    value === 'unavailable'
+    ? value
+    : 'unavailable';
+}
+
+function normalizeChangeDiff(value: unknown): SessionChangeFileReview['diff'] {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return {
+    hunks: arrayOrEmpty<unknown>(value.hunks).map((hunk) => {
+      const item = isRecord(hunk) ? hunk : {};
+      return {
+        oldStart: finiteNumber(item.oldStart),
+        oldLines: finiteNumber(item.oldLines),
+        newStart: finiteNumber(item.newStart),
+        newLines: finiteNumber(item.newLines),
+        lines: arrayOrEmpty<unknown>(item.lines).map((line) => {
+          const diffLine = isRecord(line) ? line : {};
+          const kind = diffLine.kind === 'add' || diffLine.kind === 'remove' || diffLine.kind === 'context'
+            ? diffLine.kind
+            : 'context';
+          return {
+            kind,
+            oldLine: finiteNumberOrNull(diffLine.oldLine),
+            newLine: finiteNumberOrNull(diffLine.newLine),
+            text: typeof diffLine.text === 'string' ? diffLine.text : '',
+          };
+        }),
+      };
+    }),
+  };
+}
+
+function normalizeDiagnostic(value: unknown): Diagnostic {
+  const item = isRecord(value) ? value : {};
+  const diagnostic: Diagnostic = {
+    level: item.level === 'error' || item.level === 'warn' || item.level === 'info' ? item.level : 'info',
+    message: typeof item.message === 'string' ? item.message : '',
+  };
+  if (typeof item.path === 'string') {
+    diagnostic.path = item.path;
+  }
+  return diagnostic;
+}
+
 function arrayOrEmpty<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
 function finiteNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function finiteNumberOrFallback(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function finiteNumberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function sum<T>(items: T[], selector: (item: T) => number): number {
+  return items.reduce((total, item) => total + selector(item), 0);
 }
 
 function validTimestampOrFallback(value: unknown): string {
@@ -500,6 +787,1049 @@ function validTimestampOrFallback(value: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function SessionDetailsTabList({
+  activeTab,
+  onChange,
+  changedFileCount,
+  tabIds,
+}: {
+  activeTab: SessionDetailsTab;
+  onChange: (tab: SessionDetailsTab) => void;
+  changedFileCount: number;
+  tabIds: SessionDetailsTabIds;
+}) {
+  const tabs: Array<{ id: SessionDetailsTab; label: string; count?: number; icon: ReactNode }> = [
+    { id: 'conversation', label: 'Conversation', icon: <MessageSquare className="h-3.5 w-3.5" /> },
+    { id: 'changes', label: 'Review Changes', count: changedFileCount, icon: <FileDiff className="h-3.5 w-3.5" /> },
+  ];
+  const focusTab = (tabId: string) => {
+    const focus = () => document.getElementById(tabId)?.focus();
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(focus);
+    } else {
+      window.setTimeout(focus, 0);
+    }
+  };
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
+    const lastIndex = tabs.length - 1;
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      nextIndex = index === lastIndex ? 0 : index + 1;
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      nextIndex = index === 0 ? lastIndex : index - 1;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = lastIndex;
+    }
+    if (nextIndex === null) {
+      return;
+    }
+    event.preventDefault();
+    const nextTab = tabs[nextIndex]!;
+    onChange(nextTab.id);
+    focusTab(tabIds[nextTab.id].tabId);
+  };
+
+  return (
+    <div className="shrink-0 border-b border-hairline-soft pt-4">
+      <div role="tablist" aria-label="Session details sections" className="flex flex-wrap gap-2">
+        {tabs.map((tab, index) => {
+          const selected = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              id={tabIds[tab.id].tabId}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              aria-controls={tabIds[tab.id].panelId}
+              tabIndex={selected ? 0 : -1}
+              className={cn(
+                'inline-flex h-9 items-center gap-2 rounded-md border px-3 text-xs font-medium uppercase tracking-[0.12em] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/15',
+                selected
+                  ? 'border-primary/30 bg-primary/10 text-primary'
+                  : 'border-hairline-soft bg-canvas text-muted hover:bg-surface-soft hover:text-ink',
+              )}
+              onClick={() => onChange(tab.id)}
+              onKeyDown={(event) => handleKeyDown(event, index)}
+            >
+              {tab.icon}
+              {tab.label}
+              {tab.count !== undefined && (
+                <span className="rounded bg-surface-soft px-1.5 py-0.5 font-mono text-[11px] text-muted">
+                  {tab.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SessionChangeReviewPanel({
+  review,
+  loading,
+  error,
+  onRetry,
+}: {
+  review: SessionChangeReviewResponse | null;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+}) {
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
+  const files = useMemo(
+    () => (review?.files ?? []).slice().sort(compareChangeFilesForDisplay),
+    [review],
+  );
+
+  useEffect(() => {
+    if (!review) {
+      setSelectedFileId(null);
+      return;
+    }
+    setSelectedFileId((current) => (current && files.some((file) => file.id === current) ? current : files[0]?.id ?? null));
+  }, [files, review]);
+
+  if (loading && !review) {
+    return (
+      <div className="flex flex-1 min-h-0 items-center justify-center pt-8 text-muted">
+        <div className="flex items-center gap-3">
+          <div className="h-5 w-5 rounded-full border border-primary border-t-transparent animate-spin" />
+          <span className="text-sm font-medium">Loading change review...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error && !review) {
+    return (
+      <div className="flex flex-1 min-h-0 items-center justify-center pt-8">
+        <div className="max-w-md rounded-lg border border-error/20 bg-error/[0.04] p-5 text-sm text-error">
+          <div className="mb-3 flex items-center gap-2 font-medium">
+            <AlertTriangle className="h-4 w-4" />
+            Unable to load change review
+          </div>
+          <p>{error}</p>
+          <Button variant="secondary" className="mt-4 h-9 px-3 text-xs" onClick={onRetry}>
+            <RefreshCw className="mr-2 h-3.5 w-3.5" />
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!review) {
+    return null;
+  }
+
+  if (isUnsupportedChangeReview(review)) {
+    return (
+      <div className="flex flex-1 min-h-0 items-center justify-center pt-8">
+        <div className="max-w-lg rounded-lg border border-primary/15 bg-primary/[0.04] p-5 text-sm text-ink">
+          <div className="mb-3 flex items-center gap-2 font-medium">
+            <AlertTriangle className="h-4 w-4 text-primary" />
+            Review Changes requires a newer local server
+          </div>
+          <p className="leading-6 text-muted">{unsupportedChangeReviewMessage}</p>
+          <Button variant="secondary" className="mt-4 h-9 px-3 text-xs" onClick={onRetry}>
+            <RefreshCw className="mr-2 h-3.5 w-3.5" />
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const diffableFiles = files.filter(hasReviewableDiff);
+  const unavailableFiles = files.filter((file) => !hasReviewableDiff(file));
+  const handleSelectFile = (file: SessionChangeFileReview) => {
+    setSelectedFileId(file.id);
+    document.getElementById(changeFileDomId(file))?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
+
+  return (
+    <div className="flex flex-1 min-h-0 flex-col gap-4 pt-6 pr-2">
+      <ChangeReviewSummaryBar
+        review={review}
+        diffableCount={diffableFiles.length}
+        unavailableCount={unavailableFiles.length}
+      />
+
+      <DiagnosticsList diagnostics={review.diagnostics} />
+
+      {files.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-hairline-soft bg-surface-soft/30 px-4 py-10 text-center text-sm text-muted">
+          No reviewable file changes were derived from this session.
+        </div>
+      ) : (
+        <ChangeReviewWorkspace
+          files={files}
+          selectedFileId={selectedFileId}
+          onSelectFile={handleSelectFile}
+        />
+      )}
+    </div>
+  );
+}
+
+function ChangeReviewSummaryBar({
+  review,
+  diffableCount,
+  unavailableCount,
+}: {
+  review: SessionChangeReviewResponse;
+  diffableCount: number;
+  unavailableCount: number;
+}) {
+  return (
+    <div className="rounded-lg border border-hairline-soft bg-canvas px-4 py-3">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-medium text-ink">
+            <FileDiff className="h-4 w-4 text-primary" />
+            <span>Session review</span>
+          </div>
+          <div className="mt-1 flex items-center gap-2 text-xs text-muted">
+            <span>{diffableCount} {pluralize(diffableCount, 'file')} with diffs</span>
+            <UnavailableChangeInfo count={unavailableCount} />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-x-5 gap-y-2 sm:flex sm:flex-wrap sm:justify-end">
+          <ReviewMetric label="Files" value={`${review.totals.fileCount} changed ${pluralize(review.totals.fileCount, 'file')}`} />
+          <ReviewMetric label="Additions" value={`+${review.totals.additions}`} tone="success" />
+          <ReviewMetric label="Deletions" value={`-${review.totals.deletions}`} tone="error" />
+          <ReviewMetric
+            label="Risk Flags"
+            value={`${review.totals.riskFlagCount} risk ${pluralize(review.totals.riskFlagCount, 'flag')}`}
+            tone={review.totals.riskFlagCount > 0 ? 'warning' : 'neutral'}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChangeReviewWorkspace({
+  files,
+  selectedFileId,
+  onSelectFile,
+}: {
+  files: SessionChangeFileReview[];
+  selectedFileId: string | null;
+  onSelectFile: (file: SessionChangeFileReview) => void;
+}) {
+  const fileTreeId = useId();
+  const [isFileTreeVisible, setIsFileTreeVisible] = useState(true);
+  const toggleLabel = isFileTreeVisible ? 'Hide file tree' : 'Show file tree';
+
+  return (
+    <div
+      className={cn(
+        'grid min-h-0 flex-1 overflow-hidden gap-4',
+        isFileTreeVisible ? 'lg:grid-cols-[18rem_minmax(0,1fr)] xl:grid-cols-[19.5rem_minmax(0,1fr)]' : 'grid-cols-1',
+      )}
+    >
+      {isFileTreeVisible && (
+        <ChangeFileNavigation
+          id={fileTreeId}
+          files={files}
+          selectedFileId={selectedFileId}
+          onSelectFile={onSelectFile}
+        />
+      )}
+
+      <section
+        aria-label="File diffs"
+        className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-hairline-soft bg-canvas"
+      >
+        <div className="flex flex-col gap-2 border-b border-hairline-soft bg-surface-soft/35 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm font-medium text-ink">Diffs</div>
+          <Button
+            type="button"
+            variant="secondary"
+            className="h-7 w-fit px-2.5 text-xs"
+            aria-expanded={isFileTreeVisible}
+            aria-controls={isFileTreeVisible ? fileTreeId : undefined}
+            title={toggleLabel}
+            onClick={() => setIsFileTreeVisible((visible) => !visible)}
+          >
+            {isFileTreeVisible ? <PanelLeftClose className="mr-1.5 h-3.5 w-3.5" /> : <PanelLeftOpen className="mr-1.5 h-3.5 w-3.5" />}
+            {toggleLabel}
+          </Button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-3 pb-8 custom-scrollbar">
+          <div className="space-y-3">
+            {files.map((file) => (
+              <ChangeFileCard key={file.id} file={file} selected={file.id === selectedFileId} />
+            ))}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ChangeFileNavigation({
+  id,
+  files,
+  selectedFileId,
+  onSelectFile,
+}: {
+  id: string;
+  files: SessionChangeFileReview[];
+  selectedFileId: string | null;
+  onSelectFile: (file: SessionChangeFileReview) => void;
+}) {
+  const tree = useMemo(() => buildChangeFileTree(files), [files]);
+  const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(() => new Set());
+  const toggleDirectory = (path: string) => {
+    setCollapsedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  };
+
+  return (
+    <nav id={id} aria-label="Changed files" className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-hairline-soft bg-canvas">
+      <div className="flex flex-col gap-1 border-b border-hairline-soft bg-surface-soft/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <h3 className="text-sm font-medium text-ink">Changed files</h3>
+        <div className="font-mono text-xs text-muted">
+          <span className="text-success">+{sumChangeLines(files, 'additions')}</span>
+          <span className="mx-2 text-muted-soft">/</span>
+          <span className="text-error">-{sumChangeLines(files, 'deletions')}</span>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto py-2 pb-8 custom-scrollbar">
+        {tree.map((node) => (
+          <ChangeFileTreeItem
+            key={node.path}
+            node={node}
+            level={0}
+            collapsedPaths={collapsedPaths}
+            selectedFileId={selectedFileId}
+            onToggleDirectory={toggleDirectory}
+            onSelectFile={onSelectFile}
+          />
+        ))}
+      </div>
+    </nav>
+  );
+}
+
+function ChangeFileTreeItem({
+  node,
+  level,
+  collapsedPaths,
+  selectedFileId,
+  onToggleDirectory,
+  onSelectFile,
+}: {
+  node: ChangeFileTreeNode;
+  level: number;
+  collapsedPaths: Set<string>;
+  selectedFileId: string | null;
+  onToggleDirectory: (path: string) => void;
+  onSelectFile: (file: SessionChangeFileReview) => void;
+}) {
+  if (node.type === 'directory') {
+    const collapsed = collapsedPaths.has(node.path);
+    return (
+      <div>
+        <button
+          type="button"
+          aria-expanded={!collapsed}
+          aria-label={`${node.path || node.name} folder`}
+          onClick={() => onToggleDirectory(node.path)}
+          className="flex w-full min-w-0 items-center gap-1.5 px-2.5 py-1.5 text-left font-mono text-[11px] text-muted-soft transition-colors hover:bg-surface-soft/45 focus:outline-none focus-visible:bg-surface-soft focus-visible:ring-2 focus-visible:ring-primary/15"
+          style={{ paddingLeft: `${10 + level * 14}px` }}
+        >
+          {collapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
+          <Folder className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate" title={node.path || node.name}>{node.name}</span>
+          <span className="shrink-0 text-[10px] text-muted-soft">{node.fileCount}</span>
+        </button>
+        {!collapsed && (
+          <div>
+            {node.children.map((child) => (
+              <ChangeFileTreeItem
+                key={child.path}
+                node={child}
+                level={level + 1}
+                collapsedPaths={collapsedPaths}
+                selectedFileId={selectedFileId}
+                onToggleDirectory={onToggleDirectory}
+                onSelectFile={onSelectFile}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const file = node.file;
+  return (
+    <button
+      type="button"
+      aria-label={file.filePath}
+      aria-current={file.id === selectedFileId ? 'true' : undefined}
+      onClick={() => onSelectFile(file)}
+      className={cn(
+        'flex w-full min-w-0 items-center gap-2 px-2.5 py-1.5 text-left transition-colors focus:outline-none focus-visible:bg-surface-soft focus-visible:ring-2 focus-visible:ring-primary/15',
+        file.id === selectedFileId ? 'bg-primary/[0.07]' : 'hover:bg-surface-soft/45',
+      )}
+      style={{ paddingLeft: `${24 + level * 14}px` }}
+    >
+      <ChangeStatusDot status={file.status} />
+      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink" title={file.filePath}>{node.name}</span>
+      <ChangeTreeLineStats file={file} />
+    </button>
+  );
+}
+
+function UnavailableChangeInfo({ count }: { count: number }) {
+  if (count === 0) {
+    return null;
+  }
+
+  const label = `${count} ${pluralize(count, 'file')} cannot be diffed`;
+  const description = [
+    label,
+    'Studio found these file changes in the session transcript, but it does not have safe before/after text for them.',
+    'Common causes: current file removed, missing file-history backup, oversized content, or non-text content.',
+  ].join(' ');
+
+  return (
+    <span
+      aria-label={label}
+      title={description}
+      className="inline-flex w-fit items-center gap-1 rounded border border-warning/25 bg-warning/[0.08] px-1.5 py-0.5 text-warning"
+    >
+      <AlertTriangle className="h-3.5 w-3.5" />
+      <span>{count} unavailable</span>
+    </span>
+  );
+}
+
+function ReviewMetric({ label, value, tone = 'neutral' }: { label: string; value: string; tone?: 'neutral' | 'success' | 'error' | 'warning' }) {
+  const toneClass = {
+    neutral: 'text-ink',
+    success: 'text-success',
+    error: 'text-error',
+    warning: 'text-warning',
+  }[tone];
+
+  return (
+    <div className="min-w-[5.5rem]">
+      <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-soft">{label}</div>
+      <div className={cn('truncate font-mono text-[13px] font-medium', toneClass)}>{value}</div>
+    </div>
+  );
+}
+
+function ChangeFileCard({ file, selected = false }: { file: SessionChangeFileReview; selected?: boolean }) {
+  const diffText = changeFileUnifiedDiffText(file);
+  const hasDiff = Boolean(diffText);
+
+  return (
+    <article
+      id={changeFileDomId(file)}
+      aria-label={hasDiff ? `Diff for ${file.filePath}` : `Change details for ${file.filePath}`}
+      className={cn(
+        'scroll-mt-3 overflow-hidden rounded-md border bg-canvas',
+        selected ? 'border-primary/35 shadow-sm shadow-primary/10' : 'border-hairline-soft',
+      )}
+    >
+      <header className="border-b border-hairline-soft bg-surface-soft/35 px-3 py-2.5">
+        <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex min-w-0 flex-1 items-start gap-2">
+            <FileDiff className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-soft" />
+            <CopyablePath
+              value={file.filePath}
+              copyLabel={`Copy path for ${file.filePath}`}
+              truncate
+              className="min-w-0 flex-1 font-mono text-[13px] text-ink"
+              textClassName="truncate font-medium"
+              buttonClassName="h-6 w-6"
+            />
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2 lg:justify-end">
+            <ChangeLineStats file={file} />
+            {hasDiff && (
+              <Button
+                variant="secondary"
+                className="h-7 px-2.5 text-xs"
+                aria-label={`Copy diff for ${file.filePath}`}
+                onClick={() => {
+                  if (navigator.clipboard) {
+                    void navigator.clipboard.writeText(diffText);
+                  }
+                }}
+              >
+                <Copy className="mr-1.5 h-3.5 w-3.5" />
+                Copy Diff
+              </Button>
+            )}
+          </div>
+        </div>
+        <ChangeFileMetadata file={file} />
+      </header>
+
+      {hasDiff ? <DiffPanel file={file} /> : <UnavailableDiffPanel file={file} />}
+
+      <FileDiagnostics file={file} />
+    </article>
+  );
+}
+
+function ChangeFileMetadata({ file }: { file: SessionChangeFileReview }) {
+  const currentState = currentContentStateLabel(file);
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-muted">
+      <StatusBadge status={file.status} />
+      {file.language && (
+        <span className="rounded bg-canvas px-2 py-0.5 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-soft">
+          {file.language}
+        </span>
+      )}
+      <span>{backupContentStateLabel(file)}</span>
+      {currentState && <span>{currentState}</span>}
+      {file.backupVersion !== null && <span className="font-mono">v{file.backupVersion}</span>}
+      {file.backupTime && <span>{formatBackupTime(file.backupTime)}</span>}
+      <FileActivitySummary events={file.relatedEvents} />
+      <InlineRiskFlags flags={file.riskFlags} />
+      {(file.beforeTruncated || file.afterTruncated) && <span>Content truncated</span>}
+    </div>
+  );
+}
+
+function ChangeLineStats({ file }: { file: SessionChangeFileReview }) {
+  if (!hasReviewableDiff(file)) {
+    return <span className="whitespace-nowrap rounded bg-surface-soft px-2 py-0.5 font-mono text-xs text-muted">No diff</span>;
+  }
+
+  return (
+    <span className="inline-flex items-center gap-2 whitespace-nowrap rounded bg-canvas px-2 py-0.5 font-mono text-xs">
+      <span className="text-success">+{file.additions}</span>
+      <span className="text-error">-{file.deletions}</span>
+    </span>
+  );
+}
+
+function ChangeTreeLineStats({ file }: { file: SessionChangeFileReview }) {
+  if (!hasReviewableDiff(file)) {
+    return <span className="shrink-0 font-mono text-[11px] text-muted-soft">No diff</span>;
+  }
+
+  return (
+    <span className="shrink-0 whitespace-nowrap font-mono text-[11px]">
+      <span className="text-success">+{file.additions}</span>
+      <span className="mx-1 text-muted-soft">/</span>
+      <span className="text-error">-{file.deletions}</span>
+    </span>
+  );
+}
+
+function ChangeStatusDot({ status }: { status: SessionChangeFileReview['status'] }) {
+  const meta = changeStatusMeta(status);
+  return (
+    <span
+      className={cn(
+        'h-2 w-2 shrink-0 rounded-full border',
+        status === 'modified' || status === 'created'
+          ? 'border-success/60 bg-success'
+          : status === 'deleted' || status === 'unavailable'
+            ? 'border-error/60 bg-error'
+            : status === 'unchanged'
+              ? 'border-hairline-soft bg-muted-soft'
+              : 'border-warning/70 bg-warning',
+      )}
+      title={`${meta.label}: ${meta.description}`}
+    />
+  );
+}
+
+function InlineRiskFlags({ flags }: { flags: SessionChangeFileReview['riskFlags'] }) {
+  if (flags.length === 0) {
+    return null;
+  }
+
+  return (
+    <>
+      {flags.map((flag) => (
+        <span
+          key={`${flag.level}-${flag.label}-${flag.message}`}
+          title={flag.message}
+          className={cn(
+            'inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-medium',
+            flag.level === 'error'
+              ? 'border-error/20 bg-error/[0.06] text-error'
+              : flag.level === 'warn'
+                ? 'border-warning/25 bg-warning/[0.08] text-ink'
+                : 'border-primary/15 bg-primary/[0.06] text-primary',
+          )}
+        >
+          <AlertTriangle className="h-3 w-3" />
+          {flag.label}
+        </span>
+      ))}
+    </>
+  );
+}
+
+function FileActivitySummary({ events }: { events: SessionChangeFileReview['relatedEvents'] }) {
+  const event = events.at(-1);
+  if (!event) {
+    return null;
+  }
+
+  const extraCount = events.length - 1;
+  return (
+    <span title={event.command ?? event.title}>
+      {event.title} {formatEventTime(event.timestamp)}
+      {extraCount > 0 ? ` +${extraCount}` : ''}
+    </span>
+  );
+}
+
+function DiffPanel({ file }: { file: SessionChangeFileReview }) {
+  return (
+    <div className="bg-code-panel">
+      <DiffHunks file={file} />
+    </div>
+  );
+}
+
+function UnavailableDiffPanel({ file }: { file: SessionChangeFileReview }) {
+  const reason = diffUnavailableReason(file);
+
+  return (
+    <div className="px-4 py-4">
+      <div className="rounded-md border border-hairline-soft bg-surface-soft/35 px-4 py-4">
+        <div className="flex gap-3">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-ink">Cannot show diff</div>
+            <div className="mt-1 text-sm font-medium text-muted">{reason.title}</div>
+            <p className="mt-1 text-sm leading-6 text-muted">{reason.description}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FileDiagnostics({ file }: { file: SessionChangeFileReview }) {
+  if (file.diagnostics.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="border-t border-hairline-soft bg-surface-soft/20 px-3 py-2.5">
+      <DiagnosticsList diagnostics={file.diagnostics} currentPath={file.filePath} />
+    </div>
+  );
+}
+
+function DiffHunks({ file }: { file: SessionChangeFileReview }) {
+  const hunks = file.diff?.hunks ?? [];
+  const { hasOldLineNumbers, hasNewLineNumbers, gridColumnsClass } = useMemo(() => {
+    const hasOldLines = hunks.some((hunk) => hunk.lines.some((line) => line.oldLine !== null));
+    const hasNewLines = hunks.some((hunk) => hunk.lines.some((line) => line.newLine !== null));
+    return {
+      hasOldLineNumbers: hasOldLines,
+      hasNewLineNumbers: hasNewLines,
+      gridColumnsClass: diffLineGridColumnsClass(hasOldLines, hasNewLines),
+    };
+  }, [hunks]);
+
+  return (
+    <div className="overflow-x-auto custom-scrollbar">
+      <div className="w-max min-w-full font-mono text-[12px] leading-[1.55] text-code-panel-text">
+        {hunks.map((hunk, hunkIndex) => (
+          <div key={`${file.id}-hunk-${hunkIndex}`}>
+            <div className={cn('grid gap-1 border-b border-code-panel-border/70 bg-code-panel-elevated px-2 py-1 text-code-panel-muted', gridColumnsClass)}>
+              {hasOldLineNumbers && <span />}
+              {hasNewLineNumbers && <span />}
+              <span />
+              <span>{`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`}</span>
+            </div>
+            {hunk.lines.map((line, lineIndex) => (
+              <div
+                key={`${file.id}-${hunkIndex}-${lineIndex}`}
+                className={cn(
+                  'grid gap-1 border-l-2 px-2 py-0.5',
+                  gridColumnsClass,
+                  line.kind === 'add'
+                    ? 'border-success/70 bg-success/[0.10]'
+                    : line.kind === 'remove'
+                      ? 'border-error/70 bg-error/[0.08]'
+                      : 'border-transparent text-code-panel-muted',
+                  )}
+                >
+                {hasOldLineNumbers && <span className="select-none text-right text-code-panel-muted">{line.oldLine ?? ''}</span>}
+                {hasNewLineNumbers && <span className="select-none text-right text-code-panel-muted">{line.newLine ?? ''}</span>}
+                <span
+                  className={cn(
+                    'select-none font-semibold',
+                    line.kind === 'add' ? 'text-success' : line.kind === 'remove' ? 'text-error' : 'text-code-panel-muted',
+                  )}
+                >
+                  {line.kind === 'add' ? '+' : line.kind === 'remove' ? '-' : ' '}
+                </span>
+                <span className="whitespace-pre pr-4 text-code-panel-text">{line.text || ' '}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function diffLineGridColumnsClass(hasOldLineNumbers: boolean, hasNewLineNumbers: boolean): string {
+  if (hasOldLineNumbers && hasNewLineNumbers) {
+    return 'grid-cols-[3.25rem_3.25rem_1.5rem_minmax(0,1fr)]';
+  }
+
+  if (hasOldLineNumbers || hasNewLineNumbers) {
+    return 'grid-cols-[3.25rem_1.5rem_minmax(0,1fr)]';
+  }
+
+  return 'grid-cols-[1.5rem_minmax(0,1fr)]';
+}
+
+function StatusBadge({ status, compact = false }: { status: SessionChangeFileReview['status']; compact?: boolean }) {
+  const meta = changeStatusMeta(status);
+  return (
+    <span
+      className={cn(
+        'inline-flex w-fit items-center whitespace-nowrap rounded-md border px-2 py-0.5 text-[11px] font-medium uppercase tracking-[0.12em]',
+        compact && 'min-w-[7.5rem] justify-center',
+        meta.className,
+      )}
+      title={meta.description}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
+function DiagnosticsList({ diagnostics, currentPath }: { diagnostics: Diagnostic[]; currentPath?: string }) {
+  if (diagnostics.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-2">
+      {diagnostics.map((diagnostic, index) => (
+        <div
+          key={`${diagnostic.level}-${diagnostic.message}-${index}`}
+          className={cn(
+            'rounded-lg border px-3 py-2 text-xs',
+            diagnostic.level === 'error'
+              ? 'border-error/20 bg-error/[0.05] text-error'
+              : diagnostic.level === 'warn'
+                ? 'border-warning/25 bg-warning/[0.08] text-ink'
+                : 'border-primary/15 bg-primary/[0.05] text-primary',
+          )}
+        >
+          <div className="font-medium">{diagnostic.message || 'Diagnostic recorded.'}</div>
+          {diagnostic.path && diagnostic.path !== currentPath && <div className="mt-1 font-mono text-muted-soft">{diagnostic.path}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function compareChangeFilesForDisplay(left: SessionChangeFileReview, right: SessionChangeFileReview): number {
+  const reviewable = Number(hasReviewableDiff(right)) - Number(hasReviewableDiff(left));
+  if (reviewable !== 0) return reviewable;
+  const risk = highestRiskRank(right.riskFlags) - highestRiskRank(left.riskFlags);
+  if (risk !== 0) return risk;
+  const changedLines = right.additions + right.deletions - (left.additions + left.deletions);
+  if (changedLines !== 0) return changedLines;
+  return left.filePath.localeCompare(right.filePath);
+}
+
+function buildChangeFileTree(files: SessionChangeFileReview[]): ChangeFileTreeNode[] {
+  type MutableDirectory = Extract<ChangeFileTreeNode, { type: 'directory' }> & {
+    directories: Map<string, MutableDirectory>;
+  };
+  const root: MutableDirectory = {
+    type: 'directory',
+    name: '',
+    path: '',
+    children: [],
+    directories: new Map(),
+    fileCount: 0,
+    additions: 0,
+    deletions: 0,
+  };
+
+  for (const file of files) {
+    const parts = splitFilePathParts(file.filePath);
+    const fileName = parts.at(-1) ?? file.filePath;
+    const directories = parts.slice(0, -1);
+    const lineage = [root];
+    let parent = root;
+
+    for (const name of directories) {
+      const path = parent.path ? `${parent.path}/${name}` : name;
+      let directory = parent.directories.get(name);
+      if (!directory) {
+        directory = {
+          type: 'directory',
+          name,
+          path,
+          children: [],
+          directories: new Map(),
+          fileCount: 0,
+          additions: 0,
+          deletions: 0,
+        };
+        parent.directories.set(name, directory);
+        parent.children.push(directory);
+      }
+      parent = directory;
+      lineage.push(parent);
+    }
+
+    for (const directory of lineage) {
+      directory.fileCount += 1;
+      directory.additions += file.additions;
+      directory.deletions += file.deletions;
+    }
+
+    parent.children.push({
+      type: 'file',
+      name: fileName,
+      path: file.filePath,
+      file,
+    });
+  }
+
+  return root.children.map(finalizeChangeFileTreeNode);
+}
+
+function finalizeChangeFileTreeNode(node: ChangeFileTreeNode): ChangeFileTreeNode {
+  if (node.type === 'file') {
+    return node;
+  }
+
+  const { type, name, path, children, fileCount, additions, deletions } = node;
+  return {
+    type,
+    name,
+    path,
+    children: children.map(finalizeChangeFileTreeNode),
+    fileCount,
+    additions,
+    deletions,
+  };
+}
+
+function hasReviewableDiff(file: SessionChangeFileReview): boolean {
+  return Boolean(file.diff?.hunks.length);
+}
+
+function isTemporaryWorktreePath(filePath: string): boolean {
+  return filePath.split('/').includes('worktrees') && filePath.includes('.claude/');
+}
+
+function sumChangeLines(files: SessionChangeFileReview[], field: 'additions' | 'deletions'): number {
+  return files.reduce((total, file) => total + file[field], 0);
+}
+
+function splitFilePath(filePath: string): { directory: string; fileName: string } {
+  const normalized = filePath.replace(/\\/g, '/');
+  const lastSeparatorIndex = normalized.lastIndexOf('/');
+  if (lastSeparatorIndex === -1) {
+    return { directory: '', fileName: normalized || 'file' };
+  }
+  return {
+    directory: normalized.slice(0, lastSeparatorIndex),
+    fileName: normalized.slice(lastSeparatorIndex + 1) || 'file',
+  };
+}
+
+function splitFilePathParts(filePath: string): string[] {
+  const normalized = filePath.replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  return parts.length > 0 ? parts : ['file'];
+}
+
+function changeFileDomId(file: SessionChangeFileReview): string {
+  return `session-change-${file.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+}
+
+function backupContentStateLabel(file: SessionChangeFileReview): string {
+  if (file.status === 'created') return 'New file baseline';
+  if (file.backupExists) return 'Backup available';
+  return 'No readable backup';
+}
+
+function currentContentStateLabel(file: SessionChangeFileReview): string | null {
+  if (file.status === 'deleted') return 'Current file removed';
+  if (file.status === 'missing-current' || file.status === 'unavailable') return 'Current file unavailable';
+  if (file.afterTruncated) return 'Current file truncated';
+  return null;
+}
+
+function diffUnavailableReason(file: SessionChangeFileReview): { title: string; description: string } {
+  if (file.status === 'unavailable' && isTemporaryWorktreePath(file.filePath)) {
+    return {
+      title: 'Temporary worktree unavailable',
+      description:
+        'The transcript records a file edit inside a temporary OpenClaude worktree, but Studio cannot safely read a current file or a file-history backup. The worktree was likely removed after the session.',
+    };
+  }
+
+  if (file.status === 'missing-backup') {
+    return {
+      title: 'No readable backup',
+      description:
+        'Studio found the changed path and current file, but no safe file-history backup was available for the before side of the diff.',
+    };
+  }
+
+  if (file.status === 'missing-current') {
+    return {
+      title: 'Current file unavailable',
+      description:
+        'Studio found a backup, but the current file could not be read safely. This can happen when the file was removed, moved, or blocked by path safety checks.',
+    };
+  }
+
+  if (file.status === 'too-large') {
+    return {
+      title: 'Content too large',
+      description:
+        'One side of the change exceeded Studio\'s bounded read or diff limits, so the diff was skipped to keep local data handling predictable.',
+    };
+  }
+
+  if (file.status === 'binary') {
+    return {
+      title: 'Binary or unsupported content',
+      description:
+        'The before or after content does not look like plain text, so Studio did not render line-based diff rows.',
+    };
+  }
+
+  if (file.status === 'unchanged') {
+    return {
+      title: 'No textual changes',
+      description:
+        'After redaction and normalization, Studio did not find visible line changes for this file.',
+    };
+  }
+
+  return {
+    title: 'No safe before/after text',
+    description:
+      'Studio identified this file from the session transcript, but it does not have enough safe source data to render a reviewable diff.',
+  };
+}
+
+function changeStatusMeta(status: SessionChangeFileReview['status']): {
+  label: string;
+  description: string;
+  className: string;
+} {
+  switch (status) {
+    case 'modified':
+      return {
+        label: 'Modified',
+        description: 'Current content differs from the selected backup.',
+        className: 'border-primary/20 bg-primary/10 text-primary',
+      };
+    case 'created':
+      return {
+        label: 'Added',
+        description: 'The session appears to have created this file.',
+        className: 'border-success/25 bg-success/10 text-success',
+      };
+    case 'deleted':
+      return {
+        label: 'Deleted',
+        description: 'A backup exists and the current file is gone.',
+        className: 'border-error/25 bg-error/10 text-error',
+      };
+    case 'unchanged':
+      return {
+        label: 'Unchanged',
+        description: 'No visible text changes after redaction.',
+        className: 'border-hairline-soft bg-surface-soft text-muted',
+      };
+    case 'missing-backup':
+      return {
+        label: 'No backup',
+        description: 'The before side of the diff is unavailable.',
+        className: 'border-warning/25 bg-warning/10 text-warning',
+      };
+    case 'missing-current':
+      return {
+        label: 'Missing current',
+        description: 'The after side of the diff is unavailable.',
+        className: 'border-warning/25 bg-warning/10 text-warning',
+      };
+    case 'too-large':
+      return {
+        label: 'Too large',
+        description: 'Diff rendering was skipped because the content exceeded bounded read or diff limits.',
+        className: 'border-warning/25 bg-warning/10 text-warning',
+      };
+    case 'binary':
+      return {
+        label: 'Binary',
+        description: 'Line-based diff rendering is not available for this content.',
+        className: 'border-warning/25 bg-warning/10 text-warning',
+      };
+    case 'unavailable':
+      return {
+        label: 'Unavailable',
+        description: 'Studio only has transcript evidence for this change.',
+        className: 'border-error/20 bg-error/[0.06] text-error',
+      };
+  }
+}
+
+function highestRiskRank(flags: SessionChangeFileReview['riskFlags']): number {
+  return flags.reduce((rank, flag) => Math.max(rank, flag.level === 'error' ? 3 : flag.level === 'warn' ? 2 : 1), 0);
+}
+
+function changeFileUnifiedDiffText(file: SessionChangeFileReview): string {
+  if (!file.diff || file.diff.hunks.length === 0) {
+    return '';
+  }
+
+  const lines = [`--- ${file.filePath}`, `+++ ${file.filePath}`];
+  for (const hunk of file.diff.hunks) {
+    lines.push(`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`);
+    for (const line of hunk.lines) {
+      const prefix = line.kind === 'add' ? '+' : line.kind === 'remove' ? '-' : ' ';
+      lines.push(`${prefix}${line.text}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function pluralize(count: number, singular: string): string {
+  return count === 1 ? singular : `${singular}s`;
 }
 
 // Modal
