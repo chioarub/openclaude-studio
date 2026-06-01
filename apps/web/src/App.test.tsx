@@ -459,6 +459,7 @@ describe('App', () => {
     const dialog = await screen.findByRole('dialog', { name: /session details/i });
     await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
 
+    expect(within(dialog).getByRole('tab', { name: /review changes 1/i })).toBeInTheDocument();
     expect(await within(dialog).findByText('Review Changes requires a newer local server')).toBeInTheDocument();
     expect(within(dialog).getByText(/Update or restart the local OpenClaude Studio server/i)).toBeInTheDocument();
     expect(within(dialog).queryByText('Unable to load change review')).not.toBeInTheDocument();

@@ -237,6 +237,9 @@ export function SessionDetailsModal({
     () => groupFileHistoryEntries(session?.fileHistory ?? []),
     [session?.fileHistory],
   );
+  const reviewTabFileCount = changeReview && !isUnsupportedChangeReview(changeReview)
+    ? changeReview.totals.fileCount
+    : session?.changedFiles.length ?? 0;
   const handleRetryChangeReview = () => {
     setChangeReview(null);
     setChangeReviewError(null);
@@ -281,7 +284,7 @@ export function SessionDetailsModal({
           <SessionDetailsTabList
             activeTab={activeTab}
             onChange={setActiveTab}
-            changedFileCount={changeReview?.totals.fileCount ?? session.changedFiles.length}
+            changedFileCount={reviewTabFileCount}
             tabIds={tabIds}
           />
 
