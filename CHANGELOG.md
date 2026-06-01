@@ -6,6 +6,8 @@ This project uses semantic versioning for the published `openclaude-studio` npm 
 
 ## Unreleased
 
+- Added Session Change Review with a read-only local API and web tab for bounded, redacted per-session diffs, backup diagnostics, and risk flags.
+
 ## 0.2.1
 
 - Added GitHub Release creation to the release workflow from the matching changelog section, with job-scoped token permissions and idempotent behavior when the npm version already exists.
