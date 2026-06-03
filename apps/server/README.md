@@ -78,6 +78,6 @@ OPENCLAUDE_STUDIO_ALLOWED_ORIGINS=https://studio.example.com npx openclaude-stud
 
 ## Safety
 
-The local API is read-only. It does not write OpenClaude settings, sessions, logs, provider profiles, project files, tasks, or plans.
+The local API is read-only. It does not write OpenClaude settings, sessions, logs, provider profiles, project files, tasks, plans, or file-history data.
 
 Keep the server bound to a loopback address unless you provide your own trusted access control.
