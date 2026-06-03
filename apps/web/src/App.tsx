@@ -1353,24 +1353,25 @@ function ProviderPage({ api, overview }: { api: ApiClient; overview: OverviewRes
   );
 }
 
-function normalizeProviderProfilesResponse(response: Partial<ProviderProfilesResponse>): ProviderProfilesResponse {
-  const profiles = Array.isArray(response.profiles)
-    ? response.profiles.map((profile, index) => normalizeSafeProviderProfile(profile, index))
+function normalizeProviderProfilesResponse(response: unknown): ProviderProfilesResponse {
+  const payload = isRecord(response) ? response : {};
+  const profiles = Array.isArray(payload.profiles)
+    ? payload.profiles.map((profile, index) => normalizeSafeProviderProfile(profile, index))
     : [];
-  const templates = Array.isArray(response.templates)
-    ? response.templates.map((template) => normalizeProviderProfileTemplate(template))
+  const templates = Array.isArray(payload.templates)
+    ? payload.templates.map((template) => normalizeProviderProfileTemplate(template))
     : [];
-  const diagnostics = Array.isArray(response.diagnostics)
-    ? response.diagnostics.map(normalizeDiagnostic)
+  const diagnostics = Array.isArray(payload.diagnostics)
+    ? payload.diagnostics.map(normalizeDiagnostic)
     : [];
-  const summary: Record<string, unknown> = isRecord(response.summary) ? response.summary : {};
+  const summary: Record<string, unknown> = isRecord(payload.summary) ? payload.summary : {};
   const warningCount = profiles.filter((profile) => profile.validation?.status === 'warning').length;
   const errorCount = profiles.filter((profile) => profile.validation?.status === 'error').length;
 
   return {
-    path: stringOrFallback(response.path, ''),
-    exists: response.exists === true,
-    activeProviderProfileId: stringOrNull(response.activeProviderProfileId),
+    path: stringOrFallback(payload.path, ''),
+    exists: payload.exists === true,
+    activeProviderProfileId: stringOrNull(payload.activeProviderProfileId),
     sensitiveFieldsRedacted: true,
     profiles,
     templates,
@@ -1386,16 +1387,6 @@ function normalizeProviderProfilesResponse(response: Partial<ProviderProfilesRes
   };
 }
 
-const providerTemplateIds: ReadonlyArray<ProviderProfileTemplate['id']> = [
-  'anthropic',
-  'openai',
-  'gemini',
-  'zai-coding-plan',
-  'codex-oauth',
-  'ollama',
-  'mistral',
-  'custom-openai',
-];
 const providerTemplateCategories: ReadonlyArray<ProviderProfileTemplate['category']> = [
   'hosted',
   'local',
@@ -1534,9 +1525,7 @@ function stringOrNull(value: unknown): string | null {
 }
 
 function providerTemplateIdOr(value: unknown, fallback: ProviderProfileTemplate['id']): ProviderProfileTemplate['id'] {
-  return providerTemplateIds.includes(value as ProviderProfileTemplate['id'])
-    ? value as ProviderProfileTemplate['id']
-    : fallback;
+  return typeof value === 'string' && value.trim().length > 0 ? value as ProviderProfileTemplate['id'] : fallback;
 }
 
 function providerTemplateCategoryOr(

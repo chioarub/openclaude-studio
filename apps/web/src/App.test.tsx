@@ -337,9 +337,9 @@ describe('App', () => {
     await user.click(within(dialog).getByRole('button', { name: /copy safe json/i }));
 
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining('"provider": "ollama"'));
-    expect(writeText).toHaveBeenCalledWith(expect.not.stringContaining('"activeProviderProfileId"'));
     expect(writeText.mock.calls.at(-1)?.[0]).not.toContain('apiKey');
     expect(writeText.mock.calls.at(-1)?.[0]).not.toContain('authHeaderValue');
+    expect(writeText.mock.calls.at(-1)?.[0]).not.toContain('"activeProviderProfileId"');
     expect(fetchMock).toHaveBeenCalledWith(
       'http://127.0.0.1:43110/api/provider/profiles',
       expect.objectContaining({ headers: { accept: 'application/json' } }),
@@ -414,6 +414,22 @@ describe('App', () => {
     expect(screen.queryByText('Provider profile management requires a newer local server')).not.toBeInTheDocument();
   });
 
+  test('renders non-object provider profile payloads without crashing', async () => {
+    vi.stubGlobal('fetch', mockApi({ providerProfilesResponse: null }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
+
+    expect(await screen.findByRole('heading', { name: 'Providers' })).toBeInTheDocument();
+    expect(screen.getByText('0 profiles')).toBeInTheDocument();
+    expect(screen.getByText('0 templates')).toBeInTheDocument();
+    expect(screen.getByText('No provider profiles configured')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add provider profile/i })).not.toBeInTheDocument();
+  });
+
   test('normalizes malformed provider profile and template entries from partial payloads', async () => {
     vi.stubGlobal('fetch', mockApi({
       providerProfilesResponse: {
@@ -444,6 +460,56 @@ describe('App', () => {
     expect(within(dialog).getByRole('button', { name: /template.*custom openai-compatible/i })).toBeInTheDocument();
     expect(within(dialog).getByLabelText(/generated openclaude command/i)).toHaveValue(
       'openclaude --provider openai --model MODEL_ID',
+    );
+  });
+
+  test('preserves unknown provider template ids from newer local servers', async () => {
+    const providerProfiles = providerProfilesFixture();
+
+    vi.stubGlobal('fetch', mockApi({
+      providerProfilesResponse: {
+        ...providerProfiles,
+        templates: [
+          ...providerProfiles.templates,
+          {
+            id: 'future-provider',
+            label: 'Future Provider',
+            category: 'hosted',
+            description: 'Newer local server template.',
+            provider: 'openai',
+            baseUrl: 'https://future.example/v1',
+            model: 'future-model',
+            modelPlaceholder: 'Future model id',
+            requiresSecret: false,
+            requiredFields: ['name', 'provider', 'baseUrl', 'model'],
+            advancedFields: [],
+            apiFormat: null,
+            authHeader: null,
+            authScheme: null,
+            customHeaders: [],
+            credential: null,
+          },
+        ],
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
+    await user.click(await screen.findByRole('button', { name: /add provider profile/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: /new provider profile/i });
+    await user.click(within(dialog).getByRole('button', { name: /template.*openai gpt/i }));
+
+    expect(within(dialog).getByRole('option', { name: /future provider/i })).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('option', { name: /future provider/i }));
+
+    expect(within(dialog).getByRole('button', { name: /template.*future provider/i })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/generated openclaude command/i)).toHaveValue(
+      'OPENAI_BASE_URL=https://future.example/v1 openclaude --provider openai --model future-model',
     );
   });
 
@@ -1238,7 +1304,7 @@ function mockApi(options: MockApiOptions = {}) {
       if (options.providerProfilesStatus) {
         return jsonResponse({ error: `Injected provider profiles ${options.providerProfilesStatus}` }, options.providerProfilesStatus);
       }
-      return jsonResponse(options.providerProfilesResponse ?? providerProfilesFixture());
+      return jsonResponse('providerProfilesResponse' in options ? options.providerProfilesResponse : providerProfilesFixture());
     }
 
     if (path === '/api/projects/project-1/sessions/session-1') {
