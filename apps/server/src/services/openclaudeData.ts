@@ -247,7 +247,14 @@ async function discoverTranscriptProjectCandidates(
     }
 
     scannedRoots += 1;
-    const files = await collectTranscriptDiscoveryFiles(root);
+    let files: string[];
+    try {
+      files = await collectTranscriptDiscoveryFiles(root);
+    } catch {
+      diagnostics.push({ level: 'warn', message: 'Transcript root could not be scanned.', path: root });
+      continue;
+    }
+
     for (const file of files) {
       await readTranscriptDiscoveryFile(candidates, diagnostics, entry.name, file);
     }
@@ -402,8 +409,7 @@ function isTranscriptRootForCwd(
   const encodedProjectPath = encodeProjectPath(projectPath);
   return (
     transcriptRootName === encodeProjectPath(cwd) ||
-    transcriptRootName === encodedProjectPath ||
-    transcriptRootName.startsWith(`${encodedProjectPath}--claude-worktrees-`)
+    transcriptRootName === encodedProjectPath
   );
 }
 

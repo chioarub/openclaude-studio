@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -313,6 +313,28 @@ describe('OpenClaude data discovery', () => {
     ]);
   });
 
+  test('ignores spoofed worktree-prefix roots whose cwd is the parent project', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
+    const project = join(home, 'project-a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const spoofedWorktreeDir = join(paths.projectsDir, `${encodeProjectPath(project)}--claude-worktrees-spoof`);
+    await mkdir(spoofedWorktreeDir, { recursive: true });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ projects: {} }), 'utf8');
+    await writeFile(
+      join(spoofedWorktreeDir, 'session-spoof.jsonl'),
+      jsonl({
+        type: 'user',
+        sessionId: 'session-spoof',
+        timestamp: '2026-05-28T08:00:00.000Z',
+        cwd: project,
+        message: { role: 'user', content: 'This root name should not be trusted by prefix alone' },
+      }),
+      'utf8',
+    );
+
+    await expect(readProjectSummaries(paths)).resolves.toEqual([]);
+  });
+
   test('discovers colliding encoded project paths from transcript cwd metadata', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
     const project = join(home, 'project-a');
@@ -395,6 +417,49 @@ describe('OpenClaude data discovery', () => {
     await symlink(outside, join(paths.projectsDir, encodeProjectPath(project)));
 
     await expect(readProjectSummaries(paths)).resolves.toEqual([]);
+  });
+
+  test('reports unreadable transcript roots and continues discovering readable projects', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
+    const project = join(home, 'readable-project');
+    const unreadableProject = join(home, 'unreadable-project');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(project));
+    const unreadableRoot = join(paths.projectsDir, encodeProjectPath(unreadableProject));
+    await mkdir(project, { recursive: true });
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(unreadableRoot, { recursive: true });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ projects: {} }), 'utf8');
+    await writeFile(
+      join(projectDir, 'session-readable.jsonl'),
+      jsonl({
+        type: 'user',
+        sessionId: 'session-readable',
+        timestamp: '2026-05-28T08:00:00.000Z',
+        cwd: project,
+        message: { role: 'user', content: 'Readable transcript root' },
+      }),
+      'utf8',
+    );
+
+    await chmod(unreadableRoot, 0);
+    try {
+      const result = await readProjectSummariesWithDiagnostics(paths, new Date('2026-05-28T08:10:00Z'));
+
+      expect(result.projects).toEqual([
+        expect.objectContaining({
+          name: 'readable-project',
+          path: project,
+        }),
+      ]);
+      expect(result.diagnostics).toContainEqual({
+        level: 'warn',
+        message: 'Transcript root could not be scanned.',
+        path: unreadableRoot,
+      });
+    } finally {
+      await chmod(unreadableRoot, 0o700).catch(() => undefined);
+    }
   });
 
   test('reports diagnostics for missing transcript-discovered project paths', async () => {
