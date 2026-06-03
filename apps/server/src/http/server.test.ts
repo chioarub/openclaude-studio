@@ -200,6 +200,49 @@ describe('HTTP server', () => {
     });
   });
 
+  test('returns transcript-discovered projects from the projects response', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
+    const projectPath = join(home, 'transcript-project');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const transcriptDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+    await mkdir(join(projectPath, '.git'), { recursive: true });
+    await writeFile(join(projectPath, '.git', 'HEAD'), 'ref: refs/heads/transcript-main\n', 'utf8');
+    await mkdir(transcriptDir, { recursive: true });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ projects: {} }), 'utf8');
+    await writeFile(
+      join(transcriptDir, 'route-transcript-session.jsonl'),
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'route-transcript-session',
+        timestamp: '2026-05-28T08:00:00.000Z',
+        cwd: projectPath,
+        message: {
+          role: 'assistant',
+          usage: { input_tokens: 21, output_tokens: 34 },
+          content: 'Transcript-backed route project',
+        },
+      }),
+      'utf8',
+    );
+    const server = await testServer(home);
+
+    const response = await server.inject({ method: 'GET', url: '/api/projects', headers: tokenHeaders() });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().projects).toEqual([
+      expect.objectContaining({
+        name: 'transcript-project',
+        path: projectPath,
+        branch: 'transcript-main',
+        usage: expect.objectContaining({
+          inputTokens: 21,
+          outputTokens: 34,
+          lastSessionId: 'route-transcript-session',
+        }),
+      }),
+    ]);
+  });
+
   test('serves latest log windows through the tail query parameter', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
     const paths = createOpenClaudePaths({ home, env: {} });

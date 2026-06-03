@@ -26,7 +26,7 @@ OpenClaude keeps useful local context in files that are awkward to inspect by ha
 
 The current MVP line includes:
 
-- Project selector backed by `~/.openclaude.json`
+- Project selector backed by `~/.openclaude.json` plus bounded transcript metadata from `~/.openclaude/projects/`
 - Project overview with recent sessions, usage chart, log issue counts, and provider status
 - Session list and rich session inspector
 - Conversation timeline with user messages, assistant messages, tool calls, tool results, and errors
@@ -89,6 +89,7 @@ The web UI can run locally during development or be hosted as static assets. The
 - The API is read-only and has no write endpoints in the current MVP line.
 - The hosted web app runs in your browser and talks to your local server.
 - The app code does not intentionally collect telemetry; review your own hosting configuration if you deploy a fork.
+- Project discovery may show project paths found in OpenClaude transcript metadata, including historical paths that are no longer present on disk.
 - Redaction is defense in depth, not a guarantee for every possible secret format.
 - Review logs, screenshots, and recordings before sharing them publicly.
 

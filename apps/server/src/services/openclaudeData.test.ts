@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
-import { createOpenClaudePaths } from './paths.js';
+import { createOpenClaudePaths, encodeProjectPath } from './paths.js';
 import {
   readActiveProvider,
   readOpenClaudeConfig,
@@ -63,6 +63,319 @@ describe('OpenClaude data discovery', () => {
       active: false,
     });
     expect(projects[1]?.diagnostics[0]?.level).toBe('error');
+  });
+
+  test('discovers project summaries from transcript metadata when global config omits them', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
+    const project = join(home, 'transcript-only-project');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(project));
+    await mkdir(join(project, '.git'), { recursive: true });
+    await writeFile(join(project, '.git', 'HEAD'), 'ref: refs/heads/feature/transcripts\n', 'utf8');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ projects: {} }), 'utf8');
+    await writeFile(
+      join(projectDir, 'session-transcript-only.jsonl'),
+      [
+        jsonl({
+          type: 'user',
+          sessionId: 'session-transcript-only',
+          timestamp: '2026-05-28T08:00:00.000Z',
+          cwd: project,
+          message: { role: 'user', content: 'Inspect this project' },
+        }),
+        jsonl({
+          type: 'assistant',
+          sessionId: 'session-transcript-only',
+          timestamp: '2026-05-28T08:01:00.000Z',
+          cwd: project,
+          message: {
+            role: 'assistant',
+            usage: {
+              input_tokens: 11,
+              output_tokens: 13,
+              cache_read_input_tokens: 17,
+              cache_creation_input_tokens: 19,
+            },
+            content: 'Done',
+          },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    const projects = await readProjectSummaries(paths, new Date('2026-05-29T08:01:00Z'));
+
+    expect(projects).toEqual([
+      expect.objectContaining({
+        name: 'transcript-only-project',
+        path: project,
+        exists: true,
+        active: true,
+        branch: 'feature/transcripts',
+        lastUpdated: '1 day ago',
+        usage: {
+          inputTokens: 11,
+          outputTokens: 13,
+          cacheReadTokens: 17,
+          cacheWriteTokens: 19,
+          costUsd: 0,
+          lastSessionId: 'session-transcript-only',
+        },
+      }),
+    ]);
+  });
+
+  test('discovers transcript projects when cwd metadata appears after a large row', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
+    const project = join(home, 'large-transcript-project');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(project));
+    await mkdir(project, { recursive: true });
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ projects: {} }), 'utf8');
+    await writeFile(
+      join(projectDir, 'session-large-prefix.jsonl'),
+      [
+        jsonl({
+          type: 'system',
+          sessionId: 'session-large-prefix',
+          timestamp: '2026-05-28T07:59:00.000Z',
+          message: { role: 'system', content: 'x'.repeat(600 * 1024) },
+        }),
+        jsonl({
+          type: 'user',
+          sessionId: 'session-large-prefix',
+          timestamp: '2026-05-28T08:00:00.000Z',
+          cwd: project,
+          message: { role: 'user', content: 'Discover this project after a large metadata row' },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    const projects = await readProjectSummaries(paths, new Date('2026-05-28T08:10:00Z'));
+
+    expect(projects).toEqual([
+      expect.objectContaining({
+        name: 'large-transcript-project',
+        path: project,
+        lastUpdated: '10 min ago',
+      }),
+    ]);
+  });
+
+  test('keeps global config project metadata when transcript metadata also exists', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
+    const project = join(home, 'project-a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(project));
+    await mkdir(join(project, '.git'), { recursive: true });
+    await writeFile(join(project, '.git', 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        projects: {
+          [project]: {
+            lastGracefulShutdown: '2026-05-28T08:00:00Z',
+            lastTotalInputTokens: 1,
+            lastTotalOutputTokens: 2,
+            lastTotalCacheReadInputTokens: 3,
+            lastTotalCacheCreationInputTokens: 4,
+            lastCost: 0.5,
+            lastSessionId: 'config-session',
+          },
+        },
+      }),
+      'utf8',
+    );
+    await writeFile(
+      join(projectDir, 'session-transcript.jsonl'),
+      jsonl({
+        type: 'assistant',
+        sessionId: 'transcript-session',
+        timestamp: '2026-05-29T08:00:00.000Z',
+        cwd: project,
+        message: {
+          role: 'assistant',
+          usage: { input_tokens: 100, output_tokens: 200 },
+          content: 'Transcript metadata should not replace config metadata.',
+        },
+      }),
+      'utf8',
+    );
+
+    const projects = await readProjectSummaries(paths, new Date('2026-05-28T08:10:00Z'));
+
+    expect(projects).toHaveLength(1);
+    expect(projects[0]).toMatchObject({
+      path: project,
+      lastUpdated: '10 min ago',
+      usage: {
+        inputTokens: 1,
+        outputTokens: 2,
+        cacheReadTokens: 3,
+        cacheWriteTokens: 4,
+        costUsd: 0.5,
+        lastSessionId: 'config-session',
+      },
+    });
+  });
+
+  test('folds OpenClaude worktree transcript roots into the parent project', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
+    const project = join(home, 'project-a');
+    const worktree = join(project, '.claude', 'worktrees', 'feature-a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const worktreeTranscriptDir = join(paths.projectsDir, encodeProjectPath(worktree));
+    await mkdir(join(project, '.git'), { recursive: true });
+    await writeFile(join(project, '.git', 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+    await mkdir(worktreeTranscriptDir, { recursive: true });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ projects: {} }), 'utf8');
+    await writeFile(
+      join(worktreeTranscriptDir, 'session-worktree.jsonl'),
+      jsonl({
+        type: 'assistant',
+        sessionId: 'session-worktree',
+        timestamp: '2026-05-28T08:00:00.000Z',
+        cwd: worktree,
+        message: {
+          role: 'assistant',
+          usage: { input_tokens: 5, output_tokens: 8 },
+          content: 'Worktree session',
+        },
+      }),
+      'utf8',
+    );
+
+    const projects = await readProjectSummaries(paths, new Date('2026-05-28T08:10:00Z'));
+
+    expect(projects).toEqual([
+      expect.objectContaining({
+        name: 'project-a',
+        path: project,
+        branch: 'main',
+        usage: expect.objectContaining({
+          inputTokens: 5,
+          outputTokens: 8,
+          lastSessionId: 'session-worktree',
+        }),
+      }),
+    ]);
+  });
+
+  test('discovers colliding encoded project paths from transcript cwd metadata', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
+    const project = join(home, 'project-a');
+    const collidingProject = join(home, 'project', 'a');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(project));
+    expect(encodeProjectPath(project)).toBe(encodeProjectPath(collidingProject));
+    await mkdir(project, { recursive: true });
+    await mkdir(collidingProject, { recursive: true });
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ projects: {} }), 'utf8');
+    await writeFile(
+      join(projectDir, 'session-collision.jsonl'),
+      [
+        jsonl({
+          type: 'user',
+          sessionId: 'session-project-a',
+          timestamp: '2026-05-28T08:00:00.000Z',
+          cwd: project,
+          message: { role: 'user', content: 'First project' },
+        }),
+        jsonl({
+          type: 'user',
+          sessionId: 'session-project-nested-a',
+          timestamp: '2026-05-28T09:00:00.000Z',
+          cwd: collidingProject,
+          message: { role: 'user', content: 'Colliding project' },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    const projects = await readProjectSummaries(paths, new Date('2026-05-28T09:10:00Z'));
+
+    expect(projects.map((item) => item.path).sort()).toEqual([collidingProject, project].sort());
+  });
+
+  test('ignores transcript rows whose cwd does not match the transcript root', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
+    const transcriptRootProject = join(home, 'project-a');
+    const mismatchedProject = join(home, 'project-b');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(transcriptRootProject));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ projects: {} }), 'utf8');
+    await writeFile(
+      join(projectDir, 'session-mismatch.jsonl'),
+      jsonl({
+        type: 'user',
+        sessionId: 'session-mismatch',
+        timestamp: '2026-05-28T08:00:00.000Z',
+        cwd: mismatchedProject,
+        message: { role: 'user', content: 'Wrong root' },
+      }),
+      'utf8',
+    );
+
+    await expect(readProjectSummaries(paths)).resolves.toEqual([]);
+  });
+
+  test('does not traverse symlinked transcript roots during project discovery', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
+    const project = join(home, 'project-a');
+    const outside = join(home, 'outside-transcripts');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(outside, { recursive: true });
+    await mkdir(paths.projectsDir, { recursive: true });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ projects: {} }), 'utf8');
+    await writeFile(
+      join(outside, 'session-symlink.jsonl'),
+      jsonl({
+        type: 'user',
+        sessionId: 'session-symlink',
+        timestamp: '2026-05-28T08:00:00.000Z',
+        cwd: project,
+        message: { role: 'user', content: 'Do not discover through symlink' },
+      }),
+      'utf8',
+    );
+    await symlink(outside, join(paths.projectsDir, encodeProjectPath(project)));
+
+    await expect(readProjectSummaries(paths)).resolves.toEqual([]);
+  });
+
+  test('reports diagnostics for missing transcript-discovered project paths', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
+    const missingProject = join(home, 'missing-project');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(missingProject));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ projects: {} }), 'utf8');
+    await writeFile(
+      join(projectDir, 'session-missing.jsonl'),
+      jsonl({
+        type: 'user',
+        sessionId: 'session-missing',
+        timestamp: '2026-05-28T08:00:00.000Z',
+        cwd: missingProject,
+        message: { role: 'user', content: 'Project no longer exists' },
+      }),
+      'utf8',
+    );
+
+    const projects = await readProjectSummaries(paths, new Date('2026-05-28T08:10:00Z'));
+
+    expect(projects[0]).toMatchObject({
+      path: missingProject,
+      exists: false,
+      branch: 'missing',
+      diagnostics: [{ level: 'error', message: 'Project path does not exist.', path: missingProject }],
+    });
   });
 
   test('reads provider summaries without exposing secrets', async () => {
@@ -153,3 +466,7 @@ describe('OpenClaude data discovery', () => {
     expect(result.diagnostics[0]?.level).toBe('warn');
   });
 });
+
+function jsonl(value: unknown): string {
+  return JSON.stringify(value);
+}

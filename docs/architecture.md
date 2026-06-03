@@ -29,7 +29,7 @@ Local API on 127.0.0.1:43110
 
 The server is intentionally narrow:
 
-- Discover OpenClaude projects from local config.
+- Discover OpenClaude projects from local config and bounded transcript metadata.
 - Read session summaries and rich session details from local project session files.
 - Produce read-only per-session change reviews from selected-session mutation events, bounded current project file reads, and scoped file-history backups.
 - Read project-scoped plans and tasks, plus session file-history context.

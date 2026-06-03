@@ -15,6 +15,8 @@ The local API may read:
 
 The app is read-only in the current MVP line. It should not write OpenClaude config, sessions, logs, provider profiles, project files, tasks, plans, or file-history data.
 
+Project discovery may use bounded transcript metadata from `~/.openclaude/projects/` to find projects missing from `~/.openclaude.json`. This can expose historical project paths in the browser, including paths that no longer exist on disk.
+
 ## Redaction Scope
 
 The server redacts likely secrets before returning data to the browser. Current redaction covers:
