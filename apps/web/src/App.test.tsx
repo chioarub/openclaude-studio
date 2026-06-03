@@ -258,6 +258,162 @@ describe('App', () => {
     expect(screen.getByText('Build the API')).toBeInTheDocument();
   });
 
+  test('renders provider profile management and opens a template-driven add profile modal', async () => {
+    const fetchMock = mockApi({ providerProfilesResponse: providerProfilesFixture() });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
+
+    expect(await screen.findByRole('heading', { name: 'Providers' })).toBeInTheDocument();
+    expect(await screen.findByText('Provider Profiles')).toBeInTheDocument();
+    expect(screen.getByText('2 profiles')).toBeInTheDocument();
+    expect(screen.getByText('OpenAI Team')).toBeInTheDocument();
+    expect(screen.getByText('Local Lab')).toBeInTheDocument();
+    expect(screen.getByText('Needs review')).toBeInTheDocument();
+    expect(screen.getByText('No saved credential is visible in this profile.')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /openclaude command for openai team/i })).toHaveValue(
+      'openclaude --provider openai --model gpt-example',
+    );
+    expect(screen.getByRole('textbox', { name: /openclaude command for local lab/i })).toHaveValue(
+      'OPENAI_BASE_URL=http://127.0.0.1:11434/v1 openclaude --provider openai --model local-model',
+    );
+    await user.click(screen.getByRole('button', { name: /copy openclaude command for local lab/i }));
+    expect(writeText).toHaveBeenCalledWith(
+      'OPENAI_BASE_URL=http://127.0.0.1:11434/v1 openclaude --provider openai --model local-model',
+    );
+    expect(screen.queryByText('Safe Templates')).not.toBeInTheDocument();
+    const addProviderButtons = screen.getAllByRole('button', { name: /add provider profile/i });
+    expect(addProviderButtons).toHaveLength(1);
+
+    await user.click(addProviderButtons[0]!);
+
+    const dialog = await screen.findByRole('dialog', { name: /new provider profile/i });
+    expect(within(dialog).getByText('Choose a provider template')).toBeInTheDocument();
+    expect(within(dialog).getByText('Start from a safe preset, then review the generated fields below.')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /template.*openai gpt/i })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: /^ollama$/i })).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: /template.*openai gpt/i }));
+    const templateListbox = within(dialog).getByRole('listbox', { name: /provider template/i });
+    expect(within(templateListbox).getByRole('option', { name: /codex oauth \/ codexplan/i })).toBeInTheDocument();
+    await user.click(within(templateListbox).getByRole('option', { name: /ollama/i }));
+    expect(within(dialog).getByRole('button', { name: /template.*ollama/i })).toBeInTheDocument();
+    await user.clear(within(dialog).getByLabelText(/profile name/i));
+    await user.type(within(dialog).getByLabelText(/profile name/i), 'Lab Ollama');
+    await user.clear(within(dialog).getByLabelText(/model/i));
+    await user.type(within(dialog).getByLabelText(/model/i), 'qwen2.5-coder:7b');
+    await user.click(within(dialog).getByLabelText(/make active/i));
+
+    expect(within(dialog).getByLabelText(/generated openclaude command/i)).toHaveValue(
+      'openclaude --provider ollama --model qwen2.5-coder:7b',
+    );
+    await user.clear(within(dialog).getByLabelText(/base url/i));
+    await user.type(within(dialog).getByLabelText(/base url/i), 'http://localhost:11435/v1');
+    expect(within(dialog).getByLabelText(/generated openclaude command/i)).toHaveValue(
+      'OPENAI_BASE_URL=http://localhost:11435/v1 openclaude --provider ollama --model qwen2.5-coder:7b',
+    );
+    await user.click(within(dialog).getByRole('button', { name: /copy command/i }));
+    expect(writeText).toHaveBeenCalledWith(
+      'OPENAI_BASE_URL=http://localhost:11435/v1 openclaude --provider ollama --model qwen2.5-coder:7b',
+    );
+
+    await user.click(within(dialog).getByText(/advanced provider settings/i));
+    await user.type(within(dialog).getByLabelText(/custom headers/i), 'Authorization: Bearer private\nX-Team: platform');
+    expect(within(dialog).getByText(/sensitive-looking custom header names are omitted/i)).toBeInTheDocument();
+
+    const generatedJson = within(dialog).getByLabelText(/generated provider profile json/i);
+    expect(generatedJson).toHaveTextContent('"provider": "ollama"');
+    expect(generatedJson).toHaveTextContent('"model": "qwen2.5-coder:7b"');
+    expect(generatedJson).toHaveTextContent('"baseUrl": "http://localhost:11435/v1"');
+    expect(generatedJson).toHaveTextContent('"X-Team": "platform"');
+    expect(generatedJson).not.toHaveTextContent('Authorization');
+    expect(within(dialog).queryByText(/apiKey/)).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: /copy safe json/i }));
+
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('"provider": "ollama"'));
+    expect(writeText).toHaveBeenCalledWith(expect.not.stringContaining('"activeProviderProfileId"'));
+    expect(writeText.mock.calls.at(-1)?.[0]).not.toContain('apiKey');
+    expect(writeText.mock.calls.at(-1)?.[0]).not.toContain('authHeaderValue');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:43110/api/provider/profiles',
+      expect.objectContaining({ headers: { accept: 'application/json' } }),
+    );
+  });
+
+  test('shows a degraded provider profile state for older local servers', async () => {
+    vi.stubGlobal('fetch', mockApi({ providerProfilesStatus: 404 }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
+
+    expect(await screen.findByText('Provider profile management requires a newer local server')).toBeInTheDocument();
+    expect(screen.getByText('Active Provider')).toBeInTheDocument();
+    expect(screen.getByText('Anthropic')).toBeInTheDocument();
+  });
+
+  test('keeps provider diagnostics visible when no profiles are configured', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      providerProfilesResponse: {
+        ...providerProfilesFixture(),
+        activeProviderProfileId: null,
+        summary: {
+          total: 0,
+          active: 0,
+          valid: 0,
+          warnings: 0,
+          errors: 0,
+          templates: 3,
+        },
+        diagnostics: [{ level: 'warn', message: 'No provider profiles are configured.' }],
+        profiles: [],
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
+
+    expect(await screen.findByText('No provider profiles are configured.')).toBeInTheDocument();
+    expect(screen.getByText('No provider profiles configured')).toBeInTheDocument();
+    expect(screen.queryByText('Safe Templates')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /add provider profile/i })).toHaveLength(1);
+  });
+
+  test('keeps the add provider dialog open when Escape closes the template selector', async () => {
+    vi.stubGlobal('fetch', mockApi({ providerProfilesResponse: providerProfilesFixture() }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
+    await user.click(await screen.findByRole('button', { name: /add provider profile/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: /new provider profile/i });
+    await user.click(within(dialog).getByRole('button', { name: /template.*openai gpt/i }));
+    expect(within(dialog).getByRole('listbox', { name: /provider template/i })).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).queryByRole('listbox', { name: /provider template/i })).not.toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /new provider profile/i })).not.toBeInTheDocument());
+  });
+
   test('opens a session details timeline from the sessions table', async () => {
     const fetchMock = mockApi();
     vi.stubGlobal('fetch', fetchMock);
@@ -937,6 +1093,8 @@ type MockApiOptions = {
   projectDiagnostics?: unknown[];
   projects?: unknown[];
   failSessionChangesOnce?: boolean;
+  providerProfilesResponse?: unknown;
+  providerProfilesStatus?: number;
   sessionChangesStatus?: number;
   sessionChangesResponse?: unknown;
   sessionDetails?: unknown;
@@ -1017,6 +1175,13 @@ function mockApi(options: MockApiOptions = {}) {
           },
         ],
       });
+    }
+
+    if (path === '/api/provider/profiles') {
+      if (options.providerProfilesStatus) {
+        return jsonResponse({ error: `Injected provider profiles ${options.providerProfilesStatus}` }, options.providerProfilesStatus);
+      }
+      return jsonResponse(options.providerProfilesResponse ?? providerProfilesFixture());
     }
 
     if (path === '/api/projects/project-1/sessions/session-1') {
@@ -1169,6 +1334,129 @@ function usageSeriesFixture() {
 
 function tokenOnlyUsageSeriesFixture() {
   return usageSeriesFixture().map((point) => ({ ...point, costUsd: 0 }));
+}
+
+function providerProfilesFixture() {
+  return {
+    path: '/tmp/.openclaude.json',
+    exists: true,
+    activeProviderProfileId: 'provider-1',
+    sensitiveFieldsRedacted: true,
+    summary: {
+      total: 2,
+      active: 1,
+      valid: 1,
+      warnings: 1,
+      errors: 0,
+      templates: 3,
+    },
+    diagnostics: [],
+    profiles: [
+      {
+        id: 'provider-1',
+        name: 'OpenAI Team',
+        provider: 'openai',
+        model: 'gpt-example',
+        baseUrl: 'https://api.openai.com/v1',
+        active: true,
+        apiKeySet: true,
+        authHeaderValueSet: false,
+        apiFormat: 'responses',
+        authHeader: null,
+        authScheme: null,
+        customHeaders: [],
+        templateId: 'openai',
+        templateLabel: 'OpenAI GPT',
+        validation: { status: 'valid', issues: [] },
+      },
+      {
+        id: 'provider-2',
+        name: 'Local Lab',
+        provider: 'openai',
+        model: 'local-model',
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        active: false,
+        apiKeySet: false,
+        authHeaderValueSet: false,
+        apiFormat: 'chat_completions',
+        authHeader: null,
+        authScheme: null,
+        customHeaders: [{ name: 'X-Workspace', valueSet: true, sensitive: false }],
+        templateId: 'custom-openai',
+        templateLabel: 'Custom OpenAI-compatible',
+        validation: {
+          status: 'warning',
+          issues: [
+            {
+              severity: 'warn',
+              field: 'credential',
+              message: 'No saved credential is visible in this profile.',
+            },
+          ],
+        },
+      },
+    ],
+    templates: [
+      {
+        id: 'openai',
+        label: 'OpenAI GPT',
+        category: 'hosted',
+        description: 'OpenAI-compatible profile for OpenAI hosted models.',
+        provider: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        model: '',
+        modelPlaceholder: 'OpenAI model id',
+        requiresSecret: true,
+        requiredFields: ['name', 'provider', 'baseUrl', 'model', 'credential'],
+        advancedFields: ['apiFormat', 'authHeader', 'authScheme', 'customHeaders'],
+        apiFormat: 'responses',
+        authHeader: null,
+        authScheme: null,
+        customHeaders: [],
+        credential: {
+          label: 'OpenAI credential',
+          envVar: 'OPENAI_API_KEY',
+          placeholder: 'Set outside Studio before using this profile',
+        },
+      },
+      {
+        id: 'codex-oauth',
+        label: 'Codex OAuth / codexplan',
+        category: 'subscription',
+        description: 'Codex backend profile that relies on existing OpenClaude OAuth credentials.',
+        provider: 'openai',
+        baseUrl: 'https://chatgpt.com/backend-api/codex',
+        model: 'codexplan',
+        modelPlaceholder: 'codexplan',
+        requiresSecret: false,
+        requiredFields: ['name', 'provider', 'baseUrl', 'model'],
+        advancedFields: [],
+        apiFormat: null,
+        authHeader: null,
+        authScheme: null,
+        customHeaders: [],
+        credential: null,
+      },
+      {
+        id: 'ollama',
+        label: 'Ollama',
+        category: 'local',
+        description: 'Local Ollama profile using its OpenAI-compatible endpoint.',
+        provider: 'ollama',
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        model: 'llama3.1:8b',
+        modelPlaceholder: 'Ollama model tag',
+        requiresSecret: false,
+        requiredFields: ['name', 'provider', 'baseUrl', 'model'],
+        advancedFields: ['authHeader', 'authScheme', 'customHeaders'],
+        apiFormat: null,
+        authHeader: null,
+        authScheme: null,
+        customHeaders: [],
+        credential: null,
+      },
+    ],
+  };
 }
 
 function logsFixture(options: { count?: number; start?: number; totalLines?: number } = {}) {

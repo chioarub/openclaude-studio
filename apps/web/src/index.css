@@ -696,6 +696,14 @@ body {
   text-align: left;
 }
 
+.provider-template-select {
+  width: 100%;
+}
+
+.provider-option-select {
+  width: 100%;
+}
+
 .custom-select-trigger {
   display: flex;
   min-height: 44px;

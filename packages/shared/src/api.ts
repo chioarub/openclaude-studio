@@ -46,6 +46,97 @@ export type ProviderSummary = {
   authHeaderValueSet: boolean;
 };
 
+export type ProviderTemplateId =
+  | 'anthropic'
+  | 'openai'
+  | 'gemini'
+  | 'zai-coding-plan'
+  | 'codex-oauth'
+  | 'ollama'
+  | 'mistral'
+  | 'custom-openai';
+
+export type ProviderProfileField =
+  | 'id'
+  | 'name'
+  | 'provider'
+  | 'baseUrl'
+  | 'model'
+  | 'credential'
+  | 'apiFormat'
+  | 'authHeader'
+  | 'authScheme'
+  | 'customHeaders'
+  | 'activeProviderProfileId';
+
+export type ProviderProfileTemplate = {
+  id: ProviderTemplateId;
+  label: string;
+  category: 'hosted' | 'local' | 'subscription' | 'custom';
+  description: string;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  modelPlaceholder: string;
+  requiresSecret: boolean;
+  requiredFields: ProviderProfileField[];
+  advancedFields: ProviderProfileField[];
+  apiFormat: 'responses' | 'chat_completions' | null;
+  authHeader: string | null;
+  authScheme: 'bearer' | 'raw' | null;
+  customHeaders: Array<{ name: string; value: string }>;
+  credential: {
+    label: string;
+    envVar: string;
+    placeholder: string;
+  } | null;
+};
+
+export type ProviderCustomHeaderSummary = {
+  name: string;
+  valueSet: boolean;
+  sensitive: boolean;
+};
+
+export type ProviderProfileValidationIssue = {
+  severity: 'info' | 'warn' | 'error';
+  field?: ProviderProfileField;
+  message: string;
+};
+
+export type ProviderProfileValidation = {
+  status: 'valid' | 'warning' | 'error';
+  issues: ProviderProfileValidationIssue[];
+};
+
+export type SafeProviderProfile = ProviderSummary & {
+  apiFormat: 'responses' | 'chat_completions' | string | null;
+  authHeader: string | null;
+  authScheme: 'bearer' | 'raw' | string | null;
+  customHeaders: ProviderCustomHeaderSummary[];
+  templateId: ProviderTemplateId;
+  templateLabel: string;
+  validation: ProviderProfileValidation;
+};
+
+export type ProviderProfilesResponse = {
+  path: string;
+  exists: boolean;
+  activeProviderProfileId: string | null;
+  sensitiveFieldsRedacted: true;
+  profiles: SafeProviderProfile[];
+  templates: ProviderProfileTemplate[];
+  summary: {
+    total: number;
+    active: number;
+    valid: number;
+    warnings: number;
+    errors: number;
+    templates: number;
+  };
+  diagnostics: Diagnostic[];
+};
+
 export type SessionSummary = {
   id: string;
   title: string;

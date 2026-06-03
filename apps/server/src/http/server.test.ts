@@ -349,6 +349,63 @@ describe('HTTP server', () => {
     expect(logs.json().files.map((file: { name: string }) => file.name)).toEqual(['session-1.txt']);
   });
 
+  test('returns read-only provider profile management data', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        activeProviderProfileId: 'provider-1',
+        providerProfiles: [
+          {
+            id: 'provider-1',
+            name: 'OpenAI',
+            provider: 'openai',
+            model: 'gpt-example',
+            baseUrl: 'https://user:pass@example.com/v1?api_key=hidden',
+            apiKey: 'sk-route-private',
+            customHeaders: { Authorization: 'Bearer private-header' },
+          },
+        ],
+      }),
+      'utf8',
+    );
+    const server = await testServer(home);
+    const headers = tokenHeaders();
+
+    const unauthorized = await server.inject({ method: 'GET', url: '/api/provider/profiles' });
+    const response = await server.inject({ method: 'GET', url: '/api/provider/profiles', headers });
+    const mutation = await server.inject({ method: 'POST', url: '/api/provider/profiles', headers });
+
+    expect(unauthorized.statusCode).toBe(401);
+    expect(response.statusCode).toBe(200);
+    const payload = response.json() as {
+      templates: unknown[];
+      profiles: Array<Record<string, unknown> & { customHeaders?: Array<Record<string, unknown>> }>;
+    };
+    expect(payload).toMatchObject({
+      path: paths.openClaudeConfig,
+      sensitiveFieldsRedacted: true,
+      summary: { total: 1, active: 1, errors: 0 },
+      profiles: [
+        {
+          id: 'provider-1',
+          active: true,
+          apiKeySet: true,
+          baseUrl: 'https://example.com/v1?api_key=%3Credacted%3E',
+        },
+      ],
+    });
+    expect(payload.templates.length).toBeGreaterThan(0);
+    expect(payload.profiles[0]).not.toHaveProperty('apiKey');
+    expect(payload.profiles[0]).not.toHaveProperty('authHeaderValue');
+    expect(payload.profiles[0]?.customHeaders).toEqual([
+      { name: 'Authorization', sensitive: true, valueSet: true },
+    ]);
+    expect(payload.profiles[0]?.customHeaders?.[0]).not.toHaveProperty('value');
+    expect(mutation.statusCode).toBe(404);
+  });
+
   test('returns session details for an existing session', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
     const projectPath = join(home, 'project-a');

@@ -21,7 +21,7 @@ type OpenClaudeProjectConfig = {
   lastTotalOutputTokens?: unknown;
 };
 
-type OpenClaudeConfig = {
+export type OpenClaudeConfig = {
   activeProviderProfileId?: unknown;
   projects?: unknown;
   providerProfiles?: unknown;
@@ -178,7 +178,7 @@ function toProviderSummaries(config: OpenClaudeConfig): ProviderSummary[] {
   });
 }
 
-async function readRawOpenClaudeConfig(paths: OpenClaudePaths): Promise<RawConfigRead> {
+export async function readRawOpenClaudeConfig(paths: OpenClaudePaths): Promise<RawConfigRead> {
   const result = await readBoundedTextFile(paths.openClaudeConfig, { maxBytes: maxConfigBytes });
   const diagnostics = [...result.diagnostics];
 

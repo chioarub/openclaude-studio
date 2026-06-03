@@ -20,6 +20,7 @@ The app is read-only in the current MVP line. It should not write OpenClaude con
 The server redacts likely secrets before returning data to the browser. Current redaction covers:
 
 - Known provider secret fields
+- Provider profile credentials and custom header values
 - URL usernames and passwords
 - Common URL query secret names
 - Bearer tokens

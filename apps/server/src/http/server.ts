@@ -18,6 +18,7 @@ import {
   readProjectSummaries,
   readProjectSummariesWithDiagnostics,
 } from '../services/openclaudeData.js';
+import { readProviderProfiles } from '../services/providerProfiles.js';
 import { listLogFiles, readLogWindow, searchLogs, type LogFileScope, type LogSearchRequest } from '../services/logs.js';
 import { listProjectPlans, readProjectPlan } from '../services/plans.js';
 import { createOpenClaudePaths, type PathOptions } from '../services/paths.js';
@@ -135,6 +136,8 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
   });
 
   app.get('/api/provider/active', async () => readActiveProvider(paths));
+
+  app.get('/api/provider/profiles', async () => readProviderProfiles(paths));
 
   app.get<{ Params: ProjectParams }>('/api/projects/:projectId/sessions', async (request) => {
     const project = await resolveProject(paths, request.params.projectId);

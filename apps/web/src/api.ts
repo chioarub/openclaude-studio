@@ -5,6 +5,7 @@ import type {
   OverviewResponse,
   PlanDetailsResponse,
   PlansResponse,
+  ProviderProfilesResponse,
   ProjectsResponse,
   SessionChangeReviewResponse,
   SessionDetailsResponse,
@@ -55,6 +56,7 @@ export function createApiClient(settings: ConnectionSettings) {
   return {
     health: () => request<HealthResponse>('/api/health'),
     projects: () => request<ProjectsResponse>('/api/projects'),
+    providerProfiles: () => request<ProviderProfilesResponse>('/api/provider/profiles'),
     overview: (projectId: string) =>
       request<OverviewResponse>(`/api/projects/${encodeURIComponent(projectId)}/overview`),
     sessions: (projectId: string) =>

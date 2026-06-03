@@ -19,7 +19,7 @@ OpenClaude keeps useful local context in files that are awkward to inspect by ha
 - Inspect sessions, assistant messages, tool calls, tool results, errors, changed files, usage, and cost.
 - Review linked plans, linked tasks, and checklist progress without opening raw task files.
 - Search project-scoped debug logs without opening raw log files.
-- Check active provider status while keeping secret fields redacted.
+- Review provider profiles, validation diagnostics, and safe templates while keeping secret fields redacted.
 - Diagnose missing, malformed, or unavailable local data.
 
 ## Current Scope
@@ -33,7 +33,7 @@ The current MVP line includes:
 - Read-only Session Change Review with bounded, redacted diffs from file-history backups and current project files
 - Changed files, token usage, cost summary, linked plans, linked tasks, and file-history context for sessions
 - Plans & Tasks view with checklist progress, linked sessions, task status groups, and detail panes
-- Active provider inspection with secret fields redacted
+- Read-only provider profile management with active profile inspection, validation diagnostics, and safe templates
 - Project-scoped diagnostics
 - Project-scoped debug log viewing, filtering, search, virtualized scrolling, and copy-to-clipboard for log messages
 - Dark and light themes
@@ -235,6 +235,7 @@ Shipped in the MVP line:
 - [x] Debug log viewing, filtering, search, virtualized scrolling, and log-message copy
 - [x] Dark and light themes
 - [x] Custom local API URL setting for non-default ports
+- [x] Provider profile management with safe templates and validation
 - [x] Conservative read-only local API
 
 Planned and open for discussion:
@@ -244,7 +245,6 @@ Planned and open for discussion:
 - [ ] Config source explorer for user settings, project settings, local settings, and managed config
 - [ ] Prompt asset inventory for instructions, agents, commands, workflows, and output styles
 - [ ] Hooks and permissions diagnostics
-- [ ] Provider profile management with safe templates and validation
 - [ ] Live log streaming with pause, filtering, and retention controls
 - [ ] Optional write workflows after the write model, review UX, backups, and security boundaries are designed explicitly
 

@@ -20,6 +20,8 @@ Startup output includes the local API URL, hosted dashboard URL, read-only mode,
 
 Opening `http://127.0.0.1:43110/` in a browser shows a small read-only landing page with dashboard and health-check links. It does not read local OpenClaude data.
 
+Provider profile endpoints are read-only. They expose redacted profile summaries, validation diagnostics, and safe copyable templates, but they do not create, update, delete, activate, or test provider profiles.
+
 ## CLI Options
 
 ```text

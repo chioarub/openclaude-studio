@@ -44,6 +44,8 @@ If `OPENCLAUDE_STUDIO_TOKEN` is enabled, startup output says token protection is
 
 Opening the local API root in a browser shows a small read-only landing page with dashboard and health-check links.
 
+Provider profile routes return redacted profile summaries, validation diagnostics, and safe templates only. They do not mutate OpenClaude provider profiles or test provider connections.
+
 For connection and setup help, see the repository [troubleshooting guide](https://github.com/chioarub/openclaude-studio/blob/main/docs/troubleshooting.md).
 
 ## Hosted Frontend Origins

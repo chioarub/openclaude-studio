@@ -33,7 +33,7 @@ The server is intentionally narrow:
 - Read session summaries and rich session details from local project session files.
 - Produce read-only per-session change reviews from selected-session mutation events, bounded current project file reads, and scoped file-history backups.
 - Read project-scoped plans and tasks, plus session file-history context.
-- Read provider configuration with secret fields redacted.
+- Read provider configuration with secret fields redacted, profile validation, and safe templates.
 - Read debug logs through bounded, indexed windows.
 - Scope logs and diagnostics to the selected project where possible.
 - Return typed JSON responses.
@@ -48,7 +48,7 @@ The web app is a read-only dashboard:
 - Control center overview
 - Session table and session details inspector
 - Plans & Tasks route with linked session context
-- Provider summary
+- Provider summary and read-only provider profile management
 - System logs with filtering, search, virtualization, and copy-to-clipboard
 - Diagnostics
 - Light and dark themes
