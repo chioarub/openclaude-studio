@@ -27,6 +27,8 @@ The server binds to `127.0.0.1:43110` by default and reads:
 - `~/.openclaude/file-history/`
 - `~/.openclaude/debug/`
 
+Project discovery uses `~/.openclaude.json` and bounded transcript metadata from `~/.openclaude/projects/`, so historical project paths may appear even when they are no longer present on disk.
+
 Startup output includes the local API URL, the hosted dashboard URL, read-only mode, and the allowed browser origins:
 
 ```text

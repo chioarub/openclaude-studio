@@ -32,7 +32,7 @@ Update Node.js before running `npx openclaude-studio` if the version is older th
 
 OpenClaude must be installed and used at least once before Studio has local data to inspect.
 
-Studio reads project information from `~/.openclaude.json`. If the file is missing, malformed, or points to project paths that no longer exist, the dashboard may show an empty or degraded project list with diagnostics.
+Studio reads project information from `~/.openclaude.json` and bounded transcript metadata under `~/.openclaude/projects/`. If those files are missing, malformed, or point to project paths that no longer exist, the dashboard may show an empty or degraded project list with diagnostics.
 
 ## Port already in use
 

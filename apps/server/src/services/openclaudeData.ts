@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
-import { lstat, readFile, stat } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { lstat, readFile, readdir, stat } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import type { Diagnostic, ProjectSummary, ProviderSummary } from '@openclaude-studio/shared';
 
 import { redactSecrets, redactUrl } from './redaction.js';
 import { readBoundedTextFile } from './safeFile.js';
-import type { OpenClaudePaths } from './paths.js';
+import { encodeProjectPath, type OpenClaudePaths } from './paths.js';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -48,6 +49,11 @@ type RawConfigRead = {
 };
 
 const maxConfigBytes = 5 * 1024 * 1024;
+// Match session transcript parsing so discovery does not miss cwd rows after large metadata records.
+const maxTranscriptDiscoveryBytes = 10 * 1024 * 1024;
+const maxTranscriptDiscoveryDepth = 10;
+const maxTranscriptDiscoveryFilesPerRoot = 200;
+const maxTranscriptDiscoveryRoots = 2000;
 
 export async function readOpenClaudeConfig(
   paths: OpenClaudePaths,
@@ -73,23 +79,66 @@ export async function readProjectSummariesWithDiagnostics(
   now = new Date(),
 ): Promise<ProjectSummariesResponse> {
   const { config, diagnostics } = await readRawOpenClaudeConfig(paths);
+  const sourceResult = await projectSummariesFromSources(paths, config, now);
   return {
-    projects: await projectSummariesFromConfig(config, now),
-    diagnostics,
+    projects: sourceResult.projects,
+    diagnostics: [...diagnostics, ...sourceResult.diagnostics],
+  };
+}
+
+type ProjectSummaryWithTimestamp = {
+  project: ProjectSummary;
+  lastUsedTimestamp: number | null;
+};
+
+type ProjectSummariesFromSourcesResult = {
+  projects: ProjectSummary[];
+  diagnostics: Diagnostic[];
+};
+
+type TranscriptProjectCandidate = {
+  path: string;
+  lastUsedTimestamp: number | null;
+  sessions: Map<string, TranscriptSessionUsage>;
+};
+
+type TranscriptDiscoveryResult = {
+  candidates: Map<string, TranscriptProjectCandidate>;
+  diagnostics: Diagnostic[];
+};
+
+type TranscriptSessionUsage = {
+  lastTimestamp: number | null;
+  usage: ProjectSummary['usage'];
+};
+
+async function projectSummariesFromSources(
+  paths: OpenClaudePaths,
+  config: OpenClaudeConfig,
+  now: Date,
+): Promise<ProjectSummariesFromSourcesResult> {
+  const configProjects = await projectSummariesFromConfig(config, now);
+  const configProjectPaths = new Set(configProjects.map(({ project }) => project.path));
+  const transcriptDiscovery = await discoverTranscriptProjectCandidates(paths.projectsDir);
+  const transcriptProjects = await Promise.all(
+    [...transcriptDiscovery.candidates.values()]
+      .filter((candidate) => !configProjectPaths.has(candidate.path))
+      .map((candidate) => projectSummaryFromTranscriptCandidate(candidate, now)),
+  );
+
+  return {
+    projects: sortProjectSummaries([...configProjects, ...transcriptProjects]),
+    diagnostics: transcriptDiscovery.diagnostics,
   };
 }
 
 async function projectSummariesFromConfig(
   config: OpenClaudeConfig,
   now: Date,
-): Promise<ProjectSummary[]> {
+): Promise<ProjectSummaryWithTimestamp[]> {
   const entries = getProjectEntries(config);
-  const latestTimestamp = Math.max(
-    0,
-    ...entries.map(([, projectConfig]) => timestampFromProjectConfig(projectConfig) ?? 0),
-  );
-  const projects = await Promise.all(
-    entries.map(async ([projectPath, projectConfig]) => {
+  return Promise.all(
+    entries.map(async ([projectPath, projectConfig]): Promise<ProjectSummaryWithTimestamp> => {
       const resolvedPath = resolve(projectPath);
       const exists = await isExistingDirectory(resolvedPath);
       const lastUsedTimestamp =
@@ -104,7 +153,7 @@ async function projectSummariesFromConfig(
           name: basename(resolvedPath) || resolvedPath,
           path: resolvedPath,
           exists,
-          active: lastUsedTimestamp !== null && lastUsedTimestamp === latestTimestamp,
+          active: false,
           branch: exists ? await readProjectBranch(resolvedPath) : 'missing',
           lastUpdated: formatRelative(lastUsedTimestamp, now),
           diagnostics,
@@ -114,11 +163,286 @@ async function projectSummariesFromConfig(
       };
     }),
   );
+}
 
-  return projects.sort((left, right) => {
+async function projectSummaryFromTranscriptCandidate(
+  candidate: TranscriptProjectCandidate,
+  now: Date,
+): Promise<ProjectSummaryWithTimestamp> {
+  const exists = await isExistingDirectory(candidate.path);
+  const lastUsedTimestamp = candidate.lastUsedTimestamp ?? (exists ? await pathTimestamp(candidate.path) : null);
+  const diagnostics: Diagnostic[] = exists
+    ? []
+    : [{ level: 'error', message: 'Project path does not exist.', path: candidate.path }];
+
+  return {
+    project: {
+      id: makeProjectId(candidate.path),
+      name: basename(candidate.path) || candidate.path,
+      path: candidate.path,
+      exists,
+      active: false,
+      branch: exists ? await readProjectBranch(candidate.path) : 'missing',
+      lastUpdated: formatRelative(lastUsedTimestamp, now),
+      diagnostics,
+      usage: latestTranscriptSessionUsage(candidate),
+    },
+    lastUsedTimestamp,
+  };
+}
+
+function sortProjectSummaries(projects: ProjectSummaryWithTimestamp[]): ProjectSummary[] {
+  let latestTimestamp = 0;
+  for (const { lastUsedTimestamp } of projects) {
+    if (lastUsedTimestamp !== null && lastUsedTimestamp > latestTimestamp) {
+      latestTimestamp = lastUsedTimestamp;
+    }
+  }
+
+  return projects.map(({ project, lastUsedTimestamp }) => ({
+    project: {
+      ...project,
+      active: latestTimestamp > 0 && lastUsedTimestamp !== null && lastUsedTimestamp === latestTimestamp,
+    },
+    lastUsedTimestamp,
+  })).sort((left, right) => {
     if (left.project.active !== right.project.active) return left.project.active ? -1 : 1;
     return (right.lastUsedTimestamp ?? 0) - (left.lastUsedTimestamp ?? 0);
   }).map(({ project }) => project);
+}
+
+async function discoverTranscriptProjectCandidates(
+  projectsDir: string,
+): Promise<TranscriptDiscoveryResult> {
+  const candidates = new Map<string, TranscriptProjectCandidate>();
+  const diagnostics: Diagnostic[] = [];
+  const rootStats = await safeLstat(projectsDir);
+  if (!rootStats || !rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+    return { candidates, diagnostics };
+  }
+
+  let entries;
+  try {
+    entries = await readdir(projectsDir, { withFileTypes: true });
+  } catch (error) {
+    if (isNodeFileError(error, 'ENOENT') || isNodeFileError(error, 'ENOTDIR')) {
+      return { candidates, diagnostics };
+    }
+    throw error;
+  }
+
+  let scannedRoots = 0;
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (scannedRoots >= maxTranscriptDiscoveryRoots) {
+      break;
+    }
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const root = join(projectsDir, entry.name);
+    const stats = await safeLstat(root);
+    if (!stats || !stats.isDirectory() || stats.isSymbolicLink()) {
+      continue;
+    }
+
+    scannedRoots += 1;
+    let files: string[];
+    try {
+      files = await collectTranscriptDiscoveryFiles(root);
+    } catch {
+      diagnostics.push({ level: 'warn', message: 'Transcript root could not be scanned.', path: root });
+      continue;
+    }
+
+    for (const file of files) {
+      await readTranscriptDiscoveryFile(candidates, diagnostics, entry.name, file);
+    }
+  }
+
+  return { candidates, diagnostics };
+}
+
+async function collectTranscriptDiscoveryFiles(
+  root: string,
+  files: string[] = [],
+  depth = 0,
+): Promise<string[]> {
+  if (files.length >= maxTranscriptDiscoveryFilesPerRoot || depth > maxTranscriptDiscoveryDepth) {
+    return files;
+  }
+
+  const rootStats = await safeLstat(root);
+  if (!rootStats || !rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+    return files;
+  }
+
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (isNodeFileError(error, 'ENOENT') || isNodeFileError(error, 'ENOTDIR')) {
+      return files;
+    }
+    throw error;
+  }
+
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (files.length >= maxTranscriptDiscoveryFilesPerRoot) {
+      break;
+    }
+
+    const entryPath = join(root, entry.name);
+    const stats = await safeLstat(entryPath);
+    if (!stats || stats.isSymbolicLink()) {
+      continue;
+    }
+
+    if (stats.isDirectory()) {
+      await collectTranscriptDiscoveryFiles(entryPath, files, depth + 1);
+    } else if (stats.isFile() && entry.name.endsWith('.jsonl')) {
+      files.push(entryPath);
+    }
+  }
+
+  return files;
+}
+
+async function readTranscriptDiscoveryFile(
+  candidates: Map<string, TranscriptProjectCandidate>,
+  diagnostics: Diagnostic[],
+  transcriptRootName: string,
+  filePath: string,
+): Promise<void> {
+  let result: Awaited<ReturnType<typeof readBoundedTextFile>>;
+  try {
+    result = await readBoundedTextFile(filePath, { maxBytes: maxTranscriptDiscoveryBytes });
+  } catch {
+    diagnostics.push({ level: 'warn', message: 'Transcript file could not be read.', path: filePath });
+    return;
+  }
+
+  diagnostics.push(...result.diagnostics);
+  if (!result.exists) {
+    return;
+  }
+
+  for (const line of result.content.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+
+    try {
+      addTranscriptProjectCandidate(candidates, transcriptRootName, JSON.parse(line) as unknown);
+    } catch {
+      continue;
+    }
+  }
+}
+
+function addTranscriptProjectCandidate(
+  candidates: Map<string, TranscriptProjectCandidate>,
+  transcriptRootName: string,
+  value: unknown,
+) {
+  if (!isRecord(value) || value.isMeta === true) {
+    return;
+  }
+
+  const cwd = transcriptCwdFromRecord(value);
+  if (!cwd || !isAbsolute(cwd)) {
+    return;
+  }
+
+  const projectPath = canonicalProjectPathFromTranscriptCwd(cwd);
+  if (!isTranscriptRootForCwd(transcriptRootName, cwd, projectPath)) {
+    return;
+  }
+
+  const timestamp = timestampFromUnknown(value.timestamp);
+  const sessionId = stringFromUnknown(value.sessionId);
+  const candidate = candidates.get(projectPath) ?? {
+    path: projectPath,
+    lastUsedTimestamp: null,
+    sessions: new Map<string, TranscriptSessionUsage>(),
+  };
+
+  if (timestamp !== null && timestamp > (candidate.lastUsedTimestamp ?? 0)) {
+    candidate.lastUsedTimestamp = timestamp;
+  }
+
+  if (sessionId) {
+    const session = candidate.sessions.get(sessionId) ?? {
+      lastTimestamp: null,
+      usage: emptyProjectUsage(sessionId),
+    };
+    if (timestamp !== null && timestamp > (session.lastTimestamp ?? 0)) {
+      session.lastTimestamp = timestamp;
+    }
+    addTranscriptUsage(session.usage, value);
+    candidate.sessions.set(sessionId, session);
+  }
+
+  candidates.set(projectPath, candidate);
+}
+
+function transcriptCwdFromRecord(value: UnknownRecord): string | null {
+  return (
+    stringFromUnknown(value.cwd) ??
+    stringFromUnknown(value.projectPath) ??
+    stringFromUnknown(value.project_path)
+  );
+}
+
+function canonicalProjectPathFromTranscriptCwd(cwd: string): string {
+  const resolvedCwd = resolve(cwd);
+  const worktreeMarker = `${sep}.claude${sep}worktrees${sep}`;
+  const markerIndex = resolvedCwd.indexOf(worktreeMarker);
+  return markerIndex > 0 ? resolvedCwd.slice(0, markerIndex) : resolvedCwd;
+}
+
+function isTranscriptRootForCwd(
+  transcriptRootName: string,
+  cwd: string,
+  projectPath: string,
+): boolean {
+  const encodedProjectPath = encodeProjectPath(projectPath);
+  return (
+    transcriptRootName === encodeProjectPath(cwd) ||
+    transcriptRootName === encodedProjectPath
+  );
+}
+
+function addTranscriptUsage(usage: ProjectSummary['usage'], value: UnknownRecord) {
+  const message = isRecord(value.message) ? value.message : null;
+  const rawUsage = isRecord(message?.usage) ? message.usage : null;
+  if (!rawUsage) {
+    return;
+  }
+
+  usage.inputTokens += intFromUnknown(rawUsage.input_tokens);
+  usage.outputTokens += intFromUnknown(rawUsage.output_tokens);
+  usage.cacheReadTokens += intFromUnknown(rawUsage.cache_read_input_tokens);
+  usage.cacheWriteTokens += intFromUnknown(rawUsage.cache_creation_input_tokens);
+}
+
+function latestTranscriptSessionUsage(candidate: TranscriptProjectCandidate): ProjectSummary['usage'] {
+  const latestSession = [...candidate.sessions.values()].sort(
+    (left, right) => (right.lastTimestamp ?? 0) - (left.lastTimestamp ?? 0),
+  )[0];
+
+  return latestSession?.usage ?? emptyProjectUsage(null);
+}
+
+function emptyProjectUsage(lastSessionId: string | null): ProjectSummary['usage'] {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    costUsd: 0,
+    lastSessionId,
+  };
 }
 
 export async function readProviderSummaries(paths: OpenClaudePaths): Promise<ProviderSummary[]> {
@@ -412,6 +736,17 @@ function hasNonEmptyString(value: unknown): boolean {
 
 function isRecord(value: unknown): value is UnknownRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+async function safeLstat(path: string): Promise<Stats | null> {
+  try {
+    return await lstat(path);
+  } catch (error) {
+    if (isNodeFileError(error, 'ENOENT')) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function isNodeFileError(error: unknown, code: string): error is NodeJS.ErrnoException {
