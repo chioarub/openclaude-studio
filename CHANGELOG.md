@@ -4,10 +4,12 @@ All notable changes to OpenClaude Studio are documented here.
 
 This project uses semantic versioning for the published `openclaude-studio` npm package.
 
-## Unreleased
+## 0.3.0
 
 - Added provider profile management with a read-only local API, web UI, validation diagnostics, safe templates, copyable commands, and secret redaction.
 - Added Session Change Review with a read-only local API and web tab for bounded, redacted per-session diffs, backup diagnostics, and risk flags.
+- Added project discovery from bounded transcript metadata so projects missing from the global OpenClaude config can still appear with diagnostics.
+- Added light and dark documentation screenshots using synthetic fixture data.
 
 ## 0.2.1
 
