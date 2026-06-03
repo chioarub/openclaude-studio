@@ -6,6 +6,7 @@ This project uses semantic versioning for the published `openclaude-studio` npm 
 
 ## Unreleased
 
+- Added provider profile management with a read-only local API, web UI, validation diagnostics, safe templates, copyable commands, and secret redaction.
 - Added Session Change Review with a read-only local API and web tab for bounded, redacted per-session diffs, backup diagnostics, and risk flags.
 
 ## 0.2.1

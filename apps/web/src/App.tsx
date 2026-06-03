@@ -33,6 +33,7 @@ import {
   Menu,
   MessageSquareText,
   Moon,
+  Plus,
   RefreshCcw,
   Search,
   Server,
@@ -51,11 +52,17 @@ import type {
   LogsSearchResponse,
   LogsWindowResponse,
   OverviewResponse,
+  ProviderCustomHeaderSummary,
+  ProviderProfileField,
+  ProviderProfileTemplate,
+  ProviderProfileValidationIssue,
+  ProviderProfilesResponse,
   ProjectSummary,
+  SafeProviderProfile,
   SessionSummary,
 } from '@openclaude-studio/shared';
 
-import { createApiClient, normalizeBaseUrl } from './api';
+import { ApiRequestError, createApiClient, normalizeBaseUrl, type ApiClient } from './api';
 import { SessionDetailsModal } from './components/SessionDetailsModal';
 import { PlansTasksPage } from './components/PlansTasksPage';
 
@@ -72,6 +79,24 @@ type LogLevelFilter = 'all' | LogEntry['level'];
 type Theme = 'light' | 'dark';
 type UsageMetric = 'cost' | 'tokens';
 type UsageTimeframe = '7d' | '14d' | 'all';
+type ProviderProfileDraft = {
+  templateId: ProviderProfileTemplate['id'];
+  id: string;
+  name: string;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiFormat: string;
+  authHeader: string;
+  authScheme: string;
+  customHeadersText: string;
+  makeActive: boolean;
+};
+type ProviderOption = {
+  value: string;
+  label: string;
+  description?: string;
+};
 type LogRange = {
   start: number;
   count: number;
@@ -446,7 +471,7 @@ function StudioApp() {
                 />
               ) : <NoProjectSelectionPage />}
             />
-            <Route path="/providers" element={<ProviderPage overview={snapshot.overview} />} />
+            <Route path="/providers" element={<ProviderPage api={api} overview={snapshot.overview} />} />
             <Route
               path="/logs"
               element={
@@ -1130,38 +1155,1307 @@ function SessionsPage({ sessions, onSessionClick }: { sessions: SessionSummary[]
   );
 }
 
-function ProviderPage({ overview }: { overview: OverviewResponse | null }) {
+function ProviderPage({ api, overview }: { api: ApiClient; overview: OverviewResponse | null }) {
   const provider = overview?.provider;
+  const [profiles, setProfiles] = useState<ProviderProfilesResponse | null>(null);
+  const [loadState, setLoadState] = useState<LoadState>('idle');
+  const [error, setError] = useState<string | null>(null);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<ProviderProfileTemplate['id'] | null>(null);
+  const [draft, setDraft] = useState<ProviderProfileDraft | null>(null);
+  const [copiedProviderArtifact, setCopiedProviderArtifact] = useState<'command' | 'json' | null>(null);
+  const [copiedProfileCommandId, setCopiedProfileCommandId] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
+  const copyResetTimerRef = useRef<number | null>(null);
+  const profileCommandCopyResetTimerRef = useRef<number | null>(null);
+  const selectedTemplate = useMemo(
+    () => profiles?.templates.find((template) => template.id === selectedTemplateId) ?? profiles?.templates[0] ?? null,
+    [profiles, selectedTemplateId],
+  );
+
+  const loadProfiles = useCallback(async () => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    setLoadState('loading');
+    setError(null);
+
+    try {
+      const response = normalizeProviderProfilesResponse(await api.providerProfiles());
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
+      setProfiles(response);
+      setSelectedTemplateId((current) =>
+        current && response.templates.some((template) => template.id === current)
+          ? current
+          : response.templates[0]?.id ?? null,
+      );
+      setLoadState('ready');
+    } catch (caught) {
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
+      setProfiles(null);
+      setIsProfileModalOpen(false);
+      setDraft(null);
+      setLoadState('error');
+      if (caught instanceof ApiRequestError && caught.status === 404) {
+        setError('Provider profile management requires a newer local server');
+      } else {
+        setError(caught instanceof Error ? caught.message : 'Unable to load provider profiles.');
+      }
+    }
+  }, [api]);
+
+  useEffect(() => {
+    void loadProfiles();
+  }, [loadProfiles]);
+
+  useEffect(() => () => {
+    if (copyResetTimerRef.current !== null) {
+      window.clearTimeout(copyResetTimerRef.current);
+    }
+    if (profileCommandCopyResetTimerRef.current !== null) {
+      window.clearTimeout(profileCommandCopyResetTimerRef.current);
+    }
+  }, []);
+
+  const closeProfileModal = useCallback(() => {
+    setIsProfileModalOpen(false);
+  }, []);
+
+  function openAddProfile(template = selectedTemplate) {
+    if (!template) return;
+    setSelectedTemplateId(template.id);
+    setDraft(createProviderProfileDraft(template));
+    setCopiedProviderArtifact(null);
+    setIsProfileModalOpen(true);
+  }
+
+  function selectTemplate(template: ProviderProfileTemplate) {
+    setSelectedTemplateId(template.id);
+    setDraft(createProviderProfileDraft(template));
+    setCopiedProviderArtifact(null);
+  }
+
+  function updateDraft(patch: Partial<ProviderProfileDraft>) {
+    setDraft((current) => current ? { ...current, ...patch } : current);
+  }
+
+  function markProviderArtifactCopied(artifact: 'command' | 'json') {
+    setCopiedProviderArtifact(artifact);
+    if (copyResetTimerRef.current !== null) {
+      window.clearTimeout(copyResetTimerRef.current);
+    }
+    copyResetTimerRef.current = window.setTimeout(() => {
+      setCopiedProviderArtifact((current) => (current === artifact ? null : current));
+      copyResetTimerRef.current = null;
+    }, 1400);
+  }
+
+  function copyDraftCommand() {
+    if (!draft) return;
+    void window.navigator.clipboard?.writeText(providerLaunchCommand(draft));
+    markProviderArtifactCopied('command');
+  }
+
+  function copyDraftJson() {
+    if (!draft) return;
+    void window.navigator.clipboard?.writeText(providerTemplateSnippet(draft));
+    markProviderArtifactCopied('json');
+  }
+
+  function copyProfileCommand(profile: SafeProviderProfile) {
+    void window.navigator.clipboard?.writeText(providerProfileLaunchCommand(profile));
+    setCopiedProfileCommandId(profile.id);
+    if (profileCommandCopyResetTimerRef.current !== null) {
+      window.clearTimeout(profileCommandCopyResetTimerRef.current);
+    }
+    profileCommandCopyResetTimerRef.current = window.setTimeout(() => {
+      setCopiedProfileCommandId((current) => (current === profile.id ? null : current));
+      profileCommandCopyResetTimerRef.current = null;
+    }, 1400);
+  }
+
   return (
     <PageStack>
       <PageHeader
         icon={Server}
-        status={provider ? `${provider.provider} / ${provider.model}` : 'No provider profile'}
+        status={providerPageStatus(provider, profiles, loadState)}
         title="Providers"
+        aside={profiles ? (
+          <div className="page-header-stats">
+            <QuickStat label="Profiles" value={profiles.summary.total} />
+            <QuickStat label="Review" value={profiles.summary.warnings + profiles.summary.errors} />
+            <QuickStat label="Templates" value={profiles.summary.templates} />
+          </div>
+        ) : undefined}
       />
+
       <section className="panel">
-        <SectionHeading icon={KeyRound} label="Providers" />
-        {provider ? (
-          <div className="mt-5 grid gap-4 lg:grid-cols-2">
-            <Info label="Name" value={provider.name} />
-            <Info label="Provider" value={provider.provider} />
-            <Info label="Model" value={provider.model} />
-            <Info label="Base URL" value={provider.baseUrl ?? 'default'} />
-            <div className="flex flex-wrap gap-2 lg:col-span-2">
-              <Badge label={provider.active ? 'active' : 'inactive'} tone={provider.active ? 'success' : 'muted'} />
-              <Badge label={provider.apiKeySet ? 'api key set' : 'no api key'} tone={provider.apiKeySet ? 'success' : 'muted'} />
-              <Badge
-                label={provider.authHeaderValueSet ? 'auth header set' : 'no auth header'}
-                tone={provider.authHeaderValueSet ? 'success' : 'muted'}
-              />
+        <div className="section-heading-row">
+          <SectionHeading icon={ShieldCheck} label="Provider Profiles" />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {profiles ? <Badge label={formatCount(profiles.summary.total, 'profile')} tone="muted" /> : null}
+            {profiles ? <Badge label={formatCount(profiles.summary.templates, 'template')} tone="muted" /> : null}
+            {profiles ? <Badge label={profiles.exists ? 'config found' : 'config missing'} tone={profiles.exists ? 'success' : 'warning'} /> : null}
+          </div>
+        </div>
+        {loadState === 'loading' ? (
+          <EmptyState label="Loading provider profiles" />
+        ) : error ? (
+          <div className="mt-5 rounded-lg border border-warning/25 bg-warning/[0.08] p-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-ink">{error}</p>
+                <p className="mt-1 text-sm text-muted">The active provider summary is still available from the older overview response.</p>
+                {provider ? (
+                  <div className="mt-4 border-t border-warning/20 pt-4">
+                    <SectionHeading icon={KeyRound} label="Active Provider" />
+                    <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                      <Info label="Name" value={provider.name} />
+                      <Info label="Model" value={provider.model} />
+                      <Info label="Base URL" value={provider.baseUrl ?? 'default'} />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
+        ) : profiles ? (
+          <ProviderProfilesPanel
+            copiedProfileCommandId={copiedProfileCommandId}
+            onAddProfile={() => openAddProfile()}
+            onCopyCommand={copyProfileCommand}
+            response={profiles}
+          />
         ) : (
-          <EmptyState label="No active provider" />
+          <EmptyState label="No provider profile data loaded" />
         )}
       </section>
+
+      {profiles && selectedTemplate && draft && isProfileModalOpen ? (
+        <ProviderProfileTemplateModal
+          commandCopied={copiedProviderArtifact === 'command'}
+          jsonCopied={copiedProviderArtifact === 'json'}
+          draft={draft}
+          onClose={closeProfileModal}
+          onCopyCommand={copyDraftCommand}
+          onCopyJson={copyDraftJson}
+          onDraftChange={updateDraft}
+          onSelectTemplate={selectTemplate}
+          selectedTemplate={selectedTemplate}
+          templates={profiles.templates}
+        />
+      ) : null}
     </PageStack>
   );
+}
+
+function normalizeProviderProfilesResponse(response: unknown): ProviderProfilesResponse {
+  const payload = isRecord(response) ? response : {};
+  const profiles = Array.isArray(payload.profiles)
+    ? payload.profiles.map((profile, index) => normalizeSafeProviderProfile(profile, index))
+    : [];
+  const templates = Array.isArray(payload.templates)
+    ? payload.templates.map((template) => normalizeProviderProfileTemplate(template))
+    : [];
+  const diagnostics = Array.isArray(payload.diagnostics)
+    ? payload.diagnostics.map(normalizeDiagnostic)
+    : [];
+  const summary: Record<string, unknown> = isRecord(payload.summary) ? payload.summary : {};
+  const warningCount = profiles.filter((profile) => profile.validation?.status === 'warning').length;
+  const errorCount = profiles.filter((profile) => profile.validation?.status === 'error').length;
+
+  return {
+    path: stringOrFallback(payload.path, ''),
+    exists: payload.exists === true,
+    activeProviderProfileId: stringOrNull(payload.activeProviderProfileId),
+    sensitiveFieldsRedacted: true,
+    profiles,
+    templates,
+    summary: {
+      total: finiteNumberOr(summary.total, profiles.length),
+      active: finiteNumberOr(summary.active, profiles.filter((profile) => profile.active).length),
+      valid: finiteNumberOr(summary.valid, profiles.filter((profile) => profile.validation?.status === 'valid').length),
+      warnings: finiteNumberOr(summary.warnings, warningCount),
+      errors: finiteNumberOr(summary.errors, errorCount),
+      templates: finiteNumberOr(summary.templates, templates.length),
+    },
+    diagnostics,
+  };
+}
+
+const providerTemplateCategories: ReadonlyArray<ProviderProfileTemplate['category']> = [
+  'hosted',
+  'local',
+  'subscription',
+  'custom',
+];
+const providerProfileFields: readonly ProviderProfileField[] = [
+  'id',
+  'name',
+  'provider',
+  'baseUrl',
+  'model',
+  'credential',
+  'apiFormat',
+  'authHeader',
+  'authScheme',
+  'customHeaders',
+  'activeProviderProfileId',
+];
+const validationSeverities: ReadonlyArray<ProviderProfileValidationIssue['severity']> = ['info', 'warn', 'error'];
+
+function normalizeSafeProviderProfile(input: unknown, index: number): SafeProviderProfile {
+  const profile = isRecord(input) ? input : {};
+  const validation = isRecord(profile.validation) ? profile.validation : {};
+  const validationIssues = Array.isArray(validation.issues)
+    ? validation.issues.map(normalizeProviderProfileValidationIssue)
+    : [];
+
+  return {
+    id: stringOrFallback(profile.id, `provider_${index + 1}`),
+    name: stringOrFallback(profile.name, 'Unnamed provider'),
+    provider: stringOrFallback(profile.provider, 'openai'),
+    model: stringOrFallback(profile.model, ''),
+    baseUrl: stringOrNull(profile.baseUrl),
+    active: profile.active === true,
+    apiKeySet: profile.apiKeySet === true,
+    authHeaderValueSet: profile.authHeaderValueSet === true,
+    apiFormat: stringOrNull(profile.apiFormat),
+    authHeader: stringOrNull(profile.authHeader),
+    authScheme: stringOrNull(profile.authScheme),
+    customHeaders: Array.isArray(profile.customHeaders)
+      ? profile.customHeaders.map(normalizeProviderCustomHeader).filter((header) => header.name.length > 0)
+      : [],
+    templateId: providerTemplateIdOr(profile.templateId, 'custom-openai'),
+    templateLabel: stringOrFallback(profile.templateLabel, 'Custom OpenAI-compatible'),
+    validation: {
+      status: providerValidationStatusOr(validation.status, 'valid'),
+      issues: validationIssues,
+    },
+  };
+}
+
+function normalizeProviderProfileTemplate(input: unknown): ProviderProfileTemplate {
+  const template = isRecord(input) ? input : {};
+
+  return {
+    id: providerTemplateIdOr(template.id, 'custom-openai'),
+    label: stringOrFallback(template.label, 'Custom OpenAI-compatible'),
+    category: providerTemplateCategoryOr(template.category, 'custom'),
+    description: stringOrFallback(template.description, 'Custom provider profile template.'),
+    provider: stringOrFallback(template.provider, 'openai'),
+    baseUrl: stringOrFallback(template.baseUrl, ''),
+    model: stringOrFallback(template.model, ''),
+    modelPlaceholder: stringOrFallback(template.modelPlaceholder, 'Model id'),
+    requiresSecret: template.requiresSecret === true,
+    requiredFields: providerProfileFieldArrayOrEmpty(template.requiredFields),
+    advancedFields: providerProfileFieldArrayOrEmpty(template.advancedFields),
+    apiFormat: providerApiFormatOrNull(template.apiFormat),
+    authHeader: stringOrNull(template.authHeader),
+    authScheme: providerAuthSchemeOrNull(template.authScheme),
+    customHeaders: Array.isArray(template.customHeaders)
+      ? template.customHeaders.map(normalizeTemplateCustomHeader).filter((header) => header.name.length > 0)
+      : [],
+    credential: normalizeProviderTemplateCredential(template.credential),
+  };
+}
+
+function normalizeProviderCustomHeader(input: unknown): ProviderCustomHeaderSummary {
+  const header = isRecord(input) ? input : {};
+  return {
+    name: stringOrFallback(header.name, ''),
+    valueSet: header.valueSet === true,
+    sensitive: header.sensitive === true,
+  };
+}
+
+function normalizeTemplateCustomHeader(input: unknown): { name: string; value: string } {
+  const header = isRecord(input) ? input : {};
+  return {
+    name: stringOrFallback(header.name, ''),
+    value: stringOrFallback(header.value, ''),
+  };
+}
+
+function normalizeProviderProfileValidationIssue(input: unknown): ProviderProfileValidationIssue {
+  const issue = isRecord(input) ? input : {};
+  const field = providerProfileFieldOrNull(issue.field);
+  return {
+    severity: validationSeverityOr(issue.severity, 'warn'),
+    ...(field ? { field } : {}),
+    message: stringOrFallback(issue.message, 'Provider profile validation issue.'),
+  };
+}
+
+function normalizeProviderTemplateCredential(input: unknown): ProviderProfileTemplate['credential'] {
+  if (!isRecord(input)) {
+    return null;
+  }
+
+  return {
+    label: stringOrFallback(input.label, 'Provider credential'),
+    envVar: stringOrFallback(input.envVar, 'OPENAI_API_KEY'),
+    placeholder: stringOrFallback(input.placeholder, 'Set outside Studio before using this profile'),
+  };
+}
+
+function normalizeDiagnostic(input: unknown): Diagnostic {
+  const diagnostic = isRecord(input) ? input : {};
+  return {
+    level: diagnostic.level === 'error' || diagnostic.level === 'warn' ? diagnostic.level : 'info',
+    message: stringOrFallback(diagnostic.message, 'Provider profile diagnostic.'),
+    ...(typeof diagnostic.path === 'string' ? { path: diagnostic.path } : {}),
+  };
+}
+
+function finiteNumberOr(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function stringOrFallback(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function providerTemplateIdOr(value: unknown, fallback: ProviderProfileTemplate['id']): ProviderProfileTemplate['id'] {
+  return typeof value === 'string' && value.trim().length > 0 ? value as ProviderProfileTemplate['id'] : fallback;
+}
+
+function providerTemplateCategoryOr(
+  value: unknown,
+  fallback: ProviderProfileTemplate['category'],
+): ProviderProfileTemplate['category'] {
+  return providerTemplateCategories.includes(value as ProviderProfileTemplate['category'])
+    ? value as ProviderProfileTemplate['category']
+    : fallback;
+}
+
+function providerApiFormatOrNull(value: unknown): ProviderProfileTemplate['apiFormat'] {
+  return value === 'responses' || value === 'chat_completions' ? value : null;
+}
+
+function providerAuthSchemeOrNull(value: unknown): ProviderProfileTemplate['authScheme'] {
+  return value === 'bearer' || value === 'raw' ? value : null;
+}
+
+function providerValidationStatusOr(
+  value: unknown,
+  fallback: SafeProviderProfile['validation']['status'],
+): SafeProviderProfile['validation']['status'] {
+  return value === 'error' || value === 'warning' || value === 'valid' ? value : fallback;
+}
+
+function validationSeverityOr(
+  value: unknown,
+  fallback: ProviderProfileValidationIssue['severity'],
+): ProviderProfileValidationIssue['severity'] {
+  return validationSeverities.includes(value as ProviderProfileValidationIssue['severity'])
+    ? value as ProviderProfileValidationIssue['severity']
+    : fallback;
+}
+
+function providerProfileFieldOrNull(value: unknown): ProviderProfileField | null {
+  return providerProfileFields.includes(value as ProviderProfileField) ? value as ProviderProfileField : null;
+}
+
+function providerProfileFieldArrayOrEmpty(value: unknown): ProviderProfileField[] {
+  return Array.isArray(value)
+    ? value.map(providerProfileFieldOrNull).filter((field): field is ProviderProfileField => field !== null)
+    : [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function ProviderProfilesPanel({
+  copiedProfileCommandId,
+  onAddProfile,
+  onCopyCommand,
+  response,
+}: {
+  copiedProfileCommandId: string | null;
+  onAddProfile: () => void;
+  onCopyCommand: (profile: SafeProviderProfile) => void;
+  response: ProviderProfilesResponse;
+}) {
+  return (
+    <div className="mt-5 space-y-5">
+      {response.diagnostics.length > 0 ? (
+        <div className="space-y-2">
+          {response.diagnostics.map((diagnostic, index) => (
+            <DiagnosticNotice diagnostic={diagnostic} key={`${diagnostic.level}-${index}`} />
+          ))}
+        </div>
+      ) : null}
+      <div className="grid items-stretch gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+        {response.profiles.length === 0 ? (
+          <div className="flex min-h-[260px] flex-col items-center justify-center rounded-lg border border-dashed border-hairline-soft bg-canvas px-5 py-8 text-center lg:col-span-2 2xl:col-span-2">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-hairline-soft bg-surface-soft text-primary">
+              <ShieldCheck className="h-4 w-4" />
+            </div>
+            <p className="mt-3 text-sm font-semibold text-ink">No provider profiles configured</p>
+            <p className="mt-1 max-w-md text-sm text-muted">Choose a safe template to generate a read-only profile snippet and launch command.</p>
+          </div>
+        ) : null}
+        {response.profiles.map((profile, index) => (
+          <ProviderProfileCard
+            copied={copiedProfileCommandId === profile.id}
+            key={`${profile.id}-${index}`}
+            onCopyCommand={() => onCopyCommand(profile)}
+            profile={profile}
+          />
+        ))}
+        {response.templates.length > 0 ? (
+          <button
+            aria-label="Add provider profile"
+            className="group flex min-h-[260px] flex-col items-center justify-center rounded-lg border border-dashed border-hairline-soft bg-surface-soft/45 px-5 py-8 text-center transition-colors hover:border-primary/40 hover:bg-surface-soft focus:outline-none focus:ring-[3px] focus:ring-primary/15"
+            onClick={onAddProfile}
+            type="button"
+          >
+            <span className="flex h-11 w-11 items-center justify-center rounded-lg border border-hairline-soft bg-canvas text-primary transition-colors group-hover:border-primary/40">
+              <Plus className="h-5 w-5" />
+            </span>
+            <span className="mt-3 text-sm font-semibold text-ink">Add provider profile</span>
+            <span className="mt-1 max-w-[260px] text-sm leading-relaxed text-muted">
+              Select a template, validate safe fields, then copy JSON or an OpenClaude command.
+            </span>
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ProviderProfileCard({
+  copied,
+  onCopyCommand,
+  profile,
+}: {
+  copied: boolean;
+  onCopyCommand: () => void;
+  profile: SafeProviderProfile;
+}) {
+  const statusTone = profile.validation.status === 'error'
+    ? 'danger'
+    : profile.validation.status === 'warning'
+      ? 'warning'
+      : 'success';
+  const command = providerProfileLaunchCommand(profile);
+
+  return (
+    <article className="flex min-h-[260px] flex-col rounded-lg border border-hairline-soft bg-canvas p-4 shadow-[0_1px_0_rgb(0_0_0/0.03)]">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-surface-soft', profile.active ? 'border-success/20 text-success' : 'border-hairline-soft text-muted')}>
+            <CircleDot className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="truncate text-base font-semibold text-ink">{profile.name}</h2>
+            <p className="mt-1 truncate font-mono text-xs text-muted" title={`${profile.provider} / ${profile.model}`}>
+              {profile.provider} / {profile.model}
+            </p>
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+          {profile.active ? <Badge label="active" tone="success" /> : null}
+          <Badge label={validationStatusLabel(profile.validation.status)} tone={statusTone} />
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <Info label="Template" value={profile.templateLabel} />
+        <Info label="Base URL" value={profile.baseUrl ?? 'default'} />
+        <Info label="API format" value={profile.apiFormat ?? 'provider default'} />
+        <Info label="Auth header" value={profile.authHeader ?? 'provider default'} />
+      </div>
+
+      {profile.customHeaders.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {profile.customHeaders.map((header) => (
+            <span
+              className="rounded-md border border-hairline-soft bg-surface-soft px-2 py-1 font-mono text-xs text-muted"
+              key={header.name}
+              title={header.sensitive ? `${header.name}: redacted` : `${header.name}: set`}
+            >
+              {header.name}
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      {profile.validation.issues.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {profile.validation.issues.map((issue, index) => (
+            <div className="flex items-start gap-2 text-sm text-muted" key={`${issue.field ?? 'profile'}-${index}`}>
+              {issue.severity === 'error' ? (
+                <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-error" />
+              ) : (
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+              )}
+              <span>{issue.message}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Badge label={profile.apiKeySet ? 'credential saved' : 'no saved credential'} tone={profile.apiKeySet ? 'success' : 'muted'} />
+        <Badge label={profile.authHeaderValueSet ? 'auth value saved' : 'no auth value'} tone={profile.authHeaderValueSet ? 'success' : 'muted'} />
+      </div>
+
+      <div className="mt-auto pt-4">
+        <div className="flex min-w-0 items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-muted">OpenClaude command</div>
+            <div className="mt-1 truncate font-mono text-[11px] text-muted-soft" title={profile.id}>{profile.id}</div>
+          </div>
+          <button
+            aria-label={`Copy OpenClaude command for ${profile.name}`}
+            className="secondary-button min-h-8 shrink-0 px-2.5 py-1 text-xs"
+            onClick={onCopyCommand}
+            type="button"
+          >
+            <Copy className="h-3.5 w-3.5" />
+            {copied ? 'Copied' : 'Copy'}
+          </button>
+        </div>
+        <textarea
+          aria-label={`OpenClaude command for ${profile.name}`}
+          className="mt-2 min-h-[64px] w-full resize-none rounded-md border border-hairline bg-surface-soft px-3 py-2 font-mono text-xs leading-relaxed text-ink outline-none transition-colors focus:border-primary/50 focus:ring-[3px] focus:ring-primary/15"
+          onFocus={(event) => event.currentTarget.select()}
+          readOnly
+          rows={3}
+          value={command}
+        />
+      </div>
+    </article>
+  );
+}
+
+function DiagnosticNotice({ diagnostic }: { diagnostic: Diagnostic }) {
+  return (
+    <div className="flex items-start gap-3 rounded-lg border border-hairline-soft bg-surface-soft/60 px-3 py-2 text-sm text-muted">
+      <AlertTriangle className={cn('mt-0.5 h-4 w-4 shrink-0', diagnostic.level === 'error' ? 'text-error' : 'text-warning')} />
+      <div className="min-w-0">
+        <div>{diagnostic.message}</div>
+        {diagnostic.path ? <div className="mt-1 truncate font-mono text-xs text-muted-soft">{diagnostic.path}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function providerPageStatus(
+  provider: OverviewResponse['provider'] | null | undefined,
+  profiles: ProviderProfilesResponse | null,
+  loadState: LoadState,
+): string {
+  if (profiles) {
+    const reviewCount = profiles.summary.warnings + profiles.summary.errors;
+    const profileCount = formatCount(profiles.summary.total, 'profile');
+    return reviewCount > 0
+      ? `${profileCount} / ${formatCount(reviewCount, 'issue')} to review`
+      : `${profileCount} validated`;
+  }
+  if (loadState === 'loading') {
+    return 'Loading provider profiles';
+  }
+  return provider ? `${provider.provider} / ${provider.model}` : 'No provider profile';
+}
+
+function validationStatusLabel(status: SafeProviderProfile['validation']['status']): string {
+  if (status === 'error') return 'Needs fix';
+  if (status === 'warning') return 'Needs review';
+  return 'Ready';
+}
+
+const providerApiFormatOptions: ProviderOption[] = [
+  { value: '', label: 'Provider default', description: 'Use the default API mode for this provider.' },
+  { value: 'responses', label: 'Responses API', description: 'OpenAI-compatible Responses endpoint.' },
+  { value: 'chat_completions', label: 'Chat Completions', description: 'OpenAI-compatible chat completions endpoint.' },
+];
+
+const providerAuthSchemeOptions: ProviderOption[] = [
+  { value: 'bearer', label: 'Bearer token', description: 'Prefix the credential with Bearer.' },
+  { value: 'raw', label: 'Raw header value', description: 'Use the credential exactly as provided.' },
+];
+
+function ProviderProfileTemplateModal({
+  commandCopied,
+  draft,
+  jsonCopied,
+  onClose,
+  onCopyCommand,
+  onCopyJson,
+  onDraftChange,
+  onSelectTemplate,
+  selectedTemplate,
+  templates,
+}: {
+  commandCopied: boolean;
+  draft: ProviderProfileDraft;
+  jsonCopied: boolean;
+  onClose: () => void;
+  onCopyCommand: () => void;
+  onCopyJson: () => void;
+  onDraftChange: (patch: Partial<ProviderProfileDraft>) => void;
+  onSelectTemplate: (template: ProviderProfileTemplate) => void;
+  selectedTemplate: ProviderProfileTemplate;
+  templates: ProviderProfileTemplate[];
+}) {
+  const snippet = providerTemplateSnippet(draft);
+  const command = providerLaunchCommand(draft);
+  const omittedSensitiveHeaders = hasSensitiveCustomHeaderText(draft.customHeadersText);
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (document.querySelector('[data-provider-profile-select-open="true"]')) {
+          return;
+        }
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[1000] flex items-center justify-center overflow-y-auto overscroll-contain bg-surface-dark/55 p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div
+        aria-labelledby="provider-profile-modal-title"
+        aria-modal="true"
+        className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-hairline bg-canvas shadow-sm"
+        role="dialog"
+      >
+        <div className="flex shrink-0 items-center justify-between gap-4 border-b border-hairline-soft bg-surface-soft px-5 py-4">
+          <div className="min-w-0">
+            <h2 className="truncate text-[22px] font-medium leading-tight text-ink" id="provider-profile-modal-title">
+              New Provider Profile
+            </h2>
+            <p className="mt-1 text-sm text-muted">Select a safe template, tune the profile, then copy the command or JSON.</p>
+          </div>
+          <button
+            aria-label="Close dialog"
+            className="rounded-md p-2 text-muted transition-colors hover:bg-surface-card hover:text-error"
+            onClick={onClose}
+            type="button"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          <div className="min-w-0 space-y-4">
+            <section className="rounded-lg border border-hairline-soft bg-surface-card p-4">
+              <div className="min-w-0">
+                <h3 className="text-base font-semibold text-ink">Choose a provider template</h3>
+                <p className="mt-1 text-sm leading-relaxed text-muted">Start from a safe preset, then review the generated fields below.</p>
+              </div>
+              <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+                <div className="min-w-0 rounded-md border border-hairline-soft bg-canvas px-3 py-3">
+                  <div className="mb-2 text-xs font-medium text-muted">Template</div>
+                  <ProviderTemplateSelect
+                    onSelectTemplate={onSelectTemplate}
+                    selectedTemplate={selectedTemplate}
+                    templates={templates}
+                  />
+                </div>
+                <div className="min-w-0 rounded-md border border-hairline-soft bg-canvas px-3 py-3">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <span className="truncate text-sm font-semibold text-ink">{selectedTemplate.label}</span>
+                    <Badge label={selectedTemplate.category} tone={selectedTemplate.category === 'local' ? 'success' : 'muted'} />
+                    <Badge label={selectedTemplate.model || selectedTemplate.modelPlaceholder} tone="muted" />
+                    <Badge
+                      label={selectedTemplate.requiresSecret ? selectedTemplate.credential?.envVar ?? 'credential required' : 'no secret'}
+                      tone={selectedTemplate.requiresSecret ? 'warning' : 'success'}
+                    />
+                  </div>
+                  <p className="mt-2 text-sm leading-relaxed text-muted">{selectedTemplate.description}</p>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-hairline-soft bg-surface-card p-4">
+              <div className="flex min-w-0 flex-wrap items-start justify-between gap-3 border-b border-hairline-soft pb-4">
+                <div className="min-w-0">
+                  <h3 className="truncate text-base font-semibold text-ink">Profile details</h3>
+                  <p className="mt-1 text-sm text-muted">These safe fields are reflected in both generated outputs.</p>
+                </div>
+                <Badge label={selectedTemplate.provider} tone="muted" />
+              </div>
+
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <ProviderDraftField id="provider-profile-id" label="Profile ID">
+                  <input
+                    className="w-full rounded-md border border-hairline bg-canvas px-3 py-2 font-mono text-sm text-ink outline-none transition-colors focus:border-primary/50 focus:ring-[3px] focus:ring-primary/15"
+                    id="provider-profile-id"
+                    onChange={(event) => onDraftChange({ id: event.target.value })}
+                    value={draft.id}
+                  />
+                </ProviderDraftField>
+                <ProviderDraftField id="provider-profile-name" label="Profile name">
+                  <input
+                    className="w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink outline-none transition-colors focus:border-primary/50 focus:ring-[3px] focus:ring-primary/15"
+                    id="provider-profile-name"
+                    onChange={(event) => onDraftChange({ name: event.target.value })}
+                    value={draft.name}
+                  />
+                </ProviderDraftField>
+                <ProviderDraftField id="provider-profile-provider" label="Provider">
+                  <input
+                    className="w-full rounded-md border border-hairline bg-canvas px-3 py-2 font-mono text-sm text-ink outline-none transition-colors focus:border-primary/50 focus:ring-[3px] focus:ring-primary/15"
+                    id="provider-profile-provider"
+                    onChange={(event) => onDraftChange({ provider: event.target.value })}
+                    value={draft.provider}
+                  />
+                </ProviderDraftField>
+                <ProviderDraftField id="provider-profile-model" label="Model">
+                  <input
+                    className="w-full rounded-md border border-hairline bg-canvas px-3 py-2 font-mono text-sm text-ink outline-none transition-colors focus:border-primary/50 focus:ring-[3px] focus:ring-primary/15"
+                    id="provider-profile-model"
+                    onChange={(event) => onDraftChange({ model: event.target.value })}
+                    placeholder={selectedTemplate.modelPlaceholder}
+                    value={draft.model}
+                  />
+                </ProviderDraftField>
+                <ProviderDraftField className="md:col-span-2" id="provider-profile-base-url" label="Base URL">
+                  <input
+                    className="w-full rounded-md border border-hairline bg-canvas px-3 py-2 font-mono text-sm text-ink outline-none transition-colors focus:border-primary/50 focus:ring-[3px] focus:ring-primary/15"
+                    id="provider-profile-base-url"
+                    onChange={(event) => onDraftChange({ baseUrl: event.target.value })}
+                    placeholder="https://api.example.com/v1"
+                    value={draft.baseUrl}
+                  />
+                </ProviderDraftField>
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+                <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-hairline-soft bg-canvas px-3 py-3">
+                  <input
+                    checked={draft.makeActive}
+                    className="mt-0.5 h-4 w-4 rounded border-hairline text-primary focus:ring-primary"
+                    onChange={(event) => onDraftChange({ makeActive: event.target.checked })}
+                    type="checkbox"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-ink">Make active</span>
+                    <span className="mt-1 block text-xs leading-relaxed text-muted">Adds the active profile id to the copied JSON.</span>
+                  </span>
+                </label>
+                <div className="rounded-lg border border-hairline-soft bg-canvas px-3 py-3">
+                  <div className="text-xs font-medium text-muted">Credential</div>
+                  <div className="mt-1 font-mono text-sm text-ink">
+                    {selectedTemplate.requiresSecret ? selectedTemplate.credential?.envVar ?? 'required outside Studio' : 'not required'}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <details className="rounded-lg border border-hairline-soft bg-surface-card">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
+                <span>
+                  <span className="block text-sm font-medium text-ink">Advanced provider settings</span>
+                  <span className="mt-1 block text-xs text-muted">API mode, auth header metadata, and non-sensitive custom headers.</span>
+                </span>
+                <ChevronDown className="h-4 w-4 text-muted" />
+              </summary>
+              <div className="grid gap-4 border-t border-hairline-soft p-4 md:grid-cols-2">
+                <ProviderOptionField
+                  id="provider-profile-api-format"
+                  label="API mode"
+                  onChange={(value) => onDraftChange({ apiFormat: value })}
+                  options={providerApiFormatOptions}
+                  value={draft.apiFormat}
+                />
+                <ProviderOptionField
+                  id="provider-profile-auth-scheme"
+                  label="Auth scheme"
+                  onChange={(value) => onDraftChange({ authScheme: value })}
+                  options={providerAuthSchemeOptions}
+                  value={draft.authScheme}
+                />
+                <ProviderDraftField id="provider-profile-auth-header" label="Auth header">
+                  <input
+                    className="w-full rounded-md border border-hairline bg-canvas px-3 py-2 font-mono text-sm text-ink outline-none transition-colors focus:border-primary/50 focus:ring-[3px] focus:ring-primary/15"
+                    id="provider-profile-auth-header"
+                    onChange={(event) => onDraftChange({ authHeader: event.target.value })}
+                    placeholder="Authorization"
+                    value={draft.authHeader}
+                  />
+                </ProviderDraftField>
+                <ProviderDraftField id="provider-profile-custom-headers" label="Custom headers">
+                  <textarea
+                    className="min-h-[84px] w-full resize-y rounded-md border border-hairline bg-canvas px-3 py-2 font-mono text-sm text-ink outline-none transition-colors focus:border-primary/50 focus:ring-[3px] focus:ring-primary/15"
+                    id="provider-profile-custom-headers"
+                    onChange={(event) => onDraftChange({ customHeadersText: event.target.value })}
+                    placeholder="X-Provider-Feature: enabled"
+                    value={draft.customHeadersText}
+                  />
+                </ProviderDraftField>
+                {omittedSensitiveHeaders ? (
+                  <div className="rounded-lg border border-warning/25 bg-warning/[0.08] px-3 py-2 text-xs leading-relaxed text-muted md:col-span-2">
+                    Sensitive-looking custom header names are omitted from the safe JSON.
+                  </div>
+                ) : null}
+              </div>
+            </details>
+
+            <section className="rounded-lg border border-hairline-soft bg-surface-card p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-ink">Generated OpenClaude command</div>
+                  <div className="mt-1 text-xs text-muted">Uses OpenClaude's supported provider and model flags.</div>
+                </div>
+                <button className="secondary-button" onClick={onCopyCommand} type="button">
+                  <Copy className="h-4 w-4" />
+                  {commandCopied ? 'Copied' : 'Copy command'}
+                </button>
+              </div>
+              <input
+                aria-label="Generated OpenClaude command"
+                className="mt-3 w-full rounded-md border border-hairline bg-canvas px-3 py-2 font-mono text-sm text-ink outline-none transition-colors focus:border-primary/50 focus:ring-[3px] focus:ring-primary/15"
+                onFocus={(event) => event.currentTarget.select()}
+                readOnly
+                value={command}
+              />
+            </section>
+
+            <section className="overflow-hidden rounded-lg border border-code-panel-border bg-code-panel">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-code-panel-border bg-code-panel-elevated px-4 py-3">
+                <div>
+                  <div className="text-sm font-semibold text-code-panel-text">Generated safe JSON</div>
+                  <div className="mt-1 text-xs text-code-panel-muted">Secret fields are not included.</div>
+                </div>
+                <button className="secondary-button bg-canvas" onClick={onCopyJson} type="button">
+                  <Copy className="h-4 w-4" />
+                  {jsonCopied ? 'Copied' : 'Copy safe JSON'}
+                </button>
+              </div>
+              <pre
+                aria-label="Generated provider profile JSON"
+                className="whitespace-pre-wrap break-words p-4 font-mono text-xs leading-relaxed text-code-panel-text"
+              >
+                {snippet}
+              </pre>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProviderTemplateSelect({
+  onSelectTemplate,
+  selectedTemplate,
+  templates,
+}: {
+  onSelectTemplate: (template: ProviderProfileTemplate) => void;
+  selectedTemplate: ProviderProfileTemplate;
+  templates: ProviderProfileTemplate[];
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [isOpen]);
+
+  return (
+    <div
+      className="custom-select provider-template-select"
+      data-provider-profile-select-open={isOpen ? 'true' : undefined}
+      ref={menuRef}
+    >
+      <button
+        aria-controls="provider-template-selector-menu"
+        aria-expanded={isOpen}
+        aria-haspopup="listbox"
+        aria-label={`Template ${selectedTemplate.label}`}
+        className="custom-select-trigger min-h-[52px]"
+        id="provider-template-select"
+        onClick={() => setIsOpen((current) => !current)}
+        type="button"
+      >
+        <span className="custom-select-trigger-content">
+          <Database className="h-4 w-4 shrink-0 text-muted" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-medium">{selectedTemplate.label}</span>
+            <span className="mt-0.5 block truncate text-[12px] font-normal text-muted">
+              {selectedTemplate.category} / {selectedTemplate.provider}
+            </span>
+          </span>
+        </span>
+        <ChevronDown className={cn('h-4 w-4 shrink-0 text-muted transition-transform', isOpen && 'rotate-180')} />
+      </button>
+
+      {isOpen ? (
+        <div
+          aria-label="Provider template"
+          className="custom-select-menu custom-scrollbar"
+          id="provider-template-selector-menu"
+          role="listbox"
+        >
+          {templates.map((template) => {
+            const isSelected = template.id === selectedTemplate.id;
+            return (
+              <button
+                aria-selected={isSelected}
+                className={cn('custom-select-option', isSelected && 'custom-select-option-active')}
+                key={template.id}
+                onClick={() => {
+                  onSelectTemplate(template);
+                  setIsOpen(false);
+                }}
+                role="option"
+                type="button"
+              >
+                <Database className={cn('mt-0.5 h-4 w-4 shrink-0', isSelected ? 'text-primary' : 'text-muted')} />
+                <span className="min-w-0 flex-1">
+                  <span className={cn('block truncate text-[14px] font-medium', isSelected ? 'text-primary' : 'text-ink')}>
+                    {template.label}
+                  </span>
+                  <span className="mt-0.5 block truncate text-[12px] text-muted">
+                    {template.category} / {template.provider} / {template.model || template.modelPlaceholder}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ProviderOptionField({
+  id,
+  label,
+  onChange,
+  options,
+  value,
+}: {
+  id: string;
+  label: string;
+  onChange: (value: string) => void;
+  options: ProviderOption[];
+  value: string;
+}) {
+  return (
+    <div className="grid gap-2">
+      <span className="text-xs font-medium text-muted" id={`${id}-label`}>{label}</span>
+      <ProviderOptionSelect
+        id={id}
+        label={label}
+        labelId={`${id}-label`}
+        onChange={onChange}
+        options={options}
+        value={value}
+      />
+    </div>
+  );
+}
+
+function ProviderOptionSelect({
+  id,
+  label,
+  labelId,
+  onChange,
+  options,
+  value,
+}: {
+  id: string;
+  label: string;
+  labelId: string;
+  onChange: (value: string) => void;
+  options: ProviderOption[];
+  value: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const selectedOption = options.find((option) => option.value === value) ?? options[0] ?? { value: '', label: 'Select option' };
+  const menuId = `${id}-menu`;
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [isOpen]);
+
+  return (
+    <div
+      className="custom-select provider-option-select"
+      data-provider-profile-select-open={isOpen ? 'true' : undefined}
+      ref={menuRef}
+    >
+      <button
+        aria-controls={menuId}
+        aria-expanded={isOpen}
+        aria-haspopup="listbox"
+        aria-labelledby={`${labelId} ${id}`}
+        className="custom-select-trigger"
+        id={id}
+        onClick={() => setIsOpen((current) => !current)}
+        type="button"
+      >
+        <span className="custom-select-trigger-content">
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-medium">{selectedOption.label}</span>
+            {selectedOption.description ? (
+              <span className="mt-0.5 block truncate text-[12px] font-normal text-muted">{selectedOption.description}</span>
+            ) : null}
+          </span>
+        </span>
+        <ChevronDown className={cn('h-4 w-4 shrink-0 text-muted transition-transform', isOpen && 'rotate-180')} />
+      </button>
+
+      {isOpen ? (
+        <div aria-label={`${label} options`} className="custom-select-menu custom-scrollbar" id={menuId} role="listbox">
+          {options.map((option) => {
+            const isSelected = option.value === selectedOption.value;
+            return (
+              <button
+                aria-selected={isSelected}
+                className={cn('custom-select-option', isSelected && 'custom-select-option-active')}
+                key={option.value || 'default'}
+                onClick={() => {
+                  onChange(option.value);
+                  setIsOpen(false);
+                }}
+                role="option"
+                type="button"
+              >
+                <Check className={cn('mt-0.5 h-4 w-4 shrink-0', isSelected ? 'text-primary' : 'text-transparent')} />
+                <span className="min-w-0 flex-1">
+                  <span className={cn('block truncate text-[14px] font-medium', isSelected ? 'text-primary' : 'text-ink')}>
+                    {option.label}
+                  </span>
+                  {option.description ? (
+                    <span className="mt-0.5 block truncate text-[12px] text-muted">{option.description}</span>
+                  ) : null}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ProviderDraftField({
+  children,
+  className,
+  id,
+  label,
+}: {
+  children: ReactNode;
+  className?: string;
+  id: string;
+  label: string;
+}) {
+  return (
+    <label className={cn('grid gap-2', className)} htmlFor={id}>
+      <span className="text-xs font-medium text-muted">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function createProviderProfileDraft(template: ProviderProfileTemplate): ProviderProfileDraft {
+  return {
+    templateId: template.id,
+    id: `provider_${template.id.replace(/[^a-z0-9]+/gi, '_')}`,
+    name: template.label,
+    provider: template.provider,
+    baseUrl: template.baseUrl,
+    model: template.model,
+    apiFormat: template.apiFormat ?? '',
+    authHeader: template.authHeader ?? '',
+    authScheme: template.authScheme ?? 'bearer',
+    customHeadersText: formatCustomHeaders(template.customHeaders),
+    makeActive: true,
+  };
+}
+
+function providerTemplateSnippet(draft: ProviderProfileDraft): string {
+  const profile: Record<string, unknown> = {
+    id: trimmedOrFallback(draft.id, 'provider_custom'),
+    name: trimmedOrFallback(draft.name, 'New provider profile'),
+    provider: trimmedOrFallback(draft.provider, 'openai'),
+    baseUrl: trimmedOrFallback(draft.baseUrl, '<provider base URL>'),
+    model: trimmedOrFallback(draft.model, '<model id>'),
+  };
+  const apiFormat = draft.apiFormat.trim();
+  const authHeader = draft.authHeader.trim();
+  const customHeaders = parseSafeCustomHeaders(draft.customHeadersText);
+
+  if (apiFormat) profile.apiFormat = apiFormat;
+  if (authHeader) {
+    profile.authHeader = authHeader;
+    profile.authScheme = draft.authScheme === 'raw' ? 'raw' : 'bearer';
+  }
+  if (customHeaders) {
+    profile.customHeaders = customHeaders;
+  }
+
+  return JSON.stringify(
+    draft.makeActive
+      ? { activeProviderProfileId: profile.id, providerProfiles: [profile] }
+      : { providerProfiles: [profile] },
+    null,
+    2,
+  );
+}
+
+function providerLaunchCommand(draft: ProviderProfileDraft): string {
+  return providerLaunchCommandFromValues({
+    baseUrl: draft.baseUrl,
+    model: draft.model,
+    provider: draft.provider,
+  });
+}
+
+function providerProfileLaunchCommand(profile: SafeProviderProfile): string {
+  return providerLaunchCommandFromValues({
+    baseUrl: profile.baseUrl,
+    model: profile.model,
+    provider: profile.provider,
+  });
+}
+
+function providerLaunchCommandFromValues({
+  baseUrl,
+  model,
+  provider,
+}: {
+  baseUrl: string | null | undefined;
+  model: string;
+  provider: string;
+}): string {
+  const safeProvider = trimmedOrFallback(provider, 'openai');
+  const safeModel = model.trim();
+  const commandParts = ['openclaude', '--provider', shellArg(safeProvider), '--model', safeModel ? shellArg(safeModel) : 'MODEL_ID'];
+  const envPrefix = providerLaunchEnvPrefix(safeProvider, baseUrl);
+  return envPrefix ? `${envPrefix} ${commandParts.join(' ')}` : commandParts.join(' ');
+}
+
+function providerLaunchEnvPrefix(providerValue: string, baseUrlValue: string | null | undefined): string {
+  const provider = providerValue.trim().toLowerCase();
+  const baseUrl = (baseUrlValue ?? '').trim().replace(/\/+$/, '');
+
+  if (!baseUrl || !isSafeCommandBaseUrl(baseUrl)) {
+    return '';
+  }
+  if (provider === 'openai' && baseUrl !== 'https://api.openai.com/v1') {
+    return `OPENAI_BASE_URL=${shellArg(baseUrl)}`;
+  }
+  if (provider === 'ollama' && baseUrl !== 'http://127.0.0.1:11434/v1' && baseUrl !== 'http://localhost:11434/v1') {
+    return `OPENAI_BASE_URL=${shellArg(baseUrl)}`;
+  }
+  return '';
+}
+
+function isSafeCommandBaseUrl(baseUrl: string): boolean {
+  return !/[<>]/.test(baseUrl) && !/redacted/i.test(baseUrl);
+}
+
+function shellArg(value: string): string {
+  return /^[A-Za-z0-9._~:/@%+=,-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function formatCustomHeaders(headers: Array<{ name: string; value: string }>): string {
+  return headers
+    .map((header) => `${header.name}: ${header.value}`)
+    .join('\n');
+}
+
+function parseSafeCustomHeaders(value: string): Record<string, string> | undefined {
+  const entries = value
+    .split('\n')
+    .map((line) => {
+      const separatorIndex = line.indexOf(':');
+      if (separatorIndex === -1) return null;
+      const key = line.slice(0, separatorIndex).trim();
+      const headerValue = line.slice(separatorIndex + 1).trim();
+      if (!key || !headerValue || isSensitiveHeaderKey(key)) return null;
+      return [key, headerValue] as const;
+    })
+    .filter((entry): entry is readonly [string, string] => entry !== null);
+
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function hasSensitiveCustomHeaderText(value: string): boolean {
+  return value
+    .split('\n')
+    .some((line) => {
+      const separatorIndex = line.indexOf(':');
+      return separatorIndex !== -1 && isSensitiveHeaderKey(line.slice(0, separatorIndex).trim());
+    });
+}
+
+function isSensitiveHeaderKey(key: string): boolean {
+  return /authorization|token|secret|key|cookie|auth|session|credential/i.test(key);
+}
+
+function trimmedOrFallback(value: string, fallback: string): string {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : fallback;
 }
 
 function LogsPage({
@@ -2535,6 +3829,10 @@ function isActivePath(pathname: string, path: string) {
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat().format(value);
+}
+
+function formatCount(value: number, singular: string, plural = `${singular}s`): string {
+  return `${formatNumber(value)} ${value === 1 ? singular : plural}`;
 }
 
 function formatUsd(value: number): string {

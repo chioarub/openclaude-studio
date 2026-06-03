@@ -150,6 +150,24 @@ test('loads project overview, sessions, provider, and logs', async ({ page }) =>
   await expect(page.getByRole('button', { name: /project-a.*main/i })).toBeVisible();
   await expect(page.getByText('Anthropic')).toBeVisible();
   await expect(page.getByText('Build the API')).toBeVisible();
+  await page.getByRole('link', { name: /^Providers$/ }).click();
+  await expect(page.getByText('Provider Profiles', { exact: true })).toBeVisible();
+  await expect(page.getByText('Safe Templates')).toHaveCount(0);
+  await expect(page.getByText('credential saved')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: /openclaude command for anthropic/i })).toHaveValue(
+    'openclaude --provider anthropic --model claude-sonnet',
+  );
+  await expect(page.getByRole('button', { name: /add provider profile/i })).toHaveCount(1);
+  await page.getByRole('button', { name: /add provider profile/i }).click();
+  const providerDialog = page.getByRole('dialog', { name: /new provider profile/i });
+  await expect(providerDialog).toBeVisible();
+  await providerDialog.getByRole('button', { name: /template/i }).click();
+  await expect(providerDialog.getByRole('listbox', { name: /provider template/i })).toBeVisible();
+  await providerDialog.getByRole('option', { name: /ollama/i }).click();
+  await expect(providerDialog.getByLabel(/generated openclaude command/i)).toHaveValue(
+    'openclaude --provider ollama --model llama3.1:8b',
+  );
+  await providerDialog.getByRole('button', { name: /close dialog/i }).click();
   await page.getByRole('link', { name: /^Sessions$/ }).click();
   await page.locator('tr[aria-label="Open details for Build the API"]').click();
   const detailsDialog = page.getByRole('dialog', { name: 'Session Details' });
