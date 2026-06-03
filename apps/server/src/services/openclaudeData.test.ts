@@ -8,6 +8,7 @@ import {
   readActiveProvider,
   readOpenClaudeConfig,
   readProjectSummaries,
+  readProjectSummariesWithDiagnostics,
   readProviderSummaries,
 } from './openclaudeData.js';
 
@@ -161,6 +162,53 @@ describe('OpenClaude data discovery', () => {
         name: 'large-transcript-project',
         path: project,
         lastUpdated: '10 min ago',
+      }),
+    ]);
+  });
+
+  test('surfaces diagnostics when transcript discovery reads a truncated file', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
+    const project = join(home, 'truncated-transcript-project');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const projectDir = join(paths.projectsDir, encodeProjectPath(project));
+    const transcriptPath = join(projectDir, 'session-truncated.jsonl');
+    await mkdir(project, { recursive: true });
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ projects: {} }), 'utf8');
+    await writeFile(
+      transcriptPath,
+      [
+        jsonl({
+          type: 'user',
+          sessionId: 'session-truncated',
+          timestamp: '2026-05-28T08:00:00.000Z',
+          cwd: project,
+          message: { role: 'user', content: 'Discover this project before the file truncates' },
+        }),
+        jsonl({
+          type: 'assistant',
+          sessionId: 'session-truncated',
+          timestamp: '2026-05-28T08:01:00.000Z',
+          cwd: project,
+          message: { role: 'assistant', content: 'x'.repeat(11 * 1024 * 1024) },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    const result = await readProjectSummariesWithDiagnostics(paths, new Date('2026-05-28T08:10:00Z'));
+
+    expect(result.projects).toEqual([
+      expect.objectContaining({
+        name: 'truncated-transcript-project',
+        path: project,
+      }),
+    ]);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        level: 'warn',
+        message: 'File was truncated to 10485760 bytes.',
+        path: transcriptPath,
       }),
     ]);
   });

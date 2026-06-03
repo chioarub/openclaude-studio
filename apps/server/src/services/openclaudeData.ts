@@ -79,9 +79,10 @@ export async function readProjectSummariesWithDiagnostics(
   now = new Date(),
 ): Promise<ProjectSummariesResponse> {
   const { config, diagnostics } = await readRawOpenClaudeConfig(paths);
+  const sourceResult = await projectSummariesFromSources(paths, config, now);
   return {
-    projects: await projectSummariesFromSources(paths, config, now),
-    diagnostics,
+    projects: sourceResult.projects,
+    diagnostics: [...diagnostics, ...sourceResult.diagnostics],
   };
 }
 
@@ -90,10 +91,20 @@ type ProjectSummaryWithTimestamp = {
   lastUsedTimestamp: number | null;
 };
 
+type ProjectSummariesFromSourcesResult = {
+  projects: ProjectSummary[];
+  diagnostics: Diagnostic[];
+};
+
 type TranscriptProjectCandidate = {
   path: string;
   lastUsedTimestamp: number | null;
   sessions: Map<string, TranscriptSessionUsage>;
+};
+
+type TranscriptDiscoveryResult = {
+  candidates: Map<string, TranscriptProjectCandidate>;
+  diagnostics: Diagnostic[];
 };
 
 type TranscriptSessionUsage = {
@@ -105,17 +116,20 @@ async function projectSummariesFromSources(
   paths: OpenClaudePaths,
   config: OpenClaudeConfig,
   now: Date,
-): Promise<ProjectSummary[]> {
+): Promise<ProjectSummariesFromSourcesResult> {
   const configProjects = await projectSummariesFromConfig(config, now);
   const configProjectPaths = new Set(configProjects.map(({ project }) => project.path));
-  const transcriptCandidates = await discoverTranscriptProjectCandidates(paths.projectsDir);
+  const transcriptDiscovery = await discoverTranscriptProjectCandidates(paths.projectsDir);
   const transcriptProjects = await Promise.all(
-    [...transcriptCandidates.values()]
+    [...transcriptDiscovery.candidates.values()]
       .filter((candidate) => !configProjectPaths.has(candidate.path))
       .map((candidate) => projectSummaryFromTranscriptCandidate(candidate, now)),
   );
 
-  return sortProjectSummaries([...configProjects, ...transcriptProjects]);
+  return {
+    projects: sortProjectSummaries([...configProjects, ...transcriptProjects]),
+    diagnostics: transcriptDiscovery.diagnostics,
+  };
 }
 
 async function projectSummariesFromConfig(
@@ -178,7 +192,12 @@ async function projectSummaryFromTranscriptCandidate(
 }
 
 function sortProjectSummaries(projects: ProjectSummaryWithTimestamp[]): ProjectSummary[] {
-  const latestTimestamp = Math.max(0, ...projects.map(({ lastUsedTimestamp }) => lastUsedTimestamp ?? 0));
+  let latestTimestamp = 0;
+  for (const { lastUsedTimestamp } of projects) {
+    if (lastUsedTimestamp !== null && lastUsedTimestamp > latestTimestamp) {
+      latestTimestamp = lastUsedTimestamp;
+    }
+  }
 
   return projects.map(({ project, lastUsedTimestamp }) => ({
     project: {
@@ -194,11 +213,12 @@ function sortProjectSummaries(projects: ProjectSummaryWithTimestamp[]): ProjectS
 
 async function discoverTranscriptProjectCandidates(
   projectsDir: string,
-): Promise<Map<string, TranscriptProjectCandidate>> {
+): Promise<TranscriptDiscoveryResult> {
   const candidates = new Map<string, TranscriptProjectCandidate>();
+  const diagnostics: Diagnostic[] = [];
   const rootStats = await safeLstat(projectsDir);
   if (!rootStats || !rootStats.isDirectory() || rootStats.isSymbolicLink()) {
-    return candidates;
+    return { candidates, diagnostics };
   }
 
   let entries;
@@ -206,7 +226,7 @@ async function discoverTranscriptProjectCandidates(
     entries = await readdir(projectsDir, { withFileTypes: true });
   } catch (error) {
     if (isNodeFileError(error, 'ENOENT') || isNodeFileError(error, 'ENOTDIR')) {
-      return candidates;
+      return { candidates, diagnostics };
     }
     throw error;
   }
@@ -229,11 +249,11 @@ async function discoverTranscriptProjectCandidates(
     scannedRoots += 1;
     const files = await collectTranscriptDiscoveryFiles(root);
     for (const file of files) {
-      await readTranscriptDiscoveryFile(candidates, entry.name, file);
+      await readTranscriptDiscoveryFile(candidates, diagnostics, entry.name, file);
     }
   }
 
-  return candidates;
+  return { candidates, diagnostics };
 }
 
 async function collectTranscriptDiscoveryFiles(
@@ -283,10 +303,19 @@ async function collectTranscriptDiscoveryFiles(
 
 async function readTranscriptDiscoveryFile(
   candidates: Map<string, TranscriptProjectCandidate>,
+  diagnostics: Diagnostic[],
   transcriptRootName: string,
   filePath: string,
 ): Promise<void> {
-  const result = await readBoundedTextFile(filePath, { maxBytes: maxTranscriptDiscoveryBytes });
+  let result: Awaited<ReturnType<typeof readBoundedTextFile>>;
+  try {
+    result = await readBoundedTextFile(filePath, { maxBytes: maxTranscriptDiscoveryBytes });
+  } catch {
+    diagnostics.push({ level: 'warn', message: 'Transcript file could not be read.', path: filePath });
+    return;
+  }
+
+  diagnostics.push(...result.diagnostics);
   if (!result.exists) {
     return;
   }
