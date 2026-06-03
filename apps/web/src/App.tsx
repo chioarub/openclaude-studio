@@ -52,7 +52,10 @@ import type {
   LogsSearchResponse,
   LogsWindowResponse,
   OverviewResponse,
+  ProviderCustomHeaderSummary,
+  ProviderProfileField,
   ProviderProfileTemplate,
+  ProviderProfileValidationIssue,
   ProviderProfilesResponse,
   ProjectSummary,
   SafeProviderProfile,
@@ -1293,8 +1296,8 @@ function ProviderPage({ api, overview }: { api: ApiClient; overview: OverviewRes
         <div className="section-heading-row">
           <SectionHeading icon={ShieldCheck} label="Provider Profiles" />
           <div className="flex flex-wrap items-center justify-end gap-2">
-            {profiles ? <Badge label={`${formatNumber(profiles.summary.total)} profiles`} tone="muted" /> : null}
-            {profiles ? <Badge label={`${formatNumber(profiles.summary.templates)} templates`} tone="muted" /> : null}
+            {profiles ? <Badge label={formatCount(profiles.summary.total, 'profile')} tone="muted" /> : null}
+            {profiles ? <Badge label={formatCount(profiles.summary.templates, 'template')} tone="muted" /> : null}
             {profiles ? <Badge label={profiles.exists ? 'config found' : 'config missing'} tone={profiles.exists ? 'success' : 'warning'} /> : null}
           </div>
         </div>
@@ -1351,17 +1354,23 @@ function ProviderPage({ api, overview }: { api: ApiClient; overview: OverviewRes
 }
 
 function normalizeProviderProfilesResponse(response: Partial<ProviderProfilesResponse>): ProviderProfilesResponse {
-  const profiles = Array.isArray(response.profiles) ? response.profiles : [];
-  const templates = Array.isArray(response.templates) ? response.templates : [];
-  const diagnostics = Array.isArray(response.diagnostics) ? response.diagnostics : [];
-  const summary: Partial<ProviderProfilesResponse['summary']> = response.summary ?? {};
+  const profiles = Array.isArray(response.profiles)
+    ? response.profiles.map((profile, index) => normalizeSafeProviderProfile(profile, index))
+    : [];
+  const templates = Array.isArray(response.templates)
+    ? response.templates.map((template) => normalizeProviderProfileTemplate(template))
+    : [];
+  const diagnostics = Array.isArray(response.diagnostics)
+    ? response.diagnostics.map(normalizeDiagnostic)
+    : [];
+  const summary: Record<string, unknown> = isRecord(response.summary) ? response.summary : {};
   const warningCount = profiles.filter((profile) => profile.validation?.status === 'warning').length;
   const errorCount = profiles.filter((profile) => profile.validation?.status === 'error').length;
 
   return {
-    path: response.path ?? '',
-    exists: response.exists ?? false,
-    activeProviderProfileId: response.activeProviderProfileId ?? null,
+    path: stringOrFallback(response.path, ''),
+    exists: response.exists === true,
+    activeProviderProfileId: stringOrNull(response.activeProviderProfileId),
     sensitiveFieldsRedacted: true,
     profiles,
     templates,
@@ -1377,8 +1386,204 @@ function normalizeProviderProfilesResponse(response: Partial<ProviderProfilesRes
   };
 }
 
+const providerTemplateIds: ReadonlyArray<ProviderProfileTemplate['id']> = [
+  'anthropic',
+  'openai',
+  'gemini',
+  'zai-coding-plan',
+  'codex-oauth',
+  'ollama',
+  'mistral',
+  'custom-openai',
+];
+const providerTemplateCategories: ReadonlyArray<ProviderProfileTemplate['category']> = [
+  'hosted',
+  'local',
+  'subscription',
+  'custom',
+];
+const providerProfileFields: readonly ProviderProfileField[] = [
+  'id',
+  'name',
+  'provider',
+  'baseUrl',
+  'model',
+  'credential',
+  'apiFormat',
+  'authHeader',
+  'authScheme',
+  'customHeaders',
+  'activeProviderProfileId',
+];
+const validationSeverities: ReadonlyArray<ProviderProfileValidationIssue['severity']> = ['info', 'warn', 'error'];
+
+function normalizeSafeProviderProfile(input: unknown, index: number): SafeProviderProfile {
+  const profile = isRecord(input) ? input : {};
+  const validation = isRecord(profile.validation) ? profile.validation : {};
+  const validationIssues = Array.isArray(validation.issues)
+    ? validation.issues.map(normalizeProviderProfileValidationIssue)
+    : [];
+
+  return {
+    id: stringOrFallback(profile.id, `provider_${index + 1}`),
+    name: stringOrFallback(profile.name, 'Unnamed provider'),
+    provider: stringOrFallback(profile.provider, 'openai'),
+    model: stringOrFallback(profile.model, ''),
+    baseUrl: stringOrNull(profile.baseUrl),
+    active: profile.active === true,
+    apiKeySet: profile.apiKeySet === true,
+    authHeaderValueSet: profile.authHeaderValueSet === true,
+    apiFormat: stringOrNull(profile.apiFormat),
+    authHeader: stringOrNull(profile.authHeader),
+    authScheme: stringOrNull(profile.authScheme),
+    customHeaders: Array.isArray(profile.customHeaders)
+      ? profile.customHeaders.map(normalizeProviderCustomHeader).filter((header) => header.name.length > 0)
+      : [],
+    templateId: providerTemplateIdOr(profile.templateId, 'custom-openai'),
+    templateLabel: stringOrFallback(profile.templateLabel, 'Custom OpenAI-compatible'),
+    validation: {
+      status: providerValidationStatusOr(validation.status, 'valid'),
+      issues: validationIssues,
+    },
+  };
+}
+
+function normalizeProviderProfileTemplate(input: unknown): ProviderProfileTemplate {
+  const template = isRecord(input) ? input : {};
+
+  return {
+    id: providerTemplateIdOr(template.id, 'custom-openai'),
+    label: stringOrFallback(template.label, 'Custom OpenAI-compatible'),
+    category: providerTemplateCategoryOr(template.category, 'custom'),
+    description: stringOrFallback(template.description, 'Custom provider profile template.'),
+    provider: stringOrFallback(template.provider, 'openai'),
+    baseUrl: stringOrFallback(template.baseUrl, ''),
+    model: stringOrFallback(template.model, ''),
+    modelPlaceholder: stringOrFallback(template.modelPlaceholder, 'Model id'),
+    requiresSecret: template.requiresSecret === true,
+    requiredFields: providerProfileFieldArrayOrEmpty(template.requiredFields),
+    advancedFields: providerProfileFieldArrayOrEmpty(template.advancedFields),
+    apiFormat: providerApiFormatOrNull(template.apiFormat),
+    authHeader: stringOrNull(template.authHeader),
+    authScheme: providerAuthSchemeOrNull(template.authScheme),
+    customHeaders: Array.isArray(template.customHeaders)
+      ? template.customHeaders.map(normalizeTemplateCustomHeader).filter((header) => header.name.length > 0)
+      : [],
+    credential: normalizeProviderTemplateCredential(template.credential),
+  };
+}
+
+function normalizeProviderCustomHeader(input: unknown): ProviderCustomHeaderSummary {
+  const header = isRecord(input) ? input : {};
+  return {
+    name: stringOrFallback(header.name, ''),
+    valueSet: header.valueSet === true,
+    sensitive: header.sensitive === true,
+  };
+}
+
+function normalizeTemplateCustomHeader(input: unknown): { name: string; value: string } {
+  const header = isRecord(input) ? input : {};
+  return {
+    name: stringOrFallback(header.name, ''),
+    value: stringOrFallback(header.value, ''),
+  };
+}
+
+function normalizeProviderProfileValidationIssue(input: unknown): ProviderProfileValidationIssue {
+  const issue = isRecord(input) ? input : {};
+  const field = providerProfileFieldOrNull(issue.field);
+  return {
+    severity: validationSeverityOr(issue.severity, 'warn'),
+    ...(field ? { field } : {}),
+    message: stringOrFallback(issue.message, 'Provider profile validation issue.'),
+  };
+}
+
+function normalizeProviderTemplateCredential(input: unknown): ProviderProfileTemplate['credential'] {
+  if (!isRecord(input)) {
+    return null;
+  }
+
+  return {
+    label: stringOrFallback(input.label, 'Provider credential'),
+    envVar: stringOrFallback(input.envVar, 'OPENAI_API_KEY'),
+    placeholder: stringOrFallback(input.placeholder, 'Set outside Studio before using this profile'),
+  };
+}
+
+function normalizeDiagnostic(input: unknown): Diagnostic {
+  const diagnostic = isRecord(input) ? input : {};
+  return {
+    level: diagnostic.level === 'error' || diagnostic.level === 'warn' ? diagnostic.level : 'info',
+    message: stringOrFallback(diagnostic.message, 'Provider profile diagnostic.'),
+    ...(typeof diagnostic.path === 'string' ? { path: diagnostic.path } : {}),
+  };
+}
+
 function finiteNumberOr(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function stringOrFallback(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function providerTemplateIdOr(value: unknown, fallback: ProviderProfileTemplate['id']): ProviderProfileTemplate['id'] {
+  return providerTemplateIds.includes(value as ProviderProfileTemplate['id'])
+    ? value as ProviderProfileTemplate['id']
+    : fallback;
+}
+
+function providerTemplateCategoryOr(
+  value: unknown,
+  fallback: ProviderProfileTemplate['category'],
+): ProviderProfileTemplate['category'] {
+  return providerTemplateCategories.includes(value as ProviderProfileTemplate['category'])
+    ? value as ProviderProfileTemplate['category']
+    : fallback;
+}
+
+function providerApiFormatOrNull(value: unknown): ProviderProfileTemplate['apiFormat'] {
+  return value === 'responses' || value === 'chat_completions' ? value : null;
+}
+
+function providerAuthSchemeOrNull(value: unknown): ProviderProfileTemplate['authScheme'] {
+  return value === 'bearer' || value === 'raw' ? value : null;
+}
+
+function providerValidationStatusOr(
+  value: unknown,
+  fallback: SafeProviderProfile['validation']['status'],
+): SafeProviderProfile['validation']['status'] {
+  return value === 'error' || value === 'warning' || value === 'valid' ? value : fallback;
+}
+
+function validationSeverityOr(
+  value: unknown,
+  fallback: ProviderProfileValidationIssue['severity'],
+): ProviderProfileValidationIssue['severity'] {
+  return validationSeverities.includes(value as ProviderProfileValidationIssue['severity'])
+    ? value as ProviderProfileValidationIssue['severity']
+    : fallback;
+}
+
+function providerProfileFieldOrNull(value: unknown): ProviderProfileField | null {
+  return providerProfileFields.includes(value as ProviderProfileField) ? value as ProviderProfileField : null;
+}
+
+function providerProfileFieldArrayOrEmpty(value: unknown): ProviderProfileField[] {
+  return Array.isArray(value)
+    ? value.map(providerProfileFieldOrNull).filter((field): field is ProviderProfileField => field !== null)
+    : [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function ProviderProfilesPanel({
@@ -1565,9 +1770,10 @@ function providerPageStatus(
 ): string {
   if (profiles) {
     const reviewCount = profiles.summary.warnings + profiles.summary.errors;
+    const profileCount = formatCount(profiles.summary.total, 'profile');
     return reviewCount > 0
-      ? `${profiles.summary.total} profiles / ${reviewCount} need review`
-      : `${profiles.summary.total} profiles validated`;
+      ? `${profileCount} / ${formatCount(reviewCount, 'issue')} to review`
+      : `${profileCount} validated`;
   }
   if (loadState === 'loading') {
     return 'Loading provider profiles';
@@ -3634,6 +3840,10 @@ function isActivePath(pathname: string, path: string) {
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat().format(value);
+}
+
+function formatCount(value: number, singular: string, plural = `${singular}s`): string {
+  return `${formatNumber(value)} ${value === 1 ? singular : plural}`;
 }
 
 function formatUsd(value: number): string {

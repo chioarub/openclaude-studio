@@ -414,6 +414,39 @@ describe('App', () => {
     expect(screen.queryByText('Provider profile management requires a newer local server')).not.toBeInTheDocument();
   });
 
+  test('normalizes malformed provider profile and template entries from partial payloads', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      providerProfilesResponse: {
+        path: '/tmp/.openclaude.json',
+        exists: true,
+        sensitiveFieldsRedacted: true,
+        profiles: [{}],
+        templates: [{}],
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
+
+    expect(await screen.findByText('Unnamed provider')).toBeInTheDocument();
+    expect(screen.getByText('1 profile')).toBeInTheDocument();
+    expect(screen.getByText('1 template')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /openclaude command for unnamed provider/i })).toHaveValue(
+      'openclaude --provider openai --model MODEL_ID',
+    );
+
+    await user.click(screen.getByRole('button', { name: /add provider profile/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: /new provider profile/i });
+    expect(within(dialog).getByRole('button', { name: /template.*custom openai-compatible/i })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/generated openclaude command/i)).toHaveValue(
+      'openclaude --provider openai --model MODEL_ID',
+    );
+  });
+
   test('keeps the add provider dialog open when Escape closes the template selector', async () => {
     vi.stubGlobal('fetch', mockApi({ providerProfilesResponse: providerProfilesFixture() }));
     const user = userEvent.setup();
