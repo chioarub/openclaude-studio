@@ -143,7 +143,7 @@ describe('App', () => {
     expect(within(projectOverview!).getByText('Usage Overview')).toBeInTheDocument();
     expect(within(projectOverview!).getByRole('img', { name: /recorded spend chart/i })).toBeInTheDocument();
     expect(within(projectOverview!).getAllByText('$0.25').length).toBeGreaterThan(0);
-    fireEvent.pointerEnter(within(projectOverview!).getByLabelText('2026-05-28: $0.25'));
+    fireEvent.focus(within(projectOverview!).getByLabelText('2026-05-28: $0.25'));
     const tooltip = await within(projectOverview!).findByRole('tooltip');
     expect(within(tooltip).getByText('Recorded cost')).toBeInTheDocument();
     expect(within(tooltip).getAllByText('$0.25').length).toBeGreaterThan(0);
@@ -187,7 +187,7 @@ describe('App', () => {
     expect(projectOverview).not.toBeNull();
 
     await user.click(within(projectOverview!).getByRole('button', { name: 'All' }));
-    fireEvent.pointerEnter(within(projectOverview!).getByLabelText('2026-05-27: $0.00'));
+    fireEvent.focus(within(projectOverview!).getByLabelText('2026-05-27: $0.00'));
     expect(await within(projectOverview!).findByRole('tooltip')).toBeInTheDocument();
 
     await user.click(within(projectOverview!).getByRole('button', { name: '14D' }));
