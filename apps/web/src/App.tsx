@@ -1177,7 +1177,7 @@ function ProviderPage({ api, overview }: { api: ApiClient; overview: OverviewRes
     setError(null);
 
     try {
-      const response = await api.providerProfiles();
+      const response = normalizeProviderProfilesResponse(await api.providerProfiles());
       if (requestId !== requestIdRef.current) {
         return;
       }
@@ -1348,6 +1348,37 @@ function ProviderPage({ api, overview }: { api: ApiClient; overview: OverviewRes
       ) : null}
     </PageStack>
   );
+}
+
+function normalizeProviderProfilesResponse(response: Partial<ProviderProfilesResponse>): ProviderProfilesResponse {
+  const profiles = Array.isArray(response.profiles) ? response.profiles : [];
+  const templates = Array.isArray(response.templates) ? response.templates : [];
+  const diagnostics = Array.isArray(response.diagnostics) ? response.diagnostics : [];
+  const summary: Partial<ProviderProfilesResponse['summary']> = response.summary ?? {};
+  const warningCount = profiles.filter((profile) => profile.validation?.status === 'warning').length;
+  const errorCount = profiles.filter((profile) => profile.validation?.status === 'error').length;
+
+  return {
+    path: response.path ?? '',
+    exists: response.exists ?? false,
+    activeProviderProfileId: response.activeProviderProfileId ?? null,
+    sensitiveFieldsRedacted: true,
+    profiles,
+    templates,
+    summary: {
+      total: finiteNumberOr(summary.total, profiles.length),
+      active: finiteNumberOr(summary.active, profiles.filter((profile) => profile.active).length),
+      valid: finiteNumberOr(summary.valid, profiles.filter((profile) => profile.validation?.status === 'valid').length),
+      warnings: finiteNumberOr(summary.warnings, warningCount),
+      errors: finiteNumberOr(summary.errors, errorCount),
+      templates: finiteNumberOr(summary.templates, templates.length),
+    },
+    diagnostics,
+  };
+}
+
+function finiteNumberOr(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
 function ProviderProfilesPanel({

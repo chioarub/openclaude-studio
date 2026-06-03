@@ -390,6 +390,30 @@ describe('App', () => {
     expect(screen.getAllByRole('button', { name: /add provider profile/i })).toHaveLength(1);
   });
 
+  test('renders legacy partial provider profile payloads without crashing', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      providerProfilesResponse: {
+        path: '/tmp/.openclaude.json',
+        exists: true,
+        activeProviderProfileId: null,
+        sensitiveFieldsRedacted: true,
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
+
+    expect(await screen.findByRole('heading', { name: 'Providers' })).toBeInTheDocument();
+    expect(screen.getByText('0 profiles')).toBeInTheDocument();
+    expect(screen.getByText('0 templates')).toBeInTheDocument();
+    expect(screen.getByText('No provider profiles configured')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add provider profile/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Provider profile management requires a newer local server')).not.toBeInTheDocument();
+  });
+
   test('keeps the add provider dialog open when Escape closes the template selector', async () => {
     vi.stubGlobal('fetch', mockApi({ providerProfilesResponse: providerProfilesFixture() }));
     const user = userEvent.setup();
