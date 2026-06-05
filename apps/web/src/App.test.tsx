@@ -171,6 +171,35 @@ describe('App', () => {
     expect(await screen.findByRole('button', { name: /project-a main/i })).toBeInTheDocument();
   });
 
+  test('labels the compact server status while the health check is pending', async () => {
+    const slowHealth = deferred<Response>();
+    const api = mockApi();
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/health') {
+        return slowHealth.promise;
+      }
+      return api(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    expect(screen.getByLabelText('Checking server')).toBeInTheDocument();
+
+    await act(async () => {
+      slowHealth.resolve(jsonResponse({
+        status: 'ok',
+        version: '0.0.1-test',
+        serverTime: '2026-05-28T08:00:00.000Z',
+        uptime: 1,
+      }));
+      await slowHealth.promise;
+    });
+
+    expect(await screen.findByLabelText('Server connected v0.0.1-test')).toBeInTheDocument();
+  });
+
   test('defaults the overview chart to tokens when cost is not recorded', async () => {
     vi.stubGlobal('fetch', mockApi({ overviewUsageSeries: tokenOnlyUsageSeriesFixture() }));
 

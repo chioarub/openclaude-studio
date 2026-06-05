@@ -592,6 +592,11 @@ function Header({
   const { theme, toggleTheme } = useTheme();
   const connected = health?.status === 'ok';
   const serverVersion = connected && 'version' in health ? `v${health.version}` : null;
+  const healthStatusLabel = connected
+    ? ['Server connected', serverVersion].filter(Boolean).join(' ')
+    : health === null
+      ? 'Checking server'
+      : 'Server disconnected';
 
   return (
     <header className="sticky top-0 z-40 flex h-16 shrink-0 items-center justify-between gap-3 border-b border-hairline bg-canvas px-4 md:px-6">
@@ -620,18 +625,18 @@ function Header({
 
         <div className="flex items-center gap-2 text-sm">
           {connected ? (
-            <span className="flex items-center text-sm font-medium text-success" title={baseUrl}>
+            <span aria-label={healthStatusLabel} className="flex items-center text-sm font-medium text-success" title={baseUrl}>
               <Activity className="h-4 w-4 sm:mr-1" />
               <span className="hidden sm:inline">Connected</span>
               {serverVersion ? <span className="ml-1 text-xs font-semibold tabular-nums">{serverVersion}</span> : null}
             </span>
           ) : health === null ? (
-            <span className="flex items-center text-sm font-medium text-muted" title={baseUrl}>
+            <span aria-label={healthStatusLabel} className="flex items-center text-sm font-medium text-muted" title={baseUrl}>
               <LoadingSpinner className="sm:mr-1" decorative label="Checking server" size="sm" />
               <span className="hidden sm:inline">Checking</span>
             </span>
           ) : (
-            <span className="flex items-center text-sm font-medium text-error" title={baseUrl}>
+            <span aria-label={healthStatusLabel} className="flex items-center text-sm font-medium text-error" title={baseUrl}>
               <Activity className="h-4 w-4 sm:mr-1" />
               <span className="hidden sm:inline">Disconnected</span>
             </span>
