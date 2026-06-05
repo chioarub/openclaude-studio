@@ -2779,44 +2779,44 @@ function LogsPage({
           </div>
         ) : null}
 
-        <div
-          aria-label="Log entries"
-          aria-busy={logBusy}
-          className="log-view"
-          onScroll={(event) => {
-            const target = event.currentTarget;
-            requestLogRange(target.scrollTop, target.clientHeight);
-          }}
-          ref={logViewRef}
-          role="region"
-        >
-          <div className="log-table-header" role="row">
-            <span>Time</span>
-            <span>Line</span>
-            <span>Level</span>
-            <span>Message</span>
-            <span aria-label="Actions" />
-          </div>
-          {isLoading && !logs ? (
-            <LoadingState className="min-h-[286px]" label="Loading logs" />
-          ) : logs?.entries.length ? (
-            <div className="log-spacer" style={{ height: `${totalHeight}px` }}>
-              {logs.entries.map((entry, index) => (
-                <LogLine
-                  entry={entry}
-                  key={entry.id}
-                  style={{ transform: `translateY(${(logs.start + index) * logRowHeight}px)` }}
-                />
-              ))}
+        <div className="log-view-shell">
+          <div
+            aria-label="Log entries"
+            aria-busy={logBusy}
+            className="log-view"
+            onScroll={(event) => {
+              const target = event.currentTarget;
+              requestLogRange(target.scrollTop, target.clientHeight);
+            }}
+            ref={logViewRef}
+            role="region"
+          >
+            <div className="log-table-header" role="row">
+              <span>Time</span>
+              <span>Line</span>
+              <span>Level</span>
+              <span>Message</span>
+              <span aria-label="Actions" />
             </div>
-          ) : (
-            <EmptyState label="No log entries" />
-          )}
-          {logBusy && logs ? (
-            <div className="pointer-events-none sticky bottom-3 z-20 flex justify-end px-4">
-              <div className="rounded-md border border-code-panel-border bg-code-panel-elevated px-3 shadow-sm shadow-black/10">
-                <LoadingState compact label={logLoadingLabel} />
+            {isLoading && !logs ? (
+              <LoadingState className="min-h-[286px]" label="Loading logs" />
+            ) : logs?.entries.length ? (
+              <div className="log-spacer" style={{ height: `${totalHeight}px` }}>
+                {logs.entries.map((entry, index) => (
+                  <LogLine
+                    entry={entry}
+                    key={entry.id}
+                    style={{ transform: `translateY(${(logs.start + index) * logRowHeight}px)` }}
+                  />
+                ))}
               </div>
+            ) : (
+              <EmptyState label="No log entries" />
+            )}
+          </div>
+          {logBusy && logs ? (
+            <div className="log-loading-overlay">
+              <LoadingState compact label={logLoadingLabel} />
             </div>
           ) : null}
         </div>

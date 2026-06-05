@@ -1229,7 +1229,9 @@ describe('App', () => {
       expect(wasFetchedWithQuery(fetchMock, '/api/logs/search', 'level', 'warn')).toBe(true);
     });
     const logEntries = screen.getByRole('region', { name: /log entries/i });
-    expect(getLoadingLiveRegion('Loading logs')).toBeInTheDocument();
+    const logLoadingRegion = getLoadingLiveRegion('Loading logs');
+    expect(logEntries).not.toContainElement(logLoadingRegion);
+    expect(logLoadingRegion.closest('.log-view-shell')).toContainElement(logEntries);
     expect(logEntries).toHaveAttribute('aria-busy', 'true');
 
     await act(async () => {

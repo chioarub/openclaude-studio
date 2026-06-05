@@ -217,6 +217,37 @@ test('loads project overview, sessions, provider, and logs', async ({ page }) =>
     });
   });
   expect(Math.max(...headerDeltas)).toBeLessThan(2);
+
+  let releaseWarnSearch: (() => void) | null = null;
+  let warnSearchStarted = false;
+  const warnSearchRelease = new Promise<void>((resolve) => {
+    releaseWarnSearch = resolve;
+  });
+
+  await page.route('http://127.0.0.1:43111/api/logs/search**', async (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (!warnSearchStarted && requestUrl.searchParams.get('level') === 'warn') {
+      warnSearchStarted = true;
+      await warnSearchRelease;
+    }
+    await route.continue();
+  });
+
+  await page.getByRole('button', { name: 'warn' }).click();
+  await expect.poll(() => warnSearchStarted).toBe(true);
+
+  const logLoadingOverlay = page.locator('.log-loading-overlay');
+  await expect(logLoadingOverlay.getByText('Loading logs')).toBeVisible();
+  const [overlayBox, logViewBox] = await Promise.all([
+    logLoadingOverlay.boundingBox(),
+    logView.boundingBox(),
+  ]);
+  expect(overlayBox).not.toBeNull();
+  expect(logViewBox).not.toBeNull();
+  expect(overlayBox!.y).toBeGreaterThanOrEqual(logViewBox!.y);
+  expect(overlayBox!.y + overlayBox!.height).toBeLessThanOrEqual(logViewBox!.y + logViewBox!.height);
+  releaseWarnSearch?.();
+  await expect(logLoadingOverlay).toBeHidden();
 });
 
 test('loads project plans and tasks with route diagnostics', async ({ page }) => {
