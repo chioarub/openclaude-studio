@@ -65,6 +65,7 @@ import type {
 import { ApiRequestError, createApiClient, normalizeBaseUrl, type ApiClient } from './api';
 import { SessionDetailsModal } from './components/SessionDetailsModal';
 import { PlansTasksPage } from './components/PlansTasksPage';
+import { LoadingSpinner, LoadingState } from './components/LoadingState';
 
 const serverUrlStorageKey = 'openclaude-studio:server-url';
 const legacyConnectionStorageKey = 'openclaude-studio.connection';
@@ -234,6 +235,8 @@ function StudioApp() {
   const [logLevel, setLogLevel] = useState<LogLevelFilter>('all');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [status, setStatus] = useState<LoadState>('idle');
+  const [loadingLabel, setLoadingLabel] = useState('Loading workspace');
+  const [logRangeLoading, setLogRangeLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthState>(null);
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
@@ -286,6 +289,8 @@ function StudioApp() {
     const requestId = workspaceRequestIdRef.current + 1;
     workspaceRequestIdRef.current = requestId;
     logsRequestIdRef.current += 1;
+    setLoadingLabel(workspaceLoadingLabel(input, selectedProjectId, snapshot.projects.length > 0 || snapshot.overview !== null));
+    setLogRangeLoading(false);
     setStatus('loading');
     setError(null);
     saveServerUrl(baseUrl);
@@ -349,6 +354,7 @@ function StudioApp() {
   ) {
     const requestId = logsRequestIdRef.current + 1;
     logsRequestIdRef.current = requestId;
+    setLogRangeLoading(true);
     setError(null);
 
     try {
@@ -383,6 +389,10 @@ function StudioApp() {
         return;
       }
       setError(caught instanceof Error ? caught.message : 'Unable to load logs.');
+    } finally {
+      if (requestId === logsRequestIdRef.current) {
+        setLogRangeLoading(false);
+      }
     }
   }
 
@@ -401,6 +411,7 @@ function StudioApp() {
     logsRequestIdRef.current += 1;
     setHealth(null);
     setError(null);
+    setLogRangeLoading(false);
     setSelectedLogFile(undefined);
     setSnapshot(emptySnapshot);
     setBaseUrl(normalizedBaseUrl);
@@ -427,6 +438,7 @@ function StudioApp() {
           baseUrl={baseUrl}
           health={health}
           isLoading={status === 'loading'}
+          loadingLabel={loadingLabel}
           projects={snapshot.projects}
           selectedProject={selectedProject}
           selectedProjectId={selectedProjectId}
@@ -453,13 +465,23 @@ function StudioApp() {
               element={
                 <ControlCenterPage
                   isLoading={status === 'loading'}
+                  loadingLabel={loadingLabel}
                   overview={snapshot.overview}
                   project={selectedProject}
                   sessions={snapshot.sessions}
                 />
               }
             />
-            <Route path="/sessions" element={<SessionsPage sessions={snapshot.sessions} onSessionClick={setSelectedSessionId} />} />
+            <Route
+              path="/sessions"
+              element={
+                <SessionsPage
+                  isLoading={status === 'loading'}
+                  sessions={snapshot.sessions}
+                  onSessionClick={setSelectedSessionId}
+                />
+              }
+            />
             <Route
               path="/plans-tasks"
               element={selectedProjectId ? (
@@ -477,6 +499,7 @@ function StudioApp() {
               element={
                 <LogsPage
                   isLoading={status === 'loading'}
+                  isRangeLoading={logRangeLoading}
                   logs={snapshot.logs}
                   level={logLevel}
                   query={logQuery}
@@ -549,6 +572,7 @@ function Header({
   baseUrl,
   health,
   isLoading,
+  loadingLabel,
   projects,
   selectedProject,
   selectedProjectId,
@@ -558,6 +582,7 @@ function Header({
   baseUrl: string;
   health: HealthState;
   isLoading: boolean;
+  loadingLabel: string;
   projects: ProjectSummary[];
   selectedProject: ProjectSummary | null;
   selectedProjectId: string | null;
@@ -575,6 +600,7 @@ function Header({
           activeProject={selectedProject}
           activeProjectId={selectedProjectId}
           isLoading={isLoading}
+          loadingLabel={loadingLabel}
           onSelect={onProjectSelect}
           projects={projects}
         />
@@ -598,6 +624,11 @@ function Header({
               <Activity className="h-4 w-4 sm:mr-1" />
               <span className="hidden sm:inline">Connected</span>
               {serverVersion ? <span className="ml-1 text-xs font-semibold tabular-nums">{serverVersion}</span> : null}
+            </span>
+          ) : health === null ? (
+            <span className="flex items-center text-sm font-medium text-muted" title={baseUrl}>
+              <LoadingSpinner className="sm:mr-1" decorative label="Checking server" size="sm" />
+              <span className="hidden sm:inline">Checking</span>
             </span>
           ) : (
             <span className="flex items-center text-sm font-medium text-error" title={baseUrl}>
@@ -625,12 +656,14 @@ function ProjectSelector({
   activeProject,
   activeProjectId,
   isLoading,
+  loadingLabel,
   onSelect,
   projects,
 }: {
   activeProject: ProjectSummary | null;
   activeProjectId: string | null;
   isLoading: boolean;
+  loadingLabel: string;
   onSelect: (projectId: string) => void;
   projects: ProjectSummary[];
 }) {
@@ -701,7 +734,11 @@ function ProjectSelector({
         onClick={() => setIsOpen((current) => !current)}
         type="button"
       >
-        <Folder className="h-4 w-4 shrink-0 text-muted" />
+        {isLoading ? (
+          <LoadingSpinner className="text-primary" decorative label={loadingLabel} size="sm" />
+        ) : (
+          <Folder className="h-4 w-4 shrink-0 text-muted" />
+        )}
         <span className="min-w-0 flex-1 truncate font-medium">
           {activeProject?.name ?? (isLoading ? 'Loading projects...' : 'No projects loaded')}
         </span>
@@ -1071,11 +1108,13 @@ function DiagnosticsNavPills({ counts }: { counts: DiagnosticCounts }) {
 
 function ControlCenterPage({
   isLoading,
+  loadingLabel,
   overview,
   project,
   sessions,
 }: {
   isLoading: boolean;
+  loadingLabel: string;
   overview: OverviewResponse | null;
   project: ProjectSummary | null;
   sessions: SessionSummary[];
@@ -1083,11 +1122,14 @@ function ControlCenterPage({
   const usageSeries: OverviewResponse['usageSeries'] = Array.isArray(overview?.usageSeries)
     ? overview.usageSeries
     : [];
+  const initialLoading = isLoading && !project && !overview;
 
   return (
     <PageStack>
       <PageHeader
         icon={LayoutDashboard}
+        isLoading={isLoading}
+        loadingLabel={loadingLabel}
         status={project ? `${project.name} / ${project.branch || 'no branch'}` : 'Waiting for project'}
         title="Control Center"
         aside={
@@ -1106,7 +1148,7 @@ function ControlCenterPage({
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <section className="panel project-overview-panel">
+        <section aria-busy={isLoading} className="panel project-overview-panel">
           <div className="section-heading-row">
             <SectionHeading icon={ShieldCheck} label="Project Overview" />
             {overview ? <Badge label={`${formatNumber(usageSeries.length)} usage days`} tone="muted" /> : null}
@@ -1122,25 +1164,35 @@ function ControlCenterPage({
               </div>
             </div>
           ) : (
-            <EmptyState label={isLoading ? 'Loading workspace' : 'No project selected'} />
+            initialLoading ? <LoadingState label={loadingLabel} /> : <EmptyState label="No project selected" />
           )}
         </section>
 
         <ProviderSummaryCard overview={overview} />
       </div>
 
-      <SessionsTable sessions={sessions.slice(0, 8)} title="Recent Sessions" />
+      <SessionsTable isLoading={isLoading} loadingLabel="Loading sessions" sessions={sessions.slice(0, 8)} title="Recent Sessions" />
     </PageStack>
   );
 }
 
-function SessionsPage({ sessions, onSessionClick }: { sessions: SessionSummary[]; onSessionClick: (id: string) => void }) {
+function SessionsPage({
+  isLoading,
+  sessions,
+  onSessionClick,
+}: {
+  isLoading: boolean;
+  sessions: SessionSummary[];
+  onSessionClick: (id: string) => void;
+}) {
   const failedCount = sessions.filter((session) => session.status === 'failed').length;
 
   return (
     <PageStack>
       <PageHeader
         icon={MessageSquareText}
+        isLoading={isLoading}
+        loadingLabel="Loading sessions"
         status={`${sessions.length} sessions loaded`}
         title="Sessions"
         aside={
@@ -1150,7 +1202,7 @@ function SessionsPage({ sessions, onSessionClick }: { sessions: SessionSummary[]
           </div>
         }
       />
-      <SessionsTable sessions={sessions} title="Sessions" onSessionClick={onSessionClick} />
+      <SessionsTable isLoading={isLoading} loadingLabel="Loading sessions" sessions={sessions} title="Sessions" onSessionClick={onSessionClick} />
     </PageStack>
   );
 }
@@ -1281,6 +1333,8 @@ function ProviderPage({ api, overview }: { api: ApiClient; overview: OverviewRes
     <PageStack>
       <PageHeader
         icon={Server}
+        isLoading={loadState === 'loading'}
+        loadingLabel="Loading provider profiles"
         status={providerPageStatus(provider, profiles, loadState)}
         title="Providers"
         aside={profiles ? (
@@ -1292,7 +1346,7 @@ function ProviderPage({ api, overview }: { api: ApiClient; overview: OverviewRes
         ) : undefined}
       />
 
-      <section className="panel">
+      <section aria-busy={loadState === 'loading'} className="panel">
         <div className="section-heading-row">
           <SectionHeading icon={ShieldCheck} label="Provider Profiles" />
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1302,7 +1356,7 @@ function ProviderPage({ api, overview }: { api: ApiClient; overview: OverviewRes
           </div>
         </div>
         {loadState === 'loading' ? (
-          <EmptyState label="Loading provider profiles" />
+          <LoadingState label="Loading provider profiles" />
         ) : error ? (
           <div className="mt-5 rounded-lg border border-warning/25 bg-warning/[0.08] p-4">
             <div className="flex items-start gap-3">
@@ -2460,6 +2514,7 @@ function trimmedOrFallback(value: string, fallback: string): string {
 
 function LogsPage({
   isLoading,
+  isRangeLoading,
   level,
   logs,
   onLevelChange,
@@ -2470,6 +2525,7 @@ function LogsPage({
   selectedFile,
 }: {
   isLoading: boolean;
+  isRangeLoading: boolean;
   level: LogLevelFilter;
   logs: LogsWindowResponse | LogsSearchResponse | null;
   onLevelChange: (level: LogLevelFilter) => void;
@@ -2494,6 +2550,8 @@ function LogsPage({
   const matches = isSearchResponse ? totalRows : logs?.totalLines ?? 0;
   const loadedStart = logs?.start ?? 0;
   const totalHeight = Math.max(totalRows * logRowHeight, visibleRows * logRowHeight);
+  const logBusy = isLoading || isRangeLoading;
+  const logLoadingLabel = isLoading ? 'Loading logs' : 'Loading log entries';
 
   useEffect(() => {
     setDraftQuery(query);
@@ -2636,6 +2694,8 @@ function LogsPage({
     <PageStack>
       <PageHeader
         icon={FileTerminal}
+        isLoading={isLoading}
+        loadingLabel="Loading logs"
         status={selectedLog?.name ?? 'No log file selected'}
         title="System Logs"
         aside={
@@ -2647,7 +2707,7 @@ function LogsPage({
         }
       />
 
-      <section className="log-console">
+      <section aria-busy={logBusy} className="log-console">
         <div className="log-console-toolbar">
           <div className="log-console-title">
             <div className="log-mark" aria-hidden="true">
@@ -2682,7 +2742,11 @@ function LogsPage({
               />
             </div>
             <button className="log-search-button" type="submit">
-              <Search className="h-4 w-4" />
+              {isLoading ? (
+                <LoadingSpinner className="h-4 w-4" decorative label="Loading logs" size="sm" />
+              ) : (
+                <Search className="h-4 w-4" />
+              )}
               Search
             </button>
           </form>
@@ -2712,6 +2776,7 @@ function LogsPage({
 
         <div
           aria-label="Log entries"
+          aria-busy={logBusy}
           className="log-view"
           onScroll={(event) => {
             const target = event.currentTarget;
@@ -2727,7 +2792,9 @@ function LogsPage({
             <span>Message</span>
             <span aria-label="Actions" />
           </div>
-          {logs?.entries.length ? (
+          {isLoading && !logs ? (
+            <LoadingState className="min-h-[286px]" label="Loading logs" />
+          ) : logs?.entries.length ? (
             <div className="log-spacer" style={{ height: `${totalHeight}px` }}>
               {logs.entries.map((entry, index) => (
                 <LogLine
@@ -2740,6 +2807,13 @@ function LogsPage({
           ) : (
             <EmptyState label="No log entries" />
           )}
+          {logBusy && logs ? (
+            <div className="pointer-events-none sticky bottom-3 z-20 flex justify-end px-4">
+              <div className="rounded-md border border-code-panel-border bg-code-panel-elevated px-3 shadow-sm shadow-black/10">
+                <LoadingState compact label={logLoadingLabel} />
+              </div>
+            </div>
+          ) : null}
         </div>
       </section>
     </PageStack>
@@ -3107,55 +3181,72 @@ function ProviderSummaryCard({ overview }: { overview: OverviewResponse | null }
   );
 }
 
-function SessionsTable({ sessions, title, onSessionClick }: { sessions: SessionSummary[]; title: string; onSessionClick?: (id: string) => void }) {
+function SessionsTable({
+  isLoading = false,
+  loadingLabel = 'Loading sessions',
+  sessions,
+  title,
+  onSessionClick,
+}: {
+  isLoading?: boolean;
+  loadingLabel?: string;
+  sessions: SessionSummary[];
+  title: string;
+  onSessionClick?: (id: string) => void;
+}) {
   return (
-    <section className="panel">
+    <section aria-busy={isLoading} className="panel">
       <SectionHeading icon={MessageSquareText} label={title} />
       <div className="mt-4 overflow-x-auto">
-        {sessions.length === 0 ? (
+        {isLoading && sessions.length === 0 ? (
+          <LoadingState label={loadingLabel} />
+        ) : sessions.length === 0 ? (
           <EmptyState label="No sessions found" />
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Title</th>
-                <th>Status</th>
-                <th>Models</th>
-                <th>Changed</th>
-                <th>Tokens</th>
-                <th>Cost</th>
-                <th>Last seen</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sessions.map((session) => (
-                <tr
-                  key={session.id}
-                  onClick={() => onSessionClick?.(session.id)}
-                  onKeyDown={(event) => {
-                    if (!onSessionClick) return;
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      onSessionClick(session.id);
-                    }
-                  }}
-                  tabIndex={onSessionClick ? 0 : undefined}
-                  aria-label={onSessionClick ? `Open details for ${session.title}` : undefined}
-                  className={onSessionClick ? 'cursor-pointer hover:bg-surface-soft/50 transition-colors' : undefined}
-                >
-                  <td className="max-w-[380px] truncate">{session.title}</td>
-                  <td>
-                    <Badge tone={session.status === 'failed' ? 'danger' : 'success'} label={session.status} />
-                  </td>
-                  <td className="max-w-[260px] truncate">{session.modelSet.join(', ') || 'unknown'}</td>
-                  <td>{session.changedFiles.length}</td>
-                  <td>{formatNumber(sessionTokenTotal(session))}</td>
-                  <td>{formatUsd(session.costUsd)}</td>
-                  <td>{formatDateTime(session.lastTimestamp)}</td>
+          <>
+            {isLoading ? <LoadingState compact className="justify-start py-0 pb-3" label={loadingLabel} /> : null}
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Status</th>
+                  <th>Models</th>
+                  <th>Changed</th>
+                  <th>Tokens</th>
+                  <th>Cost</th>
+                  <th>Last seen</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {sessions.map((session) => (
+                  <tr
+                    key={session.id}
+                    onClick={() => onSessionClick?.(session.id)}
+                    onKeyDown={(event) => {
+                      if (!onSessionClick) return;
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onSessionClick(session.id);
+                      }
+                    }}
+                    tabIndex={onSessionClick ? 0 : undefined}
+                    aria-label={onSessionClick ? `Open details for ${session.title}` : undefined}
+                    className={onSessionClick ? 'cursor-pointer hover:bg-surface-soft/50 transition-colors' : undefined}
+                  >
+                    <td className="max-w-[380px] truncate">{session.title}</td>
+                    <td>
+                      <Badge tone={session.status === 'failed' ? 'danger' : 'success'} label={session.status} />
+                    </td>
+                    <td className="max-w-[260px] truncate">{session.modelSet.join(', ') || 'unknown'}</td>
+                    <td>{session.changedFiles.length}</td>
+                    <td>{formatNumber(sessionTokenTotal(session))}</td>
+                    <td>{formatUsd(session.costUsd)}</td>
+                    <td>{formatDateTime(session.lastTimestamp)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
         )}
       </div>
     </section>
@@ -3165,14 +3256,20 @@ function SessionsTable({ sessions, title, onSessionClick }: { sessions: SessionS
 function PageHeader({
   aside,
   icon: Icon,
+  isLoading = false,
+  loadingLabel,
   status,
   title,
 }: {
   aside?: ReactNode;
   icon: LucideIcon;
+  isLoading?: boolean;
+  loadingLabel?: string;
   status: string;
   title: string;
 }) {
+  const statusText = isLoading && loadingLabel ? loadingLabel : status;
+
   return (
     <header className="page-header">
       <div className="page-header-title">
@@ -3182,9 +3279,13 @@ function PageHeader({
         <div className="min-w-0">
           <h1 className="font-display text-[34px] leading-none text-ink md:text-[40px]">{title}</h1>
           <div className="mt-2 flex min-w-0 items-center gap-2">
-            <span className="status-dot" />
+            {isLoading && loadingLabel ? (
+              <LoadingSpinner className="text-primary" decorative label={loadingLabel} size="xs" />
+            ) : (
+              <span className="status-dot" />
+            )}
             <span className="truncate text-xs font-medium uppercase leading-none tracking-widest text-muted-soft">
-              {status}
+              {statusText}
             </span>
           </div>
         </div>
@@ -3464,6 +3565,32 @@ function resolveProjectId(projects: ProjectSummary[], requested: string | null |
     return requested;
   }
   return projects.find((project) => project.active)?.id ?? projects[0]?.id ?? null;
+}
+
+function workspaceLoadingLabel(
+  input: {
+    projectId?: string | null;
+    fileName?: string | undefined;
+    level?: LogLevelFilter;
+    query?: string;
+    start?: number;
+  },
+  selectedProjectId: string | null,
+  hasWorkspaceData: boolean,
+): string {
+  if (!hasWorkspaceData) return 'Loading workspace';
+  if (
+    input.fileName !== undefined ||
+    input.level !== undefined ||
+    input.query !== undefined ||
+    input.start !== undefined
+  ) {
+    return 'Loading logs';
+  }
+  if (input.projectId && input.projectId !== selectedProjectId) {
+    return 'Loading project data';
+  }
+  return 'Refreshing workspace';
 }
 
 function logWindowInput(

@@ -15,13 +15,13 @@ import {
   ClipboardList,
   FileText,
   ListChecks,
-  Loader2,
   MessageSquareText,
   RefreshCcw,
 } from 'lucide-react';
 
 import type { ApiClient } from '../api.js';
 import { cn } from '../lib/cn.js';
+import { LoadingSpinner, LoadingState } from './LoadingState.js';
 
 type Tab = 'plans' | 'tasks';
 type OpenSessionHandler = ((sessionId: string) => void) | undefined;
@@ -196,16 +196,15 @@ export function PlansTasksPage({ api, onDiagnosticsChange, onOpenSession, projec
     return { activeTasks, blockedTasks, pendingPlanItems, planFiles };
   }, [plans, tasks]);
 
-  if (loading) {
+  const hasListData = plans.length > 0 || tasks.length > 0;
+
+  if (loading && !hasListData) {
     return (
-      <div className="flex items-center justify-center py-20 text-muted">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" aria-hidden="true" />
-        Loading plans and tasks...
-      </div>
+      <LoadingState className="py-20" label="Loading plans and tasks" />
     );
   }
 
-  if (error) {
+  if (error && !hasListData) {
     return (
       <div className="rounded-md border border-error/30 bg-error/5 px-4 py-3 text-error">
         <p className="font-medium">Failed to load plans and tasks</p>
@@ -222,7 +221,7 @@ export function PlansTasksPage({ api, onDiagnosticsChange, onOpenSession, projec
   }
 
   return (
-    <div className="space-y-5">
+    <div aria-busy={loading} className="space-y-5">
       <header className="page-header">
         <div className="page-header-title">
           <div className="icon-frame">
@@ -241,12 +240,17 @@ export function PlansTasksPage({ api, onDiagnosticsChange, onOpenSession, projec
         <div className="page-header-aside">
           <button
             aria-label="Refresh plans and tasks"
-            className="inline-flex items-center gap-2 rounded-md border border-hairline-soft bg-canvas px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted transition-colors hover:bg-surface-soft hover:text-ink"
+            className="inline-flex items-center gap-2 rounded-md border border-hairline-soft bg-canvas px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted transition-colors hover:bg-surface-soft hover:text-ink disabled:pointer-events-none disabled:opacity-60"
+            disabled={loading}
             onClick={fetchLists}
             type="button"
           >
-            <RefreshCcw className="h-3.5 w-3.5" aria-hidden="true" />
-            Refresh
+            {loading ? (
+              <LoadingSpinner decorative label="Refreshing plans and tasks" size="xs" />
+            ) : (
+              <RefreshCcw className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            {loading ? 'Refreshing' : 'Refresh'}
           </button>
         </div>
       </header>
@@ -836,12 +840,7 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function LoadingPanel({ label }: { label: string }) {
-  return (
-    <div className="flex items-center justify-center py-16 text-muted">
-      <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-      {label}
-    </div>
-  );
+  return <LoadingState label={label.replace(/\.+$/, '')} />;
 }
 
 function DetailErrorPanel({ label }: { label: string }) {

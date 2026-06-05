@@ -153,6 +153,24 @@ describe('App', () => {
     );
   });
 
+  test('shows an accessible workspace loading indicator while the initial project request is pending', async () => {
+    const slowProjects = deferred<Response>();
+    const fetchMock = mockApi({ projectsPromiseOnce: slowProjects.promise });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByRole('progressbar', { name: /loading workspace/i })).toBeInTheDocument();
+    expect(screen.queryByText('No project selected')).not.toBeInTheDocument();
+
+    await act(async () => {
+      slowProjects.resolve(jsonResponse({ diagnostics: [], projects: [projectFixture()] }));
+      await slowProjects.promise;
+    });
+
+    expect(await screen.findByRole('button', { name: /project-a main/i })).toBeInTheDocument();
+  });
+
   test('defaults the overview chart to tokens when cost is not recorded', async () => {
     vi.stubGlobal('fetch', mockApi({ overviewUsageSeries: tokenOnlyUsageSeriesFixture() }));
 
@@ -258,6 +276,26 @@ describe('App', () => {
     expect(screen.getByText('Build the API')).toBeInTheDocument();
   });
 
+  test('shows an accessible sessions loading indicator instead of an empty table while sessions are pending', async () => {
+    window.history.pushState(null, '', '/sessions');
+    const slowSessions = deferred<Response>();
+    const fetchMock = mockApi({ sessionsPromiseOnce: slowSessions.promise });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(wasFetched(fetchMock, '/api/projects/project-1/sessions')).toBe(true));
+    expect(screen.getByRole('progressbar', { name: /loading sessions/i })).toBeInTheDocument();
+    expect(screen.queryByText('No sessions found')).not.toBeInTheDocument();
+
+    await act(async () => {
+      slowSessions.resolve(jsonResponse({ sessions: [projectOneSessionFixture()] }));
+      await slowSessions.promise;
+    });
+
+    expect(await screen.findByText('Build the API')).toBeInTheDocument();
+  });
+
   test('renders provider profile management and opens a template-driven add profile modal', async () => {
     const fetchMock = mockApi({ providerProfilesResponse: providerProfilesFixture() });
     vi.stubGlobal('fetch', fetchMock);
@@ -344,6 +382,28 @@ describe('App', () => {
       'http://127.0.0.1:43110/api/provider/profiles',
       expect.objectContaining({ headers: { accept: 'application/json' } }),
     );
+  });
+
+  test('shows an accessible provider profile loading indicator while provider profiles are pending', async () => {
+    const slowProfiles = deferred<Response>();
+    const fetchMock = mockApi({ providerProfilesPromiseOnce: slowProfiles.promise });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
+
+    await waitFor(() => expect(wasFetched(fetchMock, '/api/provider/profiles')).toBe(true));
+    expect(screen.getByRole('progressbar', { name: /loading provider profiles/i })).toBeInTheDocument();
+
+    await act(async () => {
+      slowProfiles.resolve(jsonResponse(providerProfilesFixture()));
+      await slowProfiles.promise;
+    });
+
+    expect(await screen.findByText('OpenAI Team')).toBeInTheDocument();
   });
 
   test('shows a degraded provider profile state for older local servers', async () => {
@@ -631,6 +691,50 @@ describe('App', () => {
     );
   });
 
+  test('shows an accessible session details loading indicator while session details are pending', async () => {
+    const slowSessionDetails = deferred<Response>();
+    vi.stubGlobal('fetch', mockApi({ sessionDetailsPromiseOnce: slowSessionDetails.promise }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByRole('row', { name: /open details for build the api/i }));
+
+    expect(screen.getByRole('progressbar', { name: /loading session details/i })).toBeInTheDocument();
+
+    await act(async () => {
+      slowSessionDetails.resolve(jsonResponse(sessionDetailsFixture()));
+      await slowSessionDetails.promise;
+    });
+
+    expect(await screen.findByRole('dialog', { name: 'Session Details' })).toBeInTheDocument();
+  });
+
+  test('shows an accessible change review loading indicator while change review data is pending', async () => {
+    const slowChangeReview = deferred<Response>();
+    vi.stubGlobal('fetch', mockApi({ sessionChangesPromiseOnce: slowChangeReview.promise }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByRole('row', { name: /open details for build the api/i }));
+    const dialog = await screen.findByRole('dialog', { name: 'Session Details' });
+    await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
+
+    expect(within(dialog).getByRole('progressbar', { name: /loading change review/i })).toBeInTheDocument();
+
+    await act(async () => {
+      slowChangeReview.resolve(jsonResponse(sessionChangesFixture()));
+      await slowChangeReview.promise;
+    });
+
+    expect(await within(dialog).findByText('Changed files')).toBeInTheDocument();
+  });
+
   test('shows an empty state when a session has no reviewable changed files', async () => {
     vi.stubGlobal('fetch', mockApi({ sessionChangesResponse: emptySessionChangesFixture() }));
     const user = userEvent.setup();
@@ -816,6 +920,32 @@ describe('App', () => {
       'http://127.0.0.1:43110/api/projects/project-1/tasks/session-1/1',
       expect.objectContaining({ headers: { accept: 'application/json' } }),
     );
+  });
+
+  test('shows an accessible plans and tasks loading indicator while lists are pending', async () => {
+    const slowPlans = deferred<Response>();
+    const slowTasks = deferred<Response>();
+    vi.stubGlobal('fetch', mockApi({
+      plansPromiseOnce: slowPlans.promise,
+      tasksPromiseOnce: slowTasks.promise,
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Plans & Tasks$/i })[0]!);
+
+    expect(screen.getByRole('progressbar', { name: /loading plans and tasks/i })).toBeInTheDocument();
+
+    await act(async () => {
+      slowPlans.resolve(jsonResponse(plansFixture()));
+      slowTasks.resolve(jsonResponse(tasksFixture()));
+      await slowPlans.promise;
+      await slowTasks.promise;
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Plans & Tasks' })).toBeInTheDocument();
   });
 
   test('keeps plans and tasks diagnostics visible on the diagnostics route', async () => {
@@ -1029,7 +1159,8 @@ describe('App', () => {
   });
 
   test('loads the latest matching log window when filters change', async () => {
-    const fetchMock = mockApi({ logTotalLines: 1200 });
+    const slowSearch = deferred<Response>();
+    const fetchMock = mockApi({ logSearchPromiseOnce: slowSearch.promise, logTotalLines: 1200 });
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
 
@@ -1047,7 +1178,21 @@ describe('App', () => {
       expect(wasFetchedWithQuery(fetchMock, '/api/logs/search', 'tail', 'true')).toBe(true);
       expect(wasFetchedWithQuery(fetchMock, '/api/logs/search', 'level', 'warn')).toBe(true);
     });
+    const logEntries = screen.getByRole('region', { name: /log entries/i });
+    expect(screen.getByRole('progressbar', { name: /loading logs/i })).toBeInTheDocument();
+    expect(logEntries).toHaveAttribute('aria-busy', 'true');
+
+    await act(async () => {
+      slowSearch.resolve(jsonResponse({
+        ...logsFixture({ count: 500, start: 700, totalLines: 1200 }),
+        query: '',
+        totalMatches: 1200,
+      }));
+      await slowSearch.promise;
+    });
+
     expect(await screen.findByText('line-1200')).toBeInTheDocument();
+    expect(logEntries).toHaveAttribute('aria-busy', 'false');
   });
 
   test('surfaces API diagnostics on the diagnostics route', async () => {
@@ -1210,17 +1355,25 @@ type MockApiOptions = {
   failTaskDetails?: boolean;
   failLogWindowStartOnce?: number;
   logTotalLines?: number;
+  logSearchPromiseOnce?: Promise<Response>;
   omitOverviewUsageSeries?: boolean;
   overviewUsageSeries?: unknown[];
+  plansPromiseOnce?: Promise<Response>;
   plansResponse?: unknown;
   projectDiagnostics?: unknown[];
+  projectsPromiseOnce?: Promise<Response>;
   projects?: unknown[];
   failSessionChangesOnce?: boolean;
+  providerProfilesPromiseOnce?: Promise<Response>;
   providerProfilesResponse?: unknown;
   providerProfilesStatus?: number;
+  sessionChangesPromiseOnce?: Promise<Response>;
   sessionChangesStatus?: number;
   sessionChangesResponse?: unknown;
+  sessionDetailsPromiseOnce?: Promise<Response>;
   sessionDetails?: unknown;
+  sessionsPromiseOnce?: Promise<Response>;
+  tasksPromiseOnce?: Promise<Response>;
   tasksResponse?: unknown;
 };
 
@@ -1229,6 +1382,14 @@ function mockApi(options: MockApiOptions = {}) {
   let failedLogWindowStart = false;
   let failedPlansList = false;
   let failedSessionChanges = false;
+  let usedLogSearchPromise = false;
+  let usedPlansPromise = false;
+  let usedProjectsPromise = false;
+  let usedProviderProfilesPromise = false;
+  let usedSessionChangesPromise = false;
+  let usedSessionDetailsPromise = false;
+  let usedSessionsPromise = false;
+  let usedTasksPromise = false;
 
   return vi.fn(async (input: RequestInfo | URL) => {
     const requestUrl = new URL(String(input), baseUrl);
@@ -1244,6 +1405,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/projects') {
+      if (options.projectsPromiseOnce && !usedProjectsPromise) {
+        usedProjectsPromise = true;
+        return options.projectsPromiseOnce;
+      }
       return jsonResponse({
         diagnostics: options.projectDiagnostics ?? [],
         projects: options.projects ?? [projectFixture()],
@@ -1281,6 +1446,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/projects/project-1/sessions') {
+      if (options.sessionsPromiseOnce && !usedSessionsPromise) {
+        usedSessionsPromise = true;
+        return options.sessionsPromiseOnce;
+      }
       return jsonResponse({
         sessions: [
           {
@@ -1301,6 +1470,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/provider/profiles') {
+      if (options.providerProfilesPromiseOnce && !usedProviderProfilesPromise) {
+        usedProviderProfilesPromise = true;
+        return options.providerProfilesPromiseOnce;
+      }
       if (options.providerProfilesStatus) {
         return jsonResponse({ error: `Injected provider profiles ${options.providerProfilesStatus}` }, options.providerProfilesStatus);
       }
@@ -1308,10 +1481,18 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/projects/project-1/sessions/session-1') {
+      if (options.sessionDetailsPromiseOnce && !usedSessionDetailsPromise) {
+        usedSessionDetailsPromise = true;
+        return options.sessionDetailsPromiseOnce;
+      }
       return jsonResponse(options.sessionDetails ?? sessionDetailsFixture());
     }
 
     if (path === '/api/projects/project-1/sessions/session-1/changes') {
+      if (options.sessionChangesPromiseOnce && !usedSessionChangesPromise) {
+        usedSessionChangesPromise = true;
+        return options.sessionChangesPromiseOnce;
+      }
       if (options.failSessionChangesOnce && !failedSessionChanges) {
         failedSessionChanges = true;
         return jsonResponse({ error: 'Injected change review failure' }, 500);
@@ -1323,6 +1504,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/projects/project-1/plans') {
+      if (options.plansPromiseOnce && !usedPlansPromise) {
+        usedPlansPromise = true;
+        return options.plansPromiseOnce;
+      }
       if (options.failPlansListOnce && !failedPlansList) {
         failedPlansList = true;
         return jsonResponse({ error: 'Injected plans failure' }, 500);
@@ -1338,6 +1523,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/projects/project-1/tasks') {
+      if (options.tasksPromiseOnce && !usedTasksPromise) {
+        usedTasksPromise = true;
+        return options.tasksPromiseOnce;
+      }
       return jsonResponse(options.tasksResponse ?? tasksFixture());
     }
 
@@ -1371,6 +1560,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/logs/search') {
+      if (options.logSearchPromiseOnce && !usedLogSearchPromise) {
+        usedLogSearchPromise = true;
+        return options.logSearchPromiseOnce;
+      }
       const projectId = requestUrl.searchParams.get('projectId');
       const requestedCount = Number(requestUrl.searchParams.get('count') ?? 250);
       const totalMatches = options.logTotalLines ?? 1;

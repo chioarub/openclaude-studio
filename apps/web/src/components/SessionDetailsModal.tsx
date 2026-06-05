@@ -35,6 +35,7 @@ import type {
 import { ApiRequestError, type createApiClient } from '../api.js';
 import { cn } from '../lib/cn.js';
 import { CopyablePath } from './CopyablePath.js';
+import { LoadingState } from './LoadingState.js';
 
 // Types
 
@@ -528,10 +529,7 @@ export function SessionDetailsModal({
           <p className="text-sm font-medium">{error}</p>
         </div>
       ) : (
-        <div className="h-full min-h-64 flex flex-col items-center justify-center text-muted gap-4 p-6">
-          <div className="w-8 h-8 border border-primary border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm font-medium animate-pulse">Loading session details...</p>
-        </div>
+        <LoadingState className="h-full min-h-64 p-6" label="Loading session details" />
       )}
     </Modal>
   );
@@ -898,12 +896,7 @@ function SessionChangeReviewPanel({
 
   if (loading && !review) {
     return (
-      <div className="flex flex-1 min-h-0 items-center justify-center pt-8 text-muted">
-        <div className="flex items-center gap-3">
-          <div className="h-5 w-5 rounded-full border border-primary border-t-transparent animate-spin" />
-          <span className="text-sm font-medium">Loading change review...</span>
-        </div>
-      </div>
+      <LoadingState className="flex-1 min-h-0 pt-8" label="Loading change review" />
     );
   }
 
