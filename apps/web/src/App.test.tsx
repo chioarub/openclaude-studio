@@ -25,6 +25,26 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+type TextQueryScope = Pick<typeof screen, 'getAllByText'>;
+
+function getLoadingLiveRegion(label: string, scope: TextQueryScope = screen): HTMLElement {
+  const liveRegion = scope
+    .getAllByText(label)
+    .map((element) => element.closest('[aria-live="polite"]'))
+    .find((element): element is HTMLElement => element instanceof HTMLElement);
+
+  if (!liveRegion) {
+    throw new Error(`Unable to find aria-live loading region for "${label}"`);
+  }
+
+  return liveRegion;
+}
+
+async function findLoadingLiveRegion(label: string, scope: TextQueryScope = screen): Promise<HTMLElement> {
+  await waitFor(() => expect(getLoadingLiveRegion(label, scope)).toBeInTheDocument());
+  return getLoadingLiveRegion(label, scope);
+}
+
 describe('App', () => {
   test('explains how to start the local server when the hosted UI cannot reach the API', async () => {
     const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
@@ -160,7 +180,8 @@ describe('App', () => {
 
     render(<App />);
 
-    expect(await screen.findByRole('progressbar', { name: /loading workspace/i })).toBeInTheDocument();
+    const workspaceLoadingRegion = await findLoadingLiveRegion('Loading workspace');
+    expect(within(workspaceLoadingRegion).queryByRole('progressbar')).not.toBeInTheDocument();
     expect(screen.queryByText('No project selected')).not.toBeInTheDocument();
 
     await act(async () => {
@@ -314,7 +335,7 @@ describe('App', () => {
     render(<App />);
 
     await waitFor(() => expect(wasFetched(fetchMock, '/api/projects/project-1/sessions')).toBe(true));
-    expect(screen.getByRole('progressbar', { name: /loading sessions/i })).toBeInTheDocument();
+    expect(getLoadingLiveRegion('Loading sessions')).toBeInTheDocument();
     expect(screen.queryByText('No sessions found')).not.toBeInTheDocument();
 
     await act(async () => {
@@ -425,7 +446,7 @@ describe('App', () => {
     await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
 
     await waitFor(() => expect(wasFetched(fetchMock, '/api/provider/profiles')).toBe(true));
-    expect(screen.getByRole('progressbar', { name: /loading provider profiles/i })).toBeInTheDocument();
+    expect(getLoadingLiveRegion('Loading provider profiles')).toBeInTheDocument();
 
     await act(async () => {
       slowProfiles.resolve(jsonResponse(providerProfilesFixture()));
@@ -731,7 +752,7 @@ describe('App', () => {
     await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
     await user.click(screen.getByRole('row', { name: /open details for build the api/i }));
 
-    expect(screen.getByRole('progressbar', { name: /loading session details/i })).toBeInTheDocument();
+    expect(getLoadingLiveRegion('Loading session details')).toBeInTheDocument();
 
     await act(async () => {
       slowSessionDetails.resolve(jsonResponse(sessionDetailsFixture()));
@@ -754,7 +775,7 @@ describe('App', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Session Details' });
     await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
 
-    expect(within(dialog).getByRole('progressbar', { name: /loading change review/i })).toBeInTheDocument();
+    expect(getLoadingLiveRegion('Loading change review', within(dialog))).toBeInTheDocument();
 
     await act(async () => {
       slowChangeReview.resolve(jsonResponse(sessionChangesFixture()));
@@ -965,7 +986,7 @@ describe('App', () => {
     await screen.findByRole('button', { name: /project-a main/i });
     await user.click(screen.getAllByRole('link', { name: /^Plans & Tasks$/i })[0]!);
 
-    expect(screen.getByRole('progressbar', { name: /loading plans and tasks/i })).toBeInTheDocument();
+    expect(getLoadingLiveRegion('Loading plans and tasks')).toBeInTheDocument();
 
     await act(async () => {
       slowPlans.resolve(jsonResponse(plansFixture()));
@@ -1208,7 +1229,7 @@ describe('App', () => {
       expect(wasFetchedWithQuery(fetchMock, '/api/logs/search', 'level', 'warn')).toBe(true);
     });
     const logEntries = screen.getByRole('region', { name: /log entries/i });
-    expect(screen.getByRole('progressbar', { name: /loading logs/i })).toBeInTheDocument();
+    expect(getLoadingLiveRegion('Loading logs')).toBeInTheDocument();
     expect(logEntries).toHaveAttribute('aria-busy', 'true');
 
     await act(async () => {

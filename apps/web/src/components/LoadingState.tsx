@@ -52,7 +52,7 @@ export function LoadingState({ className, compact = false, label }: LoadingState
         className,
       )}
     >
-      <LoadingSpinner label={label} size={compact ? 'sm' : 'md'} />
+      <LoadingSpinner decorative label={label} size={compact ? 'sm' : 'md'} />
       <span>{label}</span>
     </div>
   );
