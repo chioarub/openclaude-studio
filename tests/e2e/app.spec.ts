@@ -236,16 +236,18 @@ test('loads project overview, sessions, provider, and logs', async ({ page }) =>
   await page.getByRole('button', { name: 'warn' }).click();
   await expect.poll(() => warnSearchStarted).toBe(true);
 
-  const logLoadingOverlay = page.locator('.log-loading-overlay');
+  const logConsole = page.locator('.log-console');
+  const logLoadingOverlay = page.locator('.log-console-loading-overlay.loading-overlay');
   await expect(logLoadingOverlay.getByText('Loading logs')).toBeVisible();
-  const [overlayBox, logViewBox] = await Promise.all([
+  await expect(logLoadingOverlay.locator('.loading-overlay-card')).toBeVisible();
+  const [overlayBox, logConsoleBox] = await Promise.all([
     logLoadingOverlay.boundingBox(),
-    logView.boundingBox(),
+    logConsole.boundingBox(),
   ]);
   expect(overlayBox).not.toBeNull();
-  expect(logViewBox).not.toBeNull();
-  expect(overlayBox!.y).toBeGreaterThanOrEqual(logViewBox!.y);
-  expect(overlayBox!.y + overlayBox!.height).toBeLessThanOrEqual(logViewBox!.y + logViewBox!.height);
+  expect(logConsoleBox).not.toBeNull();
+  expect(overlayBox!.y).toBeGreaterThanOrEqual(logConsoleBox!.y);
+  expect(overlayBox!.y + overlayBox!.height).toBeLessThanOrEqual(logConsoleBox!.y + logConsoleBox!.height);
   releaseWarnSearch?.();
   await expect(logLoadingOverlay).toBeHidden();
 });

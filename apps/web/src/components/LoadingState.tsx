@@ -57,3 +57,19 @@ export function LoadingState({ className, compact = false, label }: LoadingState
     </div>
   );
 }
+
+type LoadingOverlayProps = {
+  className?: string;
+  label: string;
+  tone?: 'surface' | 'code';
+};
+
+export function LoadingOverlay({ className, label, tone = 'surface' }: LoadingOverlayProps) {
+  return (
+    <div className={cn('loading-overlay', tone === 'code' && 'loading-overlay-code', className)}>
+      <div className="loading-overlay-card">
+        <LoadingState compact className="loading-overlay-state" label={label} />
+      </div>
+    </div>
+  );
+}

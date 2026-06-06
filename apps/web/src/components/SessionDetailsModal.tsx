@@ -35,7 +35,7 @@ import type {
 import { ApiRequestError, type createApiClient } from '../api.js';
 import { cn } from '../lib/cn.js';
 import { CopyablePath } from './CopyablePath.js';
-import { LoadingState } from './LoadingState.js';
+import { LoadingOverlay } from './LoadingState.js';
 
 // Types
 
@@ -251,7 +251,7 @@ export function SessionDetailsModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={details ? 'Session Details' : 'Loading...'}
+      title="Session Details"
       className="max-w-[min(96vw,1320px)] h-[90vh]"
       bodyClassName="p-0 overflow-hidden flex-1 min-h-0"
     >
@@ -529,7 +529,10 @@ export function SessionDetailsModal({
           <p className="text-sm font-medium">{error}</p>
         </div>
       ) : (
-        <LoadingState className="h-full min-h-64 p-6" label="Loading session details" />
+        <div className="loading-boundary h-full min-h-64">
+          <div aria-hidden="true" className="section-loading-placeholder modal-loading-placeholder" />
+          <LoadingOverlay label="Loading session details" />
+        </div>
       )}
     </Modal>
   );
@@ -896,7 +899,10 @@ function SessionChangeReviewPanel({
 
   if (loading && !review) {
     return (
-      <LoadingState className="flex-1 min-h-0 pt-8" label="Loading change review" />
+      <div className="loading-boundary flex-1 min-h-0">
+        <div aria-hidden="true" className="section-loading-placeholder modal-loading-placeholder" />
+        <LoadingOverlay label="Loading change review" />
+      </div>
     );
   }
 
@@ -924,7 +930,7 @@ function SessionChangeReviewPanel({
 
   if (isUnsupportedChangeReview(review)) {
     return (
-      <div className="flex flex-1 min-h-0 items-center justify-center pt-8">
+      <div aria-busy={loading} className="loading-boundary flex flex-1 min-h-0 items-center justify-center pt-8">
         <div className="max-w-lg rounded-lg border border-primary/15 bg-primary/[0.04] p-5 text-sm text-ink">
           <div className="mb-3 flex items-center gap-2 font-medium">
             <AlertTriangle className="h-4 w-4 text-primary" />
@@ -936,6 +942,7 @@ function SessionChangeReviewPanel({
             Retry
           </Button>
         </div>
+        {loading ? <LoadingOverlay label="Loading change review" /> : null}
       </div>
     );
   }
@@ -948,7 +955,7 @@ function SessionChangeReviewPanel({
   };
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col gap-4 pt-6 pr-2">
+    <div aria-busy={loading} className="loading-boundary flex flex-1 min-h-0 flex-col gap-4 pt-6 pr-2">
       <ChangeReviewSummaryBar
         review={review}
         diffableCount={diffableFiles.length}
@@ -968,6 +975,7 @@ function SessionChangeReviewPanel({
           onSelectFile={handleSelectFile}
         />
       )}
+      {loading ? <LoadingOverlay label="Loading change review" /> : null}
     </div>
   );
 }

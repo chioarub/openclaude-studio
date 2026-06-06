@@ -21,7 +21,7 @@ import {
 
 import type { ApiClient } from '../api.js';
 import { cn } from '../lib/cn.js';
-import { LoadingSpinner, LoadingState } from './LoadingState.js';
+import { LoadingOverlay } from './LoadingState.js';
 
 type Tab = 'plans' | 'tasks';
 type OpenSessionHandler = ((sessionId: string) => void) | undefined;
@@ -197,10 +197,47 @@ export function PlansTasksPage({ api, onDiagnosticsChange, onOpenSession, projec
   }, [plans, tasks]);
 
   const hasListData = plans.length > 0 || tasks.length > 0;
+  const listLoadingLabel = hasListData ? 'Refreshing plans and tasks' : 'Loading plans and tasks';
+  const header = (
+    <header className="page-header">
+      <div className="page-header-title">
+        <div className="icon-frame">
+          <ClipboardList className="h-6 w-6" aria-hidden="true" />
+        </div>
+        <div className="min-w-0">
+          <h1 className="font-display text-[34px] leading-none text-ink md:text-[40px]">Plans &amp; Tasks</h1>
+          <div className="mt-2 flex min-w-0 items-center gap-2">
+            <span className="status-dot" />
+            <span className="truncate text-xs font-medium uppercase leading-none tracking-widest text-muted-soft">
+              {formatNumber(plans.length)} plans / {formatNumber(tasks.length)} tasks
+            </span>
+          </div>
+        </div>
+      </div>
+      <div className="page-header-aside">
+        <button
+          aria-label="Refresh plans and tasks"
+          className="inline-flex items-center gap-2 rounded-md border border-hairline-soft bg-canvas px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted transition-colors hover:bg-surface-soft hover:text-ink disabled:pointer-events-none disabled:opacity-60"
+          disabled={loading}
+          onClick={fetchLists}
+          type="button"
+        >
+          <RefreshCcw className="h-3.5 w-3.5" aria-hidden="true" />
+          Refresh
+        </button>
+      </div>
+    </header>
+  );
 
   if (loading && !hasListData) {
     return (
-      <LoadingState className="py-20" label="Loading plans and tasks" />
+      <div className="space-y-5">
+        {header}
+        <section aria-busy={true} className="panel loading-boundary plans-tasks-initial-loading">
+          <div aria-hidden="true" className="section-loading-placeholder plans-tasks-initial-placeholder" />
+          <LoadingOverlay label={listLoadingLabel} />
+        </section>
+      </div>
     );
   }
 
@@ -222,97 +259,70 @@ export function PlansTasksPage({ api, onDiagnosticsChange, onOpenSession, projec
 
   return (
     <div aria-busy={loading} className="space-y-5">
-      <header className="page-header">
-        <div className="page-header-title">
-          <div className="icon-frame">
-            <ClipboardList className="h-6 w-6" aria-hidden="true" />
-          </div>
-          <div className="min-w-0">
-            <h1 className="font-display text-[34px] leading-none text-ink md:text-[40px]">Plans &amp; Tasks</h1>
-            <div className="mt-2 flex min-w-0 items-center gap-2">
-              <span className="status-dot" />
-              <span className="truncate text-xs font-medium uppercase leading-none tracking-widest text-muted-soft">
-                {formatNumber(plans.length)} plans / {formatNumber(tasks.length)} tasks
-              </span>
-            </div>
-          </div>
+      {header}
+
+      <div className="plans-tasks-content loading-boundary">
+        <div className="grid gap-3 md:grid-cols-4">
+          <ControlStat label="Active Tasks" value={summary.activeTasks} />
+          <ControlStat label="Blocked" value={summary.blockedTasks} tone={summary.blockedTasks > 0 ? 'warning' : 'default'} />
+          <ControlStat label="Plan Files" value={summary.planFiles} />
+          <ControlStat label="Open Checklist" value={summary.pendingPlanItems} />
         </div>
-        <div className="page-header-aside">
-          <button
-            aria-label="Refresh plans and tasks"
-            className="inline-flex items-center gap-2 rounded-md border border-hairline-soft bg-canvas px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted transition-colors hover:bg-surface-soft hover:text-ink disabled:pointer-events-none disabled:opacity-60"
-            disabled={loading}
-            onClick={fetchLists}
-            type="button"
+
+        <DiagnosticsStrip diagnostics={diagnostics} />
+
+        <div className="flex gap-1 rounded-md border border-hairline-soft bg-surface-soft/50 p-1" role="tablist" aria-label="Plans and tasks">
+          <TabButton
+            active={tab === 'plans'}
+            controls="plans-tasks-plans-panel"
+            count={plans.length}
+            id="plans-tasks-plans-tab"
+            onClick={() => setTab('plans')}
           >
-            {loading ? (
-              <LoadingSpinner decorative label="Refreshing plans and tasks" size="xs" />
-            ) : (
-              <RefreshCcw className="h-3.5 w-3.5" aria-hidden="true" />
-            )}
-            {loading ? 'Refreshing' : 'Refresh'}
-          </button>
+            <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+            Plans
+          </TabButton>
+          <TabButton
+            active={tab === 'tasks'}
+            controls="plans-tasks-tasks-panel"
+            count={tasks.length}
+            id="plans-tasks-tasks-tab"
+            onClick={() => setTab('tasks')}
+          >
+            <ListChecks className="h-3.5 w-3.5" aria-hidden="true" />
+            Tasks
+          </TabButton>
         </div>
-      </header>
 
-      <div className="grid gap-3 md:grid-cols-4">
-        <ControlStat label="Active Tasks" value={summary.activeTasks} />
-        <ControlStat label="Blocked" value={summary.blockedTasks} tone={summary.blockedTasks > 0 ? 'warning' : 'default'} />
-        <ControlStat label="Plan Files" value={summary.planFiles} />
-        <ControlStat label="Open Checklist" value={summary.pendingPlanItems} />
+        {tab === 'plans' ? (
+          <div className="min-h-0" id="plans-tasks-plans-panel" role="tabpanel" aria-labelledby="plans-tasks-plans-tab">
+            <PlansView
+              detailLoading={planDetailLoading}
+              onOpenSession={onOpenSession}
+              onSelectPlan={setSelectedPlanId}
+              planDetailError={planDetailError}
+              planDetail={planDetail}
+              plans={plans}
+              selectedPlanId={selectedPlanId}
+            />
+          </div>
+        ) : (
+          <div className="min-h-0" id="plans-tasks-tasks-panel" role="tabpanel" aria-labelledby="plans-tasks-tasks-tab">
+            <TasksView
+              detailLoading={taskDetailLoading}
+              onOpenSession={onOpenSession}
+              onSelectTask={setSelectedTaskId}
+              selectedTaskId={selectedTaskId}
+              taskDetailError={taskDetailError}
+              taskDetail={taskDetail}
+              tasks={tasks}
+              tasksByStatus={tasksByStatus}
+            />
+          </div>
+        )}
+
+        {loading ? <LoadingOverlay label={listLoadingLabel} /> : null}
       </div>
-
-      <DiagnosticsStrip diagnostics={diagnostics} />
-
-      <div className="flex gap-1 rounded-md border border-hairline-soft bg-surface-soft/50 p-1" role="tablist" aria-label="Plans and tasks">
-        <TabButton
-          active={tab === 'plans'}
-          controls="plans-tasks-plans-panel"
-          count={plans.length}
-          id="plans-tasks-plans-tab"
-          onClick={() => setTab('plans')}
-        >
-          <FileText className="h-3.5 w-3.5" aria-hidden="true" />
-          Plans
-        </TabButton>
-        <TabButton
-          active={tab === 'tasks'}
-          controls="plans-tasks-tasks-panel"
-          count={tasks.length}
-          id="plans-tasks-tasks-tab"
-          onClick={() => setTab('tasks')}
-        >
-          <ListChecks className="h-3.5 w-3.5" aria-hidden="true" />
-          Tasks
-        </TabButton>
-      </div>
-
-      {tab === 'plans' ? (
-        <div className="min-h-0" id="plans-tasks-plans-panel" role="tabpanel" aria-labelledby="plans-tasks-plans-tab">
-          <PlansView
-            detailLoading={planDetailLoading}
-            onOpenSession={onOpenSession}
-            onSelectPlan={setSelectedPlanId}
-            planDetailError={planDetailError}
-            planDetail={planDetail}
-            plans={plans}
-            selectedPlanId={selectedPlanId}
-          />
-        </div>
-      ) : (
-        <div className="min-h-0" id="plans-tasks-tasks-panel" role="tabpanel" aria-labelledby="plans-tasks-tasks-tab">
-          <TasksView
-            detailLoading={taskDetailLoading}
-            onOpenSession={onOpenSession}
-            onSelectTask={setSelectedTaskId}
-            selectedTaskId={selectedTaskId}
-            taskDetailError={taskDetailError}
-            taskDetail={taskDetail}
-            tasks={tasks}
-            tasksByStatus={tasksByStatus}
-          />
-        </div>
-      )}
     </div>
   );
 }
@@ -472,9 +482,9 @@ function PlansView({
         })}
       </div>
 
-      <div className="plans-tasks-pane custom-scrollbar overflow-y-auto rounded-md border border-hairline-soft/70 bg-canvas">
-        {detailLoading ? (
-          <LoadingPanel label="Loading plan details..." />
+      <div className="plans-tasks-pane loading-boundary custom-scrollbar overflow-y-auto rounded-md border border-hairline-soft/70 bg-canvas">
+        {detailLoading && !planDetail ? (
+          <div aria-hidden="true" className="section-loading-placeholder plans-tasks-detail-loading-placeholder" />
         ) : planDetailError ? (
           <DetailErrorPanel label={planDetailError} />
         ) : selectedPlanId && planDetail ? (
@@ -484,6 +494,7 @@ function PlansView({
         ) : (
           <EmptyPanel label="Select a plan to inspect the current file, checklist progress, and linked sessions." compact />
         )}
+        {detailLoading ? <LoadingOverlay label="Loading plan details" /> : null}
       </div>
     </div>
   );
@@ -674,9 +685,9 @@ function TasksView({
         ))}
       </div>
 
-      <div className="plans-tasks-pane custom-scrollbar overflow-y-auto rounded-md border border-hairline-soft/70 bg-canvas">
-        {detailLoading ? (
-          <LoadingPanel label="Loading task details..." />
+      <div className="plans-tasks-pane loading-boundary custom-scrollbar overflow-y-auto rounded-md border border-hairline-soft/70 bg-canvas">
+        {detailLoading && !taskDetail ? (
+          <div aria-hidden="true" className="section-loading-placeholder plans-tasks-detail-loading-placeholder" />
         ) : taskDetailError ? (
           <DetailErrorPanel label={taskDetailError} />
         ) : selectedTaskId && taskDetail ? (
@@ -686,6 +697,7 @@ function TasksView({
         ) : (
           <EmptyPanel label="Select a task to inspect its state, session context, and source JSON." compact />
         )}
+        {detailLoading ? <LoadingOverlay label="Loading task details" /> : null}
       </div>
     </div>
   );
@@ -837,10 +849,6 @@ function StatusBadge({ status }: { status: string }) {
       {statusLabel(key)}
     </span>
   );
-}
-
-function LoadingPanel({ label }: { label: string }) {
-  return <LoadingState label={label.replace(/\.+$/, '')} />;
 }
 
 function DetailErrorPanel({ label }: { label: string }) {
