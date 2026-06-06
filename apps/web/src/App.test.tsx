@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -25,7 +27,52 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+type TextQueryScope = Pick<typeof screen, 'getAllByText'>;
+
+function getLoadingLiveRegion(label: string, scope: TextQueryScope = screen): HTMLElement {
+  const liveRegion = scope
+    .getAllByText(label)
+    .map((element) => element.closest('[aria-live="polite"]'))
+    .find((element): element is HTMLElement => element instanceof HTMLElement);
+
+  if (!liveRegion) {
+    throw new Error(`Unable to find aria-live loading region for "${label}"`);
+  }
+
+  return liveRegion;
+}
+
+function getLoadingOverlay(label: string, scope: TextQueryScope = screen): HTMLElement {
+  const overlay = getLoadingLiveRegion(label, scope).closest('.loading-overlay');
+  if (!(overlay instanceof HTMLElement)) {
+    throw new Error(`Unable to find loading overlay for "${label}"`);
+  }
+  return overlay;
+}
+
+function getPageHeader(title: string): HTMLElement {
+  const header = screen.getByRole('heading', { name: title }).closest('header');
+  if (!(header instanceof HTMLElement)) {
+    throw new Error(`Unable to find page header for "${title}"`);
+  }
+  return header;
+}
+
+async function findLoadingLiveRegion(label: string, scope: TextQueryScope = screen): Promise<HTMLElement> {
+  await waitFor(() => expect(getLoadingLiveRegion(label, scope)).toBeInTheDocument());
+  return getLoadingLiveRegion(label, scope);
+}
+
 describe('App', () => {
+  test('does not reference undefined CSS custom properties', () => {
+    const css = readFileSync('src/index.css', 'utf8');
+    const definedProperties = new Set([...css.matchAll(/(--[A-Za-z0-9_-]+)\s*:/g)].map((match) => match[1]));
+    const referencedProperties = [...css.matchAll(/var\((--[A-Za-z0-9_-]+)/g)].map((match) => match[1]);
+    const undefinedReferences = [...new Set(referencedProperties.filter((property) => !definedProperties.has(property)))];
+
+    expect(undefinedReferences).toEqual([]);
+  });
+
   test('explains how to start the local server when the hosted UI cannot reach the API', async () => {
     const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
     vi.stubGlobal('fetch', fetchMock);
@@ -153,6 +200,104 @@ describe('App', () => {
     );
   });
 
+  test('shows an accessible workspace loading indicator while the initial project request is pending', async () => {
+    const slowProjects = deferred<Response>();
+    const fetchMock = mockApi({ projectsPromiseOnce: slowProjects.promise });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    const workspaceLoadingRegion = await findLoadingLiveRegion('Loading workspace');
+    expect(within(workspaceLoadingRegion).queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(screen.queryByText('No project selected')).not.toBeInTheDocument();
+
+    await act(async () => {
+      slowProjects.resolve(jsonResponse({ diagnostics: [], projects: [projectFixture()] }));
+      await slowProjects.promise;
+    });
+
+    expect(await screen.findByRole('button', { name: /project-a main/i })).toBeInTheDocument();
+  });
+
+  test('keeps a workspace refresh indicator over all control center data blocks', async () => {
+    const slowProjects = deferred<Response>();
+    const defaultApi = mockApi();
+    let projectRequestCount = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/projects') {
+        projectRequestCount += 1;
+        if (projectRequestCount === 2) {
+          return slowProjects.promise;
+        }
+      }
+      return defaultApi(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    expect(screen.getByText('Project Overview')).toBeInTheDocument();
+    expect(screen.getByText('Active Provider')).toBeInTheDocument();
+    expect(screen.getByText('Recent Sessions')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /refresh project list/i }));
+    await waitFor(() => expect(projectRequestCount).toBe(2));
+
+    const refreshButton = screen.getByRole('button', { name: /refresh project list/i });
+    expect(refreshButton.querySelector('.animate-spin')).toBeInTheDocument();
+
+    const controlCenterContent = document.querySelector('.control-center-content');
+    expect(controlCenterContent).toBeInstanceOf(HTMLElement);
+    const workspaceOverlay = getLoadingOverlay('Refreshing workspace', within(controlCenterContent as HTMLElement));
+    const pageHeader = getPageHeader('Control Center');
+    expect(within(pageHeader).queryByText('Refreshing workspace')).not.toBeInTheDocument();
+    expect(pageHeader.querySelector('.animate-spin')).not.toBeInTheDocument();
+    expect(within(pageHeader).getByText('project-a / main')).toBeInTheDocument();
+    expect(controlCenterContent).toContainElement(workspaceOverlay);
+    expect(controlCenterContent).toContainElement(screen.getByText('Project Overview'));
+    expect(controlCenterContent).toContainElement(screen.getByText('Active Provider'));
+    expect(controlCenterContent).toContainElement(screen.getByText('Recent Sessions'));
+
+    await act(async () => {
+      slowProjects.resolve(jsonResponse({ diagnostics: [], projects: [projectFixture()] }));
+      await slowProjects.promise;
+    });
+
+    await waitFor(() => expect(screen.queryByText('Refreshing workspace')).not.toBeInTheDocument());
+  });
+
+  test('labels the compact server status while the health check is pending', async () => {
+    const slowHealth = deferred<Response>();
+    const api = mockApi();
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/health') {
+        return slowHealth.promise;
+      }
+      return api(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    expect(screen.getByLabelText('Checking server')).toBeInTheDocument();
+
+    await act(async () => {
+      slowHealth.resolve(jsonResponse({
+        status: 'ok',
+        version: '0.0.1-test',
+        serverTime: '2026-05-28T08:00:00.000Z',
+        uptime: 1,
+      }));
+      await slowHealth.promise;
+    });
+
+    expect(await screen.findByLabelText('Server connected v0.0.1-test')).toBeInTheDocument();
+  });
+
   test('defaults the overview chart to tokens when cost is not recorded', async () => {
     vi.stubGlobal('fetch', mockApi({ overviewUsageSeries: tokenOnlyUsageSeriesFixture() }));
 
@@ -258,6 +403,70 @@ describe('App', () => {
     expect(screen.getByText('Build the API')).toBeInTheDocument();
   });
 
+  test('shows an accessible sessions loading indicator instead of an empty table while sessions are pending', async () => {
+    window.history.pushState(null, '', '/sessions');
+    const slowSessions = deferred<Response>();
+    const fetchMock = mockApi({ sessionsPromiseOnce: slowSessions.promise });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(wasFetched(fetchMock, '/api/projects/project-1/sessions')).toBe(true));
+    const sessionsLoadingOverlay = getLoadingOverlay('Loading sessions');
+    const sessionsPanel = sessionsLoadingOverlay.closest('section');
+    expect(sessionsPanel).not.toBeNull();
+    expect(sessionsPanel).toContainElement(sessionsLoadingOverlay);
+    expect(sessionsLoadingOverlay.querySelector('.loading-overlay-card')).toBeInTheDocument();
+    expect(screen.queryByText('No sessions found')).not.toBeInTheDocument();
+
+    await act(async () => {
+      slowSessions.resolve(jsonResponse({ sessions: [projectOneSessionFixture()] }));
+      await slowSessions.promise;
+    });
+
+    expect(await screen.findByText('Build the API')).toBeInTheDocument();
+  });
+
+  test('keeps the sessions loading indicator over the loaded sessions section during refreshes', async () => {
+    window.history.pushState(null, '', '/sessions');
+    const slowRefreshSessions = deferred<Response>();
+    const defaultApi = mockApi();
+    let sessionsRequestCount = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/projects/project-1/sessions') {
+        sessionsRequestCount += 1;
+        if (sessionsRequestCount === 2) {
+          return slowRefreshSessions.promise;
+        }
+      }
+      return defaultApi(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    expect(await screen.findByText('Build the API')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /refresh project list/i }));
+    await waitFor(() => expect(sessionsRequestCount).toBe(2));
+
+    const sessionsTable = screen.getByRole('table');
+    const sessionsLoadingOverlay = getLoadingOverlay('Loading sessions');
+    const sessionsPanel = sessionsTable.closest('section');
+    expect(sessionsPanel).not.toBeNull();
+    expect(sessionsPanel).toContainElement(sessionsTable);
+    expect(sessionsPanel).toContainElement(sessionsLoadingOverlay);
+
+    await act(async () => {
+      slowRefreshSessions.resolve(jsonResponse({ sessions: [projectOneSessionFixture()] }));
+      await slowRefreshSessions.promise;
+    });
+
+    await waitFor(() => expect(screen.queryByText('Loading sessions')).not.toBeInTheDocument());
+  });
+
   test('renders provider profile management and opens a template-driven add profile modal', async () => {
     const fetchMock = mockApi({ providerProfilesResponse: providerProfilesFixture() });
     vi.stubGlobal('fetch', fetchMock);
@@ -344,6 +553,73 @@ describe('App', () => {
       'http://127.0.0.1:43110/api/provider/profiles',
       expect.objectContaining({ headers: { accept: 'application/json' } }),
     );
+  });
+
+  test('shows an accessible provider profile loading indicator while provider profiles are pending', async () => {
+    const slowProfiles = deferred<Response>();
+    const fetchMock = mockApi({ providerProfilesPromiseOnce: slowProfiles.promise });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
+
+    await waitFor(() => expect(wasFetched(fetchMock, '/api/provider/profiles')).toBe(true));
+    const pageHeader = getPageHeader('Providers');
+    expect(within(pageHeader).queryByText('Loading provider profiles')).not.toBeInTheDocument();
+    expect(pageHeader.querySelector('.animate-spin')).not.toBeInTheDocument();
+    const providerOverlay = getLoadingOverlay('Loading provider profiles');
+    const providerPanel = screen.getByText('Provider Profiles').closest('section');
+    expect(providerPanel).not.toBeNull();
+    expect(providerPanel).toContainElement(providerOverlay);
+
+    await act(async () => {
+      slowProfiles.resolve(jsonResponse(providerProfilesFixture()));
+      await slowProfiles.promise;
+    });
+
+    expect(await screen.findByText('OpenAI Team')).toBeInTheDocument();
+  });
+
+  test('keeps a workspace refresh indicator over the providers page content', async () => {
+    const slowProjects = deferred<Response>();
+    const defaultApi = mockApi();
+    let projectRequestCount = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/projects') {
+        projectRequestCount += 1;
+        if (projectRequestCount === 2) {
+          return slowProjects.promise;
+        }
+      }
+      return defaultApi(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
+    expect(await screen.findByText('OpenAI Team')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /refresh project list/i }));
+    await waitFor(() => expect(projectRequestCount).toBe(2));
+
+    const providerOverlay = getLoadingOverlay('Refreshing workspace');
+    const providerPanel = screen.getByText('Provider Profiles').closest('section');
+    expect(providerPanel).not.toBeNull();
+    expect(providerPanel).toContainElement(providerOverlay);
+
+    await act(async () => {
+      slowProjects.resolve(jsonResponse({ diagnostics: [], projects: [projectFixture()] }));
+      await slowProjects.promise;
+    });
+
+    await waitFor(() => expect(screen.queryByText('Refreshing workspace')).not.toBeInTheDocument());
   });
 
   test('shows a degraded provider profile state for older local servers', async () => {
@@ -631,6 +907,98 @@ describe('App', () => {
     );
   });
 
+  test('shows an accessible session details loading indicator while session details are pending', async () => {
+    const slowSessionDetails = deferred<Response>();
+    vi.stubGlobal('fetch', mockApi({ sessionDetailsPromiseOnce: slowSessionDetails.promise }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByRole('row', { name: /open details for build the api/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Session Details' });
+    const sessionDetailsOverlay = getLoadingOverlay('Loading session details', within(dialog));
+    expect(dialog).toContainElement(sessionDetailsOverlay);
+    expect(sessionDetailsOverlay.querySelector('.loading-overlay-card')).toBeInTheDocument();
+
+    await act(async () => {
+      slowSessionDetails.resolve(jsonResponse(sessionDetailsFixture()));
+      await slowSessionDetails.promise;
+    });
+
+    expect(await screen.findByRole('dialog', { name: 'Session Details' })).toBeInTheDocument();
+  });
+
+  test('shows an accessible change review loading indicator while change review data is pending', async () => {
+    const slowChangeReview = deferred<Response>();
+    vi.stubGlobal('fetch', mockApi({ sessionChangesPromiseOnce: slowChangeReview.promise }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByRole('row', { name: /open details for build the api/i }));
+    const dialog = await screen.findByRole('dialog', { name: 'Session Details' });
+    await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
+
+    const changeReviewOverlay = getLoadingOverlay('Loading change review', within(dialog));
+    expect(within(dialog).getByRole('tabpanel', { name: /review changes/i })).toContainElement(changeReviewOverlay);
+    expect(changeReviewOverlay.querySelector('.loading-overlay-card')).toBeInTheDocument();
+
+    await act(async () => {
+      slowChangeReview.resolve(jsonResponse(sessionChangesFixture()));
+      await slowChangeReview.promise;
+    });
+
+    expect(await within(dialog).findByText('Changed files')).toBeInTheDocument();
+  });
+
+  test('keeps the change review loading indicator over existing review content during refreshes', async () => {
+    const slowRefresh = deferred<Response>();
+    const defaultApi = mockApi();
+    let changeReviewRequestCount = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/projects/project-1/sessions/session-1/changes') {
+        changeReviewRequestCount += 1;
+        if (changeReviewRequestCount === 2) {
+          return slowRefresh.promise;
+        }
+      }
+      return defaultApi(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByRole('row', { name: /open details for build the api/i }));
+    const dialog = await screen.findByRole('dialog', { name: 'Session Details' });
+    await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
+    expect(await within(dialog).findByText('Changed files')).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('tab', { name: /conversation/i }));
+    await user.click(within(dialog).getByRole('tab', { name: /review changes/i }));
+    await waitFor(() => expect(changeReviewRequestCount).toBe(2));
+
+    const reviewPanel = within(dialog).getByRole('tabpanel', { name: /review changes/i });
+    const changeReviewOverlay = getLoadingOverlay('Loading change review', within(reviewPanel));
+    expect(reviewPanel).toContainElement(changeReviewOverlay);
+    expect(within(reviewPanel).getByText('Changed files')).toBeInTheDocument();
+
+    await act(async () => {
+      slowRefresh.resolve(jsonResponse(sessionChangesFixture()));
+      await slowRefresh.promise;
+    });
+
+    await waitFor(() => expect(within(reviewPanel).queryByText('Loading change review')).not.toBeInTheDocument());
+  });
+
   test('shows an empty state when a session has no reviewable changed files', async () => {
     vi.stubGlobal('fetch', mockApi({ sessionChangesResponse: emptySessionChangesFixture() }));
     const user = userEvent.setup();
@@ -816,6 +1184,103 @@ describe('App', () => {
       'http://127.0.0.1:43110/api/projects/project-1/tasks/session-1/1',
       expect.objectContaining({ headers: { accept: 'application/json' } }),
     );
+  });
+
+  test('shows an accessible plans and tasks loading indicator while lists are pending', async () => {
+    const slowPlans = deferred<Response>();
+    const slowTasks = deferred<Response>();
+    vi.stubGlobal('fetch', mockApi({
+      plansPromiseOnce: slowPlans.promise,
+      tasksPromiseOnce: slowTasks.promise,
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Plans & Tasks$/i })[0]!);
+
+    const pageHeader = getPageHeader('Plans & Tasks');
+    expect(within(pageHeader).queryByText('Loading plans and tasks')).not.toBeInTheDocument();
+    expect(pageHeader.querySelector('.animate-spin')).not.toBeInTheDocument();
+    const plansTasksOverlay = getLoadingOverlay('Loading plans and tasks');
+    const loadingPanel = plansTasksOverlay.closest('section');
+    expect(loadingPanel).not.toBeNull();
+    expect(loadingPanel).toContainElement(plansTasksOverlay);
+
+    await act(async () => {
+      slowPlans.resolve(jsonResponse(plansFixture()));
+      slowTasks.resolve(jsonResponse(tasksFixture()));
+      await slowPlans.promise;
+      await slowTasks.promise;
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Plans & Tasks' })).toBeInTheDocument();
+  });
+
+  test('shows a plans and tasks loading overlay while the workspace project is pending', async () => {
+    window.history.pushState(null, '', '/plans-tasks');
+    const slowProjects = deferred<Response>();
+    const fetchMock = mockApi({ projectsPromiseOnce: slowProjects.promise });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    const pageHeader = getPageHeader('Plans & Tasks');
+    expect(within(pageHeader).queryByText('Loading workspace')).not.toBeInTheDocument();
+    expect(pageHeader.querySelector('.animate-spin')).not.toBeInTheDocument();
+    const plansTasksOverlay = getLoadingOverlay('Loading workspace');
+    const loadingPanel = plansTasksOverlay.closest('section');
+    expect(loadingPanel).not.toBeNull();
+    expect(loadingPanel).toContainElement(plansTasksOverlay);
+    expect(screen.queryByText('Select a project to inspect linked plans and tasks.')).not.toBeInTheDocument();
+
+    await act(async () => {
+      slowProjects.resolve(jsonResponse({ diagnostics: [], projects: [projectFixture()] }));
+      await slowProjects.promise;
+    });
+
+    expect(await screen.findByRole('button', { name: /Launch plan/i })).toBeInTheDocument();
+  });
+
+  test('keeps the plans and tasks loading indicator over the content area during refreshes', async () => {
+    const slowRefreshPlans = deferred<Response>();
+    const defaultApi = mockApi();
+    let plansRequestCount = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/projects/project-1/plans') {
+        plansRequestCount += 1;
+        if (plansRequestCount === 2) {
+          return slowRefreshPlans.promise;
+        }
+      }
+      return defaultApi(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Plans & Tasks$/i })[0]!);
+    expect(await screen.findByRole('heading', { name: 'Plans & Tasks' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Launch plan/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /refresh plans and tasks/i }));
+    await waitFor(() => expect(plansRequestCount).toBe(2));
+
+    const contentBoundary = document.querySelector('.plans-tasks-content');
+    const refreshOverlay = getLoadingOverlay('Refreshing plans and tasks');
+    expect(contentBoundary).toContainElement(refreshOverlay);
+    expect(contentBoundary).toContainElement(screen.getByRole('tablist', { name: /plans and tasks/i }));
+
+    await act(async () => {
+      slowRefreshPlans.resolve(jsonResponse(plansFixture()));
+      await slowRefreshPlans.promise;
+    });
+
+    await waitFor(() => expect(screen.queryByText('Refreshing plans and tasks')).not.toBeInTheDocument());
   });
 
   test('keeps plans and tasks diagnostics visible on the diagnostics route', async () => {
@@ -1029,7 +1494,8 @@ describe('App', () => {
   });
 
   test('loads the latest matching log window when filters change', async () => {
-    const fetchMock = mockApi({ logTotalLines: 1200 });
+    const slowSearch = deferred<Response>();
+    const fetchMock = mockApi({ logSearchPromiseOnce: slowSearch.promise, logTotalLines: 1200 });
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
 
@@ -1047,7 +1513,30 @@ describe('App', () => {
       expect(wasFetchedWithQuery(fetchMock, '/api/logs/search', 'tail', 'true')).toBe(true);
       expect(wasFetchedWithQuery(fetchMock, '/api/logs/search', 'level', 'warn')).toBe(true);
     });
+    const logEntries = screen.getByRole('region', { name: /log entries/i });
+    const logLoadingRegion = getLoadingLiveRegion('Loading logs');
+    const logLoadingOverlay = getLoadingOverlay('Loading logs');
+    const pageHeader = getPageHeader('System Logs');
+    expect(within(pageHeader).queryByText('Loading logs')).not.toBeInTheDocument();
+    expect(pageHeader.querySelector('.animate-spin')).not.toBeInTheDocument();
+    expect(within(pageHeader).getAllByText('session-1.txt').length).toBeGreaterThan(0);
+    expect(logEntries).not.toContainElement(logLoadingRegion);
+    expect(logLoadingOverlay).toHaveClass('log-console-loading-overlay');
+    expect(logLoadingOverlay.querySelector('.loading-overlay-card')).toBeInTheDocument();
+    expect(logLoadingRegion.closest('.log-console')).toContainElement(logEntries);
+    expect(logEntries).toHaveAttribute('aria-busy', 'true');
+
+    await act(async () => {
+      slowSearch.resolve(jsonResponse({
+        ...logsFixture({ count: 500, start: 700, totalLines: 1200 }),
+        query: '',
+        totalMatches: 1200,
+      }));
+      await slowSearch.promise;
+    });
+
     expect(await screen.findByText('line-1200')).toBeInTheDocument();
+    expect(logEntries).toHaveAttribute('aria-busy', 'false');
   });
 
   test('surfaces API diagnostics on the diagnostics route', async () => {
@@ -1073,6 +1562,50 @@ describe('App', () => {
     expect(await screen.findByText('Unable to parse global config.')).toBeInTheDocument();
     expect(screen.getByText('error')).toBeInTheDocument();
     expect(screen.getByLabelText('1 diagnostic error')).toBeInTheDocument();
+  });
+
+  test('keeps a workspace refresh indicator over the diagnostics page content', async () => {
+    const slowProjects = deferred<Response>();
+    const diagnostic = {
+      level: 'error',
+      message: 'Unable to parse global config.',
+      path: '/tmp/.openclaude.json',
+    };
+    const defaultApi = mockApi({ projectDiagnostics: [diagnostic] });
+    let projectRequestCount = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/projects') {
+        projectRequestCount += 1;
+        if (projectRequestCount === 2) {
+          return slowProjects.promise;
+        }
+      }
+      return defaultApi(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /Diagnostics/i })[0]!);
+    expect(await screen.findByText('Unable to parse global config.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /refresh project list/i }));
+    await waitFor(() => expect(projectRequestCount).toBe(2));
+
+    const diagnosticsOverlay = getLoadingOverlay('Refreshing workspace');
+    const diagnosticsPanel = screen.getByText('Unable to parse global config.').closest('section');
+    expect(diagnosticsPanel).not.toBeNull();
+    expect(diagnosticsPanel).toContainElement(diagnosticsOverlay);
+
+    await act(async () => {
+      slowProjects.resolve(jsonResponse({ diagnostics: [diagnostic], projects: [projectFixture()] }));
+      await slowProjects.promise;
+    });
+
+    await waitFor(() => expect(screen.queryByText('Refreshing workspace')).not.toBeInTheDocument());
   });
 
   test('scopes log and project diagnostics to the selected project', async () => {
@@ -1210,17 +1743,25 @@ type MockApiOptions = {
   failTaskDetails?: boolean;
   failLogWindowStartOnce?: number;
   logTotalLines?: number;
+  logSearchPromiseOnce?: Promise<Response>;
   omitOverviewUsageSeries?: boolean;
   overviewUsageSeries?: unknown[];
+  plansPromiseOnce?: Promise<Response>;
   plansResponse?: unknown;
   projectDiagnostics?: unknown[];
+  projectsPromiseOnce?: Promise<Response>;
   projects?: unknown[];
   failSessionChangesOnce?: boolean;
+  providerProfilesPromiseOnce?: Promise<Response>;
   providerProfilesResponse?: unknown;
   providerProfilesStatus?: number;
+  sessionChangesPromiseOnce?: Promise<Response>;
   sessionChangesStatus?: number;
   sessionChangesResponse?: unknown;
+  sessionDetailsPromiseOnce?: Promise<Response>;
   sessionDetails?: unknown;
+  sessionsPromiseOnce?: Promise<Response>;
+  tasksPromiseOnce?: Promise<Response>;
   tasksResponse?: unknown;
 };
 
@@ -1229,6 +1770,14 @@ function mockApi(options: MockApiOptions = {}) {
   let failedLogWindowStart = false;
   let failedPlansList = false;
   let failedSessionChanges = false;
+  let usedLogSearchPromise = false;
+  let usedPlansPromise = false;
+  let usedProjectsPromise = false;
+  let usedProviderProfilesPromise = false;
+  let usedSessionChangesPromise = false;
+  let usedSessionDetailsPromise = false;
+  let usedSessionsPromise = false;
+  let usedTasksPromise = false;
 
   return vi.fn(async (input: RequestInfo | URL) => {
     const requestUrl = new URL(String(input), baseUrl);
@@ -1244,6 +1793,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/projects') {
+      if (options.projectsPromiseOnce && !usedProjectsPromise) {
+        usedProjectsPromise = true;
+        return options.projectsPromiseOnce;
+      }
       return jsonResponse({
         diagnostics: options.projectDiagnostics ?? [],
         projects: options.projects ?? [projectFixture()],
@@ -1281,6 +1834,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/projects/project-1/sessions') {
+      if (options.sessionsPromiseOnce && !usedSessionsPromise) {
+        usedSessionsPromise = true;
+        return options.sessionsPromiseOnce;
+      }
       return jsonResponse({
         sessions: [
           {
@@ -1301,6 +1858,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/provider/profiles') {
+      if (options.providerProfilesPromiseOnce && !usedProviderProfilesPromise) {
+        usedProviderProfilesPromise = true;
+        return options.providerProfilesPromiseOnce;
+      }
       if (options.providerProfilesStatus) {
         return jsonResponse({ error: `Injected provider profiles ${options.providerProfilesStatus}` }, options.providerProfilesStatus);
       }
@@ -1308,10 +1869,18 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/projects/project-1/sessions/session-1') {
+      if (options.sessionDetailsPromiseOnce && !usedSessionDetailsPromise) {
+        usedSessionDetailsPromise = true;
+        return options.sessionDetailsPromiseOnce;
+      }
       return jsonResponse(options.sessionDetails ?? sessionDetailsFixture());
     }
 
     if (path === '/api/projects/project-1/sessions/session-1/changes') {
+      if (options.sessionChangesPromiseOnce && !usedSessionChangesPromise) {
+        usedSessionChangesPromise = true;
+        return options.sessionChangesPromiseOnce;
+      }
       if (options.failSessionChangesOnce && !failedSessionChanges) {
         failedSessionChanges = true;
         return jsonResponse({ error: 'Injected change review failure' }, 500);
@@ -1323,6 +1892,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/projects/project-1/plans') {
+      if (options.plansPromiseOnce && !usedPlansPromise) {
+        usedPlansPromise = true;
+        return options.plansPromiseOnce;
+      }
       if (options.failPlansListOnce && !failedPlansList) {
         failedPlansList = true;
         return jsonResponse({ error: 'Injected plans failure' }, 500);
@@ -1338,6 +1911,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/projects/project-1/tasks') {
+      if (options.tasksPromiseOnce && !usedTasksPromise) {
+        usedTasksPromise = true;
+        return options.tasksPromiseOnce;
+      }
       return jsonResponse(options.tasksResponse ?? tasksFixture());
     }
 
@@ -1371,6 +1948,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/logs/search') {
+      if (options.logSearchPromiseOnce && !usedLogSearchPromise) {
+        usedLogSearchPromise = true;
+        return options.logSearchPromiseOnce;
+      }
       const projectId = requestUrl.searchParams.get('projectId');
       const requestedCount = Number(requestUrl.searchParams.get('count') ?? 250);
       const totalMatches = options.logTotalLines ?? 1;

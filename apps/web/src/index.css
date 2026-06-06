@@ -288,6 +288,93 @@ body {
   box-shadow: 0 1px 0 rgb(0 0 0 / 3%);
 }
 
+.loading-boundary {
+  position: relative;
+}
+
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgb(250 249 245 / 88%), rgb(245 240 232 / 80%));
+  padding: 24px;
+  pointer-events: auto;
+}
+
+.loading-overlay-card {
+  border: 1px solid rgb(204 120 92 / 32%);
+  border-radius: 8px;
+  background: var(--bg-canvas);
+  box-shadow: 0 18px 42px rgb(20 20 19 / 16%);
+  color: var(--text-ink);
+  padding: 11px 14px;
+}
+
+.loading-overlay-state {
+  color: inherit;
+  padding: 0;
+}
+
+.loading-overlay-state svg {
+  color: #cc785c;
+}
+
+.loading-overlay-code {
+  background: linear-gradient(180deg, rgb(24 23 21 / 80%), rgb(24 23 21 / 70%));
+  color: var(--code-panel-text);
+}
+
+.loading-overlay-code .loading-overlay-card {
+  border-color: rgb(204 120 92 / 42%);
+  background: var(--code-panel-elevated);
+  box-shadow: 0 18px 46px rgb(0 0 0 / 34%);
+}
+
+.section-loading-placeholder {
+  min-height: 220px;
+}
+
+.sessions-loading-placeholder {
+  min-height: 240px;
+}
+
+.provider-profiles-loading-placeholder {
+  min-height: 360px;
+}
+
+.plans-tasks-initial-placeholder {
+  min-height: 360px;
+}
+
+.plans-tasks-detail-loading-placeholder {
+  min-height: 360px;
+}
+
+.modal-loading-placeholder {
+  min-height: 300px;
+}
+
+.dark .loading-overlay {
+  background: linear-gradient(180deg, rgb(24 23 21 / 82%), rgb(31 30 27 / 74%));
+}
+
+.dark .loading-overlay-card {
+  border-color: rgb(204 120 92 / 40%);
+  background: var(--bg-surface-card);
+  box-shadow: 0 18px 46px rgb(0 0 0 / 36%);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .loading-overlay {
+    -webkit-backdrop-filter: blur(3px);
+    backdrop-filter: blur(3px);
+  }
+}
+
 .page-header {
   display: flex;
   min-height: 98px;
@@ -390,6 +477,13 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+}
+
+.control-center-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  border-radius: 8px;
 }
 
 .project-overview-panel {
@@ -1068,6 +1162,11 @@ body {
   font-weight: 600;
 }
 
+.log-view-shell {
+  position: relative;
+  background: var(--code-panel-bg);
+}
+
 .log-view {
   max-height: min(64vh, 720px);
   min-height: 320px;
@@ -1077,6 +1176,14 @@ body {
   position: relative;
   scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-width: thin;
+}
+
+.log-console-loading-overlay {
+  z-index: 35;
+}
+
+.log-loading-placeholder {
+  min-height: 286px;
 }
 
 .log-view::-webkit-scrollbar {
@@ -1422,6 +1529,13 @@ body {
   display: grid;
   grid-template-columns: 1fr;
   gap: 16px;
+}
+
+.plans-tasks-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  border-radius: 8px;
 }
 
 .plans-tasks-pane {
