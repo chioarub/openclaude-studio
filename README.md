@@ -169,8 +169,8 @@ By default, the server binds to `127.0.0.1` and listens on port `43110`.
 | `OPENCLAUDE_STUDIO_PORT` | `43110` | Port for the local API server. |
 | `OPENCLAUDE_STUDIO_ALLOWED_ORIGINS` | official hosted app plus loopback browser origins | Comma-separated additional hosted web origins allowed to call the local API. |
 | `OPENCLAUDE_STUDIO_TOKEN` | unset | Optional API token for custom callers or deployments with their own access flow. The bundled web UI does not prompt for tokens. |
-| `OPENCLAUDE_CONFIG_DIR` | `~/.openclaude` | OpenClaude config directory override (preferred). Studio reads the same root OpenClaude uses, including the global `.openclaude.json` file inside it. A legacy `.claude.json` or `.config.json` in the same directory is used as a fallback when the modern file is missing. |
-| `CLAUDE_CONFIG_DIR` | `~/.openclaude` | OpenClaude config directory override (legacy alias). Honored only when `OPENCLAUDE_CONFIG_DIR` is unset. If both are set to different values, `OPENCLAUDE_CONFIG_DIR` wins and Studio surfaces a warning in `/api/projects` diagnostics. |
+| `OPENCLAUDE_CONFIG_DIR` | `~/.openclaude` | OpenClaude config directory override (preferred). Studio reads the same root OpenClaude uses, including the global `.openclaude.json` file inside it. `.config.json` is checked first; under an override, `.claude.json` is a legacy fallback if the modern file is missing. |
+| `CLAUDE_CONFIG_DIR` | `~/.openclaude` | OpenClaude config directory override (legacy alias). Honored only when `OPENCLAUDE_CONFIG_DIR` is unset or blank. If both are set to different values, `OPENCLAUDE_CONFIG_DIR` wins and Studio surfaces a warning in `/api/projects` diagnostics. |
 
 The official hosted app at `https://openclaude-studio.pages.dev` is allowed by default. If you host the web UI somewhere else, add that origin:
 

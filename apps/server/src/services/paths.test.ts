@@ -173,6 +173,19 @@ describe('resolveOpenClaudeConfigDir', () => {
     expect(result.conflict).toBe(false);
   });
 
+  test('does not report a conflict when values are Unicode-equivalent (NFD vs NFC)', () => {
+    // 'café' as composed (NFC) vs decomposed (NFD). Same path, different bytes.
+    const nfc = '/tmp/café'.normalize('NFC');
+    const nfd = '/tmp/café'.normalize('NFD');
+    const result = resolve({
+      OPENCLAUDE_CONFIG_DIR: nfc,
+      CLAUDE_CONFIG_DIR: nfd,
+    }, { existsSync: () => false });
+
+    expect(result.conflict).toBe(false);
+    expect(result.openClaudeHome).toBe(nfc);
+  });
+
   test('treats empty-string values as unset', () => {
     const result = resolve({ OPENCLAUDE_CONFIG_DIR: '', CLAUDE_CONFIG_DIR: '' }, { existsSync: () => false });
 

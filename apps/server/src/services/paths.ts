@@ -31,6 +31,17 @@ const PREFERRED_CONFIG_DIR_ENV = 'OPENCLAUDE_CONFIG_DIR';
 const LEGACY_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
 
 /**
+ * Trims and Unicode-normalizes a config-dir env value. Used at the boundary so
+ * conflict detection and home resolution see the same canonical form: an NFD
+ * override and its NFC equivalent must not be treated as different paths.
+ * Returns `undefined` for empty/whitespace values (treated as unset).
+ */
+function normalizeConfigDirValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed.normalize('NFC') : undefined;
+}
+
+/**
  * Resolves which value (preferred or legacy) to use for the OpenClaude config
  * root, mirroring upstream OpenClaude precedence.
  *
@@ -42,6 +53,7 @@ const LEGACY_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
  *   common cause of "wrong root" bugs and upstream's untrimmed value would
  *   simply resolve to a nonexistent directory. This is a deliberate,
  *   user-friendlier divergence from upstream.
+ * - Values are NFC-normalized so Unicode-equivalent overrides compare equal.
  * - When both are set and differ, the preferred variable wins.
  *
  * Exported for tests. Returns `undefined` when neither variable is set.
@@ -50,8 +62,8 @@ export function resolveConfigDirEnv(env: {
   openClaudeConfigDir?: string;
   legacyConfigDir?: string;
 }): string | undefined {
-  const open = env.openClaudeConfigDir?.trim() || undefined;
-  const legacy = env.legacyConfigDir?.trim() || undefined;
+  const open = normalizeConfigDirValue(env.openClaudeConfigDir);
+  const legacy = normalizeConfigDirValue(env.legacyConfigDir);
   return open || legacy || undefined;
 }
 
@@ -115,8 +127,10 @@ export function overridesConflict(
  *   upstream migrates those installs to the modern filename.
  *
  * No filesystem writes. `existsSync` is a stat-style check used only to pick
- * between filenames and to detect the legacy-directory fallback; it never
- * follows symlinks and never authorizes a read.
+ * between filenames and to detect the legacy-directory fallback; it does not
+ * itself authorize any read. Note that `existsSync` follows symlinks (it
+ * returns `false` only for a broken link), so symlink safety for the actual
+ * config reads is enforced downstream in `readRawOpenClaudeConfig`, not here.
  */
 export function resolveOpenClaudeConfigDir(options: {
   home: string;
@@ -134,8 +148,8 @@ export function resolveOpenClaudeConfigDir(options: {
   const env = options.env;
   const exists = options.existsSync ?? ((path: string) => existsSync(path));
 
-  const preferred = env[PREFERRED_CONFIG_DIR_ENV]?.trim() || undefined;
-  const legacy = env[LEGACY_CONFIG_DIR_ENV]?.trim() || undefined;
+  const preferred = normalizeConfigDirValue(env[PREFERRED_CONFIG_DIR_ENV]);
+  const legacy = normalizeConfigDirValue(env[LEGACY_CONFIG_DIR_ENV]);
   const hasOverride = Boolean(preferred ?? legacy);
   const conflict = Boolean(
     preferred && legacy && overridesConflict(preferred, legacy),
@@ -159,9 +173,9 @@ export function resolveOpenClaudeConfigDir(options: {
   let openClaudeHome: string;
   let configRoot: string;
   if (selected) {
-    const normalized = selected.normalize('NFC');
-    openClaudeHome = normalized;
-    configRoot = normalized;
+    // `selected` is already NFC-normalized by normalizeConfigDirValue().
+    openClaudeHome = selected;
+    configRoot = selected;
   } else {
     const modernDir = join(home, '.openclaude').normalize('NFC');
     const legacyDir = join(home, '.claude').normalize('NFC');
