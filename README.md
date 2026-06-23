@@ -36,6 +36,7 @@ The current MVP line includes:
 - Read-only provider profile management with active profile inspection, validation diagnostics, and safe templates
 - Project-scoped diagnostics
 - Project-scoped debug log viewing, filtering, search, virtualized scrolling, and copy-to-clipboard for log messages
+- Background session monitoring with status counters, search, filters, project linking, and bounded redacted stdout/stderr log inspection
 - Dark and light themes
 - Visible local API URL control for custom local server ports
 - Read-only local API with no write endpoints
@@ -79,6 +80,7 @@ Local server on 127.0.0.1:43110
 ~/.openclaude/tasks/
 ~/.openclaude/file-history/
 ~/.openclaude/debug/
+~/.openclaude/bg-sessions/
 ```
 
 The web UI can run locally during development or be hosted as static assets. The server should run on the same machine as OpenClaude because it reads local OpenClaude files.

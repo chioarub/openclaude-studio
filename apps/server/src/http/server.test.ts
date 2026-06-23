@@ -835,6 +835,96 @@ describe('HTTP server', () => {
       ),
     ).toBe(true);
   });
+
+  test('returns an empty background sessions list when none exist', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-bg-'));
+    const server = await testServer(home);
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/background-sessions',
+      headers: tokenHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      sessions: [],
+      statusCounts: {
+        running: 0,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+    });
+  });
+
+  test('returns background session metadata and bounded logs through read-only endpoints', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-bg-'));
+    const sessionsRoot = join(home, '.openclaude', 'bg-sessions');
+    await mkdir(join(sessionsRoot, 'sessions'), { recursive: true });
+    await mkdir(join(sessionsRoot, 'logs'), { recursive: true });
+    await writeFile(
+      join(sessionsRoot, 'sessions', 'abc12345.json'),
+      JSON.stringify({
+        id: 'abc12345',
+        name: 'my-bg-task',
+        pid: 4242,
+        cwd: '/tmp/project',
+        status: 'running',
+        provider: 'anthropic',
+        model: 'claude-sonnet-4',
+        sessionId: 'sess-001',
+        startedAt: '2026-06-01T10:00:00.000Z',
+        updatedAt: '2026-06-01T10:05:00.000Z',
+        command: ['openclaude', '--print', '--bg'],
+      }),
+      'utf8',
+    );
+    await writeFile(
+      join(sessionsRoot, 'logs', 'abc12345.out.log'),
+      ['starting', 'OPENAI_API_KEY=sk-leak calling'].join('\n'),
+      'utf8',
+    );
+    const server = await testServer(home);
+
+    const listResponse = await server.inject({
+      method: 'GET',
+      url: '/api/background-sessions',
+      headers: tokenHeaders(),
+    });
+
+    expect(listResponse.statusCode).toBe(200);
+    const listBody = listResponse.json() as { sessions: Array<{ id: string; recordedStatus: string }> };
+    expect(listBody.sessions).toHaveLength(1);
+    expect(listBody.sessions[0]).toMatchObject({ id: 'abc12345', recordedStatus: 'running' });
+
+    const logsResponse = await server.inject({
+      method: 'GET',
+      url: '/api/background-sessions/abc12345/logs?stream=stdout&tail=true&count=1',
+      headers: tokenHeaders(),
+    });
+
+    expect(logsResponse.statusCode).toBe(200);
+    const logsBody = logsResponse.json() as { entries: Array<{ text: string }>; totalLines: number };
+    expect(logsBody.totalLines).toBe(2);
+    expect(logsBody.entries).toHaveLength(1);
+    expect(logsBody.entries[0]?.text).toBe('OPENAI_API_KEY=<redacted> calling');
+  });
+
+  test('rejects unsafe background session ids in the logs endpoint', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-bg-'));
+    const server = await testServer(home);
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/background-sessions/..secret/logs',
+      headers: tokenHeaders(),
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
 });
 
 async function testServer(home = '/tmp/ocs-empty-home'): Promise<FastifyInstance> {

@@ -40,6 +40,7 @@ import {
   ShieldCheck,
   Sun,
   Terminal,
+  TerminalSquare,
   X,
   XCircle,
   type LucideIcon,
@@ -65,6 +66,7 @@ import type {
 import { ApiRequestError, createApiClient, normalizeBaseUrl, type ApiClient } from './api';
 import { SessionDetailsModal } from './components/SessionDetailsModal';
 import { PlansTasksPage } from './components/PlansTasksPage';
+import { BackgroundSessionsPage } from './components/BackgroundSessionsPage';
 import { LoadingOverlay, LoadingSpinner } from './components/LoadingState';
 
 const serverUrlStorageKey = 'openclaude-studio:server-url';
@@ -150,6 +152,13 @@ const appRoutes: AppRoute[] = [
     path: '/providers',
     group: 'global',
     icon: Server,
+  },
+  {
+    name: 'Background',
+    shortName: 'BG Sessions',
+    path: '/background-sessions',
+    group: 'global',
+    icon: TerminalSquare,
   },
   {
     name: 'Logs',
@@ -504,6 +513,10 @@ function StudioApp() {
                   workspaceLoadingLabel={loadingLabel}
                 />
               }
+            />
+            <Route
+              path="/background-sessions"
+              element={<BackgroundSessionsPage api={api} />}
             />
             <Route
               path="/logs"

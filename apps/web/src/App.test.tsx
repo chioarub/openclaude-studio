@@ -1733,6 +1733,122 @@ describe('App', () => {
     expect(screen.queryByText('OpenAI')).not.toBeInTheDocument();
     expect(screen.queryByText('Project B stale session')).not.toBeInTheDocument();
   });
+
+  test('renders the background sessions page with sessions and status counters', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const fetchMock = mockApi({
+      backgroundSessions: [
+        {
+          id: 'bg-running-001',
+          shortId: 'bg-runni',
+          name: 'long-task',
+          pid: 4242,
+          cwd: '/tmp/project',
+          recordedStatus: 'running',
+          terminal: false,
+          processPresence: 'unknown',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          sessionId: 'sess-1',
+          startedAt: '2026-06-01T10:00:00.000Z',
+          updatedAt: '2026-06-01T10:05:00.000Z',
+          durationMs: 300000,
+          commandSummary: { binary: 'openclaude', flagCount: 2, truncated: false },
+          project: null,
+          sessionLink: null,
+          stdoutLogAvailable: true,
+          stderrLogAvailable: false,
+        },
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Background Sessions' })).toBeInTheDocument();
+    expect(await screen.findByText('long-task')).toBeInTheDocument();
+    expect(screen.getByText('1 session')).toBeInTheDocument();
+  });
+
+  test('shows an empty state when no background sessions exist', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const fetchMock = mockApi();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByText('No background sessions found')).toBeInTheDocument();
+  });
+
+  test('shows a degraded state when the local server is older', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const fetchMock = mockApi({ backgroundSessionsStatus: 404 });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    expect(
+      await screen.findByText('Background session monitoring requires a newer local server.'),
+    ).toBeInTheDocument();
+  });
+
+  test('opens a detail panel with bounded redacted logs on row click', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
+    const fetchMock = mockApi({
+      backgroundSessions: [
+        {
+          id: 'bg-logs-001',
+          shortId: 'bg-logs',
+          name: 'with-logs',
+          pid: 1,
+          cwd: '/tmp',
+          recordedStatus: 'running',
+          terminal: false,
+          processPresence: 'unknown',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          sessionId: null,
+          startedAt: '2026-06-01T10:00:00.000Z',
+          updatedAt: '2026-06-01T10:05:00.000Z',
+          durationMs: 300000,
+          commandSummary: { binary: 'openclaude', flagCount: 1, truncated: false },
+          project: null,
+          sessionLink: null,
+          stdoutLogAvailable: true,
+          stderrLogAvailable: false,
+        },
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+      backgroundLogEntries: [
+        { id: 'bg-logs-001:stdout:1', lineNumber: 1, text: 'OPENAI_API_KEY=<redacted> leak' },
+      ],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Background Sessions' });
+    await user.click(screen.getByText('with-logs'));
+
+    expect(await screen.findByRole('dialog', { name: /with-logs details/i })).toBeInTheDocument();
+    expect(screen.getByText('OPENAI_API_KEY=<redacted> leak')).toBeInTheDocument();
+  });
 });
 
 function storageStub(kind: 'local' | 'session'): Storage {
@@ -1761,6 +1877,12 @@ function storageStub(kind: 'local' | 'session'): Storage {
 
 type MockApiOptions = {
   baseUrl?: string;
+  backgroundSessions?: unknown[];
+  backgroundStatusCounts?: unknown;
+  backgroundDiagnostics?: unknown[];
+  backgroundLogEntries?: unknown[];
+  backgroundLogsResponse?: unknown;
+  backgroundSessionsStatus?: number;
   failPlanDetails?: boolean;
   failPlansListOnce?: boolean;
   failTaskDetails?: boolean;
@@ -2002,6 +2124,39 @@ function mockApi(options: MockApiOptions = {}) {
         query: requestUrl.searchParams.get('query') ?? '',
         totalMatches,
       });
+    }
+
+    if (path === '/api/background-sessions') {
+      if (options.backgroundSessionsStatus) {
+        return jsonResponse({ error: 'Not found' }, options.backgroundSessionsStatus);
+      }
+      return jsonResponse({
+        sessions: options.backgroundSessions ?? [],
+        statusCounts: options.backgroundStatusCounts ?? {
+          running: 0,
+          unknown: 0,
+          exited: 0,
+          failed: 0,
+          stale: 0,
+          killed: 0,
+        },
+        diagnostics: options.backgroundDiagnostics ?? [],
+      });
+    }
+
+    if (path.startsWith('/api/background-sessions/') && path.endsWith('/logs')) {
+      return jsonResponse(
+        options.backgroundLogsResponse ?? {
+          sessionId: 'bg-1',
+          stream: requestUrl.searchParams.get('stream') === 'stderr' ? 'stderr' : 'stdout',
+          entries: options.backgroundLogEntries ?? [],
+          start: 0,
+          count: 100,
+          totalLines: options.backgroundLogEntries?.length ?? 0,
+          truncated: false,
+          diagnostics: [],
+        },
+      );
     }
 
     return jsonResponse({ error: 'Not found' }, 404);

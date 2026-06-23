@@ -18,6 +18,7 @@ import {
   readProjectSummaries,
   readProjectSummariesWithDiagnostics,
 } from '../services/openclaudeData.js';
+import { listBackgroundSessions, readBackgroundSessionLogs, type BackgroundLogWindowRequest } from '../services/backgroundSessions.js';
 import { readProviderProfiles } from '../services/providerProfiles.js';
 import { listLogFiles, readLogWindow, searchLogs, type LogFileScope, type LogSearchRequest } from '../services/logs.js';
 import { listProjectPlans, readProjectPlan } from '../services/plans.js';
@@ -216,6 +217,24 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
     const scope = await logScopeFromRequest(paths, request);
     return searchLogs(paths, queryString(request, 'fileName'), logSearchRequest(request), scope);
   });
+
+  app.get('/api/background-sessions', async () => listBackgroundSessions(paths));
+
+  app.get<{ Params: { sessionId: string } }>(
+    '/api/background-sessions/:sessionId/logs',
+    async (request) => {
+      const params: BackgroundLogWindowRequest = {
+        stream: queryString(request, 'stream') === 'stderr' ? 'stderr' : 'stdout',
+      };
+      const start = queryNumber(request, 'start');
+      const count = queryNumber(request, 'count');
+      const tail = queryString(request, 'tail') === 'true';
+      if (start !== undefined) params.start = start;
+      if (count !== undefined) params.count = count;
+      if (tail) params.tail = true;
+      return readBackgroundSessionLogs(paths, request.params.sessionId, params);
+    },
+  );
 
   return app;
 }
