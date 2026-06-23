@@ -141,7 +141,8 @@ Options:
 Environment:
   OPENCLAUDE_STUDIO_ALLOWED_ORIGINS   Comma-separated additional hosted frontend origins.
   OPENCLAUDE_STUDIO_TOKEN             Optional API token for custom clients.
-  CLAUDE_CONFIG_DIR                   Override OpenClaude config directory.
+  OPENCLAUDE_CONFIG_DIR               Override OpenClaude config directory (preferred).
+  CLAUDE_CONFIG_DIR                   Override OpenClaude config directory (legacy alias).
 `);
 }
 
