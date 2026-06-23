@@ -218,9 +218,19 @@ export async function readBackgroundSessionLogs(
   // to the original file so clients see where each line actually lives.
   const lineOffset = originalLineCount - lines.length;
 
-  const start = request.tail
-    ? Math.max(0, lines.length - requestedCount)
-    : Math.min(requestedStart, lines.length);
+  // For non-tail requests, translate the client's start from the original
+  // coordinate space into the retained window. If start falls before the
+  // retained window (oldest lines were dropped), there is nothing to return
+  // at that position — surface an empty window with the original totalLines so
+  // clients can decide to page forward.
+  let start: number;
+  if (request.tail) {
+    start = Math.max(0, lines.length - requestedCount);
+  } else if (requestedStart < lineOffset) {
+    start = lines.length;
+  } else {
+    start = Math.min(requestedStart - lineOffset, lines.length);
+  }
 
   const end = Math.min(lines.length, start + requestedCount);
   const slice = lines.slice(start, end);
@@ -234,11 +244,16 @@ export async function readBackgroundSessionLogs(
     };
   });
 
+  // Report start in the original coordinate space. When the client asked for a
+  // position before the retained window, honor their request rather than
+  // reporting a confusing end-of-file position.
+  const reportedStart = entries.length === 0 && !request.tail ? requestedStart : start + lineOffset;
+
   return {
     sessionId,
     stream,
     entries,
-    start: start + lineOffset,
+    start: reportedStart,
     count: requestedCount,
     totalLines: originalLineCount,
     truncated,

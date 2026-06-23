@@ -1819,11 +1819,21 @@ describe('App', () => {
     render(<App />);
 
     await screen.findByRole('heading', { name: 'Background Sessions' });
-    const row = screen.getByRole('button', { name: /Open details for kb-task/i });
+
+    // Enter activation
+    let row = screen.getByRole('button', { name: /Open details for kb-task/i });
     row.focus();
     await user.keyboard('{Enter}');
+    let dialog = await screen.findByRole('dialog', { name: /kb-task details/i });
+    expect(dialog).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Close detail' }));
 
-    expect(await screen.findByRole('dialog', { name: /kb-task details/i })).toBeInTheDocument();
+    // Space activation (separate branch with preventDefault to avoid page scroll)
+    row = screen.getByRole('button', { name: /Open details for kb-task/i });
+    row.focus();
+    await user.keyboard(' ');
+    dialog = await screen.findByRole('dialog', { name: /kb-task details/i });
+    expect(dialog).toBeInTheDocument();
   });
 
   test('shows an empty state when no background sessions exist', async () => {
@@ -1898,7 +1908,7 @@ describe('App', () => {
     expect(screen.getByText('OPENAI_API_KEY=<redacted> leak')).toBeInTheDocument();
   });
 
-  test('opens the linked session transcript and switches to the sessions route', async () => {
+  test('opens the linked session transcript and surfaces the details modal', async () => {
     window.history.pushState(null, '', '/background-sessions');
     const user = userEvent.setup();
     const fetchMock = mockApi({
@@ -1914,13 +1924,13 @@ describe('App', () => {
           processPresence: 'unknown',
           provider: 'anthropic',
           model: 'claude-sonnet-4',
-          sessionId: 'transcript-xyz',
+          sessionId: 'session-1',
           startedAt: '2026-06-01T10:00:00.000Z',
           updatedAt: '2026-06-01T10:05:00.000Z',
           durationMs: 300000,
           commandSummary: { binary: 'openclaude', flagCount: 1, truncated: false },
-          project: { projectId: 'proj-A', projectName: 'Project A' },
-          sessionLink: { projectId: 'proj-A', sessionId: 'transcript-xyz' },
+          project: { projectId: 'project-1', projectName: 'project-a' },
+          sessionLink: { projectId: 'project-1', sessionId: 'session-1' },
           stdoutLogAvailable: true,
           stderrLogAvailable: false,
         },
@@ -1933,6 +1943,7 @@ describe('App', () => {
         stale: 0,
         killed: 0,
       },
+      sessionDetails: legacySessionDetailsFixture(),
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -1944,9 +1955,11 @@ describe('App', () => {
 
     await user.click(screen.getByRole('button', { name: 'Open session transcript' }));
 
-    // The handler switches to the sessions route. (The selected session loads
-    // its transcript via the existing session-details modal.)
+    // The handler selects proj-A + session-1 and routes to /sessions, which
+    // surfaces the existing session-details modal with the linked transcript.
     await waitFor(() => expect(window.location.pathname).toBe('/sessions'));
+    const transcriptDialog = await screen.findByRole('dialog', { name: /session details/i });
+    expect(transcriptDialog).toBeInTheDocument();
   });
 });
 

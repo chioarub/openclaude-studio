@@ -444,4 +444,48 @@ describe('readBackgroundSessionLogs', () => {
       expect.objectContaining({ level: 'warn', message: expect.stringContaining('truncated') }),
     );
   });
+
+  test('translates explicit start into the retained window after line-cap truncation', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-bg-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(logsDir(paths), { recursive: true });
+    // 6000 short lines — the oldest 1000 are dropped to honor MAX_LOG_LINES.
+    const lines = Array.from({ length: 6000 }, (_, i) => `n${i}`);
+    await writeFile(join(logsDir(paths), 'manylines.out.log'), lines.join('\n'), 'utf8');
+
+    // A start in the retained window's original-coordinate space must return the
+    // matching lines, not an empty slice. Previously `start` was clamped to the
+    // retained window length (5000), so start:5500 returned nothing.
+    const result = await readBackgroundSessionLogs(paths, 'manylines', {
+      start: 5500,
+      count: 2,
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.totalLines).toBe(6000);
+    expect(result.start).toBe(5500);
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries[0]?.text).toBe('n5500');
+    expect(result.entries[0]?.lineNumber).toBe(5501);
+    expect(result.entries[1]?.lineNumber).toBe(5502);
+  });
+
+  test('returns empty entries when start is before the retained window after truncation', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-bg-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(logsDir(paths), { recursive: true });
+    const lines = Array.from({ length: 6000 }, (_, i) => `n${i}`);
+    await writeFile(join(logsDir(paths), 'manylines.out.log'), lines.join('\n'), 'utf8');
+
+    // start:100 refers to a line that was dropped (the oldest 1000 are gone).
+    // The client should see an empty window with the original totalLines so it
+    // can decide to page forward.
+    const result = await readBackgroundSessionLogs(paths, 'manylines', {
+      start: 100,
+      count: 5,
+    });
+
+    expect(result.entries).toEqual([]);
+    expect(result.totalLines).toBe(6000);
+  });
 });
