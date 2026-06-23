@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 
 import type {
   BackgroundSessionLogEntry,
@@ -25,6 +24,7 @@ import { LoadingOverlay } from './LoadingState.js';
 
 type BackgroundSessionsPageProps = {
   api: ApiClient;
+  onOpenSession: (projectId: string, sessionId: string) => void;
 };
 
 type StatusOption = 'all' | BackgroundSessionStatus;
@@ -50,9 +50,7 @@ const STATUS_BADGE_STYLES: Record<BackgroundSessionStatus, string> = {
 const DEFAULT_LOG_COUNT = 100;
 const REFRESH_INTERVAL_MS = 15_000;
 
-export function BackgroundSessionsPage({ api }: BackgroundSessionsPageProps) {
-  const navigate = useNavigate();
-
+export function BackgroundSessionsPage({ api, onOpenSession }: BackgroundSessionsPageProps) {
   const [response, setResponse] = useState<BackgroundSessionsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -116,13 +114,6 @@ export function BackgroundSessionsPage({ api }: BackgroundSessionsPageProps) {
   const selected = useMemo(
     () => sessions.find((session) => session.id === selectedId) ?? null,
     [sessions, selectedId],
-  );
-
-  const handleOpenSession = useCallback(
-    (projectId: string, sessionId: string) => {
-      void navigate(`/sessions?project=${encodeURIComponent(projectId)}&session=${encodeURIComponent(sessionId)}`);
-    },
-    [navigate],
   );
 
   const headerLabel = `${sessions.length} session${sessions.length === 1 ? '' : 's'}`;
@@ -229,7 +220,7 @@ export function BackgroundSessionsPage({ api }: BackgroundSessionsPageProps) {
               api={api}
               session={selected}
               onClose={() => setSelectedId(null)}
-              onOpenSession={handleOpenSession}
+              onOpenSession={onOpenSession}
             />
           ) : null}
         </>

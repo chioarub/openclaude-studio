@@ -399,4 +399,49 @@ describe('readBackgroundSessionLogs', () => {
     expect(result.entries.map((e) => e.text)).toEqual(['line-7', 'line-8', 'line-9']);
     expect(result.start).toBe(7);
   });
+
+  test('reads oversized tail windows from the file end (most recent output)', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-bg-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(logsDir(paths), { recursive: true });
+    // ~3MB of content: 3000 lines of 1KB each. Each line ends with a unique
+    // marker so we can assert the tail reflects the newest output.
+    const lines = Array.from({ length: 3000 }, (_, i) => `L${String(i).padStart(4, '0')}`.padEnd(1024, 'x'));
+    await writeFile(join(logsDir(paths), 'bigtail.out.log'), lines.join('\n'), 'utf8');
+
+    const result = await readBackgroundSessionLogs(paths, 'bigtail', { tail: true, count: 3 });
+
+    expect(result.truncated).toBe(true);
+    expect(result.entries).toHaveLength(3);
+    // The newest lines are L2997..L2999. If the read started at offset 0
+    // (the old bug), the tail would be from the first ~2MB of the file
+    // instead (around L1998). Line numbers are relative to the read tail
+    // window because the original file's line count is not knowable without
+    // reading the entire oversized file.
+    expect(result.entries[2]?.text.startsWith('L2999')).toBe(true);
+    expect(result.totalLines).toBe(result.entries[2]?.lineNumber);
+  });
+
+  test('reports line-limit truncation and preserves original line numbers', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-bg-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(logsDir(paths), { recursive: true });
+    // 6000 short lines — under the byte cap but over the 5000-line cap.
+    const lines = Array.from({ length: 6000 }, (_, i) => `n${i}`);
+    await writeFile(join(logsDir(paths), 'manylines.out.log'), lines.join('\n'), 'utf8');
+
+    const result = await readBackgroundSessionLogs(paths, 'manylines', { tail: true, count: 3 });
+
+    expect(result.truncated).toBe(true);
+    expect(result.totalLines).toBe(6000);
+    expect(result.entries).toHaveLength(3);
+    // Line numbers are relative to the original file (we read all lines, just
+    // dropped the oldest 1000 to honor the line cap).
+    expect(result.entries[0]?.text).toBe('n5997');
+    expect(result.entries[0]?.lineNumber).toBe(5998);
+    expect(result.entries[2]?.lineNumber).toBe(6000);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('truncated') }),
+    );
+  });
 });

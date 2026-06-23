@@ -196,35 +196,51 @@ export async function readBackgroundSessionLogs(
   const logPath = join(logsDir, `${sessionId}.${stream === 'stderr' ? 'err' : 'out'}.log`);
 
   const diagnostics: Diagnostic[] = [];
-  const { lines, byteTruncated } = await readBoundedLogLines(logPath, diagnostics);
+  const { lines, byteTruncated, lineTruncated, originalLineCount } = await readBoundedLogLines(
+    logPath,
+    diagnostics,
+  );
 
   const requestedCount = normalizeCount(request.count);
   const requestedStart = normalizeStart(request.start);
-  const totalLines = lines.length;
+  const truncated = byteTruncated || lineTruncated;
 
-  const effectiveTotalLines = Math.min(totalLines, MAX_LOG_LINES);
-  const truncated = byteTruncated || totalLines > MAX_LOG_LINES;
+  if (lineTruncated && !byteTruncated) {
+    diagnostics.push({
+      level: 'warn',
+      message: `Log was truncated to the most recent ${MAX_LOG_LINES} lines.`,
+      path: logPath,
+    });
+  }
+
+  // If lines were dropped to honor MAX_LOG_LINES, the kept lines are the most
+  // recent `lines.length` of the original file. Compute line numbers relative
+  // to the original file so clients see where each line actually lives.
+  const lineOffset = originalLineCount - lines.length;
 
   const start = request.tail
-    ? Math.max(0, effectiveTotalLines - requestedCount)
-    : Math.min(requestedStart, effectiveTotalLines);
+    ? Math.max(0, lines.length - requestedCount)
+    : Math.min(requestedStart, lines.length);
 
-  const end = Math.min(effectiveTotalLines, start + requestedCount);
+  const end = Math.min(lines.length, start + requestedCount);
   const slice = lines.slice(start, end);
 
-  const entries: BackgroundSessionLogEntry[] = slice.map((text, index) => ({
-    id: `${sessionId}:${stream}:${start + index + 1}`,
-    lineNumber: start + index + 1,
-    text,
-  }));
+  const entries: BackgroundSessionLogEntry[] = slice.map((text, index) => {
+    const lineNumber = lineOffset + start + index + 1;
+    return {
+      id: `${sessionId}:${stream}:${lineNumber}`,
+      lineNumber,
+      text,
+    };
+  });
 
   return {
     sessionId,
     stream,
     entries,
-    start,
+    start: start + lineOffset,
     count: requestedCount,
-    totalLines: effectiveTotalLines,
+    totalLines: originalLineCount,
     truncated,
     diagnostics,
   };
@@ -598,9 +614,16 @@ function isInside(root: string, target: string): boolean {
 type BoundedLogResult = {
   lines: string[];
   byteTruncated: boolean;
+  lineTruncated: boolean;
+  originalLineCount: number;
 };
 
-const emptyLogResult: BoundedLogResult = { lines: [], byteTruncated: false };
+const emptyLogResult: BoundedLogResult = {
+  lines: [],
+  byteTruncated: false,
+  lineTruncated: false,
+  originalLineCount: 0,
+};
 
 async function readBoundedLogLines(
   logPath: string,
@@ -658,32 +681,58 @@ async function readBoundedLogLines(
   try {
     const byteTruncated = stats.size > MAX_LOG_BYTES;
     const bytesToRead = Math.min(stats.size, MAX_LOG_BYTES);
+    // When the file exceeds the byte cap, read the tail of the file (the most
+    // recent output) so tail windows reflect current activity instead of the
+    // oldest bytes. Logs are append-only.
+    const readOffset = byteTruncated ? stats.size - MAX_LOG_BYTES : 0;
     const buffer = Buffer.alloc(bytesToRead);
-    const { bytesRead } = await handle.read(buffer, 0, bytesToRead, 0);
+    const { bytesRead } = await handle.read(buffer, 0, bytesToRead, readOffset);
     const text = buffer.subarray(0, bytesRead).toString('utf8');
 
     if (byteTruncated) {
       diagnostics.push({
         level: 'warn',
-        message: `Log file was truncated to ${MAX_LOG_BYTES} bytes.`,
+        message: `Log file was truncated to the most recent ${MAX_LOG_BYTES} bytes.`,
         path: logPath,
       });
     }
 
-    return { lines: splitAndRedact(text), byteTruncated };
+    const { lines, lineTruncated, originalLineCount } = splitAndRedact(text, byteTruncated);
+    return { lines, byteTruncated, lineTruncated, originalLineCount };
   } finally {
     await handle.close().catch(() => undefined);
   }
 }
 
-function splitAndRedact(content: string): string[] {
-  const lines = content.split(/\r?\n/);
+function splitAndRedact(
+  content: string,
+  startedMidFile: boolean,
+): {
+  lines: string[];
+  lineTruncated: boolean;
+  originalLineCount: number;
+} {
+  let lines = content.split(/\r?\n/);
   if (lines.length > 0 && lines[lines.length - 1] === '') {
     lines.pop();
   }
 
-  const limited = lines.length > MAX_LOG_LINES ? lines.slice(lines.length - MAX_LOG_LINES) : lines;
-  return limited.map((line) => redactTextSecrets(line));
+  // When the read started at a non-zero offset (byte-truncated tail), the
+  // first element is a partial line fragment — drop it so we never report a
+  // fragment as a complete log entry. Only applies when there is more than
+  // one line; a single surviving fragment is all we have.
+  if (startedMidFile && lines.length > 1) {
+    lines = lines.slice(1);
+  }
+
+  const originalLineCount = lines.length;
+  const lineTruncated = lines.length > MAX_LOG_LINES;
+  const limited = lineTruncated ? lines.slice(lines.length - MAX_LOG_LINES) : lines;
+  return {
+    lines: limited.map((line) => redactTextSecrets(line)),
+    lineTruncated,
+    originalLineCount,
+  };
 }
 
 function countStatuses(

@@ -9,7 +9,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 
 import { cn } from './lib/cn.js';
 import {
@@ -237,6 +237,7 @@ export default function App() {
 }
 
 function StudioApp() {
+  const navigate = useNavigate();
   const [baseUrl, setBaseUrl] = useState(() => normalizeBaseUrl(loadServerUrl()));
   const [selectedProjectId, setSelectedProjectId] = useState(() => loadActiveProjectId());
   const [selectedLogFile, setSelectedLogFile] = useState<string | undefined>();
@@ -263,6 +264,12 @@ function StudioApp() {
   const handlePlansTasksDiagnosticsChange = useCallback((nextDiagnostics: Diagnostic[]) => {
     setPlansTasksDiagnostics(nextDiagnostics);
   }, []);
+
+  const handleOpenBackgroundSession = useCallback((projectId: string, sessionId: string) => {
+    setSelectedProjectId(projectId);
+    setSelectedSessionId(sessionId);
+    void navigate('/sessions');
+  }, [navigate]);
 
   useEffect(() => {
     setSelectedSessionId(null);
@@ -516,7 +523,12 @@ function StudioApp() {
             />
             <Route
               path="/background-sessions"
-              element={<BackgroundSessionsPage api={api} />}
+              element={
+                <BackgroundSessionsPage
+                  api={api}
+                  onOpenSession={handleOpenBackgroundSession}
+                />
+              }
             />
             <Route
               path="/logs"

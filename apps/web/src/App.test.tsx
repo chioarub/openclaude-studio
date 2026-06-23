@@ -1849,6 +1849,57 @@ describe('App', () => {
     expect(await screen.findByRole('dialog', { name: /with-logs details/i })).toBeInTheDocument();
     expect(screen.getByText('OPENAI_API_KEY=<redacted> leak')).toBeInTheDocument();
   });
+
+  test('opens the linked session transcript and switches to the sessions route', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
+    const fetchMock = mockApi({
+      backgroundSessions: [
+        {
+          id: 'bg-linked-001',
+          shortId: 'bg-link',
+          name: 'linked-task',
+          pid: 1,
+          cwd: '/tmp',
+          recordedStatus: 'running',
+          terminal: false,
+          processPresence: 'unknown',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          sessionId: 'transcript-xyz',
+          startedAt: '2026-06-01T10:00:00.000Z',
+          updatedAt: '2026-06-01T10:05:00.000Z',
+          durationMs: 300000,
+          commandSummary: { binary: 'openclaude', flagCount: 1, truncated: false },
+          project: { projectId: 'proj-A', projectName: 'Project A' },
+          sessionLink: { projectId: 'proj-A', sessionId: 'transcript-xyz' },
+          stdoutLogAvailable: true,
+          stderrLogAvailable: false,
+        },
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Background Sessions' });
+    await user.click(screen.getByText('linked-task'));
+    expect(await screen.findByRole('dialog', { name: /linked-task details/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Open session transcript' }));
+
+    // The handler switches to the sessions route. (The selected session loads
+    // its transcript via the existing session-details modal.)
+    await waitFor(() => expect(window.location.pathname).toBe('/sessions'));
+  });
 });
 
 function storageStub(kind: 'local' | 'session'): Storage {
