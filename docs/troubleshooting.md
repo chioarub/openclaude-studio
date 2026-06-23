@@ -34,6 +34,14 @@ OpenClaude must be installed and used at least once before Studio has local data
 
 Studio reads project information from `~/.openclaude.json` and bounded transcript metadata under `~/.openclaude/projects/`. If those files are missing, malformed, or point to project paths that no longer exist, the dashboard may show an empty or degraded project list with diagnostics.
 
+## Studio shows the wrong projects
+
+Studio resolves the OpenClaude config directory the same way OpenClaude does: `OPENCLAUDE_CONFIG_DIR` takes precedence over the legacy `CLAUDE_CONFIG_DIR`. If you launch OpenClaude with one and Studio with the other, Studio will inspect a different root.
+
+If both variables are set to different values, Studio uses `OPENCLAUDE_CONFIG_DIR` and surfaces a warning in `/api/projects` diagnostics. Align the two values, or unset the one you do not want, so both tools read the same root.
+
+Studio never migrates or copies OpenClaude data. It only reads from the selected root.
+
 ## Port already in use
 
 Start the local API on another loopback port:

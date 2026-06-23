@@ -82,8 +82,33 @@ export async function readProjectSummariesWithDiagnostics(
   const sourceResult = await projectSummariesFromSources(paths, config, now);
   return {
     projects: sourceResult.projects,
-    diagnostics: [...diagnostics, ...sourceResult.diagnostics],
+    diagnostics: [
+      ...diagnostics,
+      ...sourceResult.diagnostics,
+      ...configDirConflictDiagnostics(paths),
+    ],
   };
+}
+
+/**
+ * Produces a privacy-safe diagnostic when `OPENCLAUDE_CONFIG_DIR` and
+ * `CLAUDE_CONFIG_DIR` are both set and disagree. The message intentionally
+ * contains only the variable names and the resolution outcome — never the
+ * configured path values — so it cannot leak the user's home directory or
+ * OpenClaude root location through the browser-facing API.
+ */
+function configDirConflictDiagnostics(paths: OpenClaudePaths): Diagnostic[] {
+  if (!paths.configDirResolution?.conflict) {
+    return [];
+  }
+
+  return [
+    {
+      level: 'warn',
+      message:
+        'Both OPENCLAUDE_CONFIG_DIR and CLAUDE_CONFIG_DIR are set to different values. OpenClaude Studio uses OPENCLAUDE_CONFIG_DIR (preferred) and ignores CLAUDE_CONFIG_DIR. Align the values to silence this warning.',
+    },
+  ];
 }
 
 type ProjectSummaryWithTimestamp = {

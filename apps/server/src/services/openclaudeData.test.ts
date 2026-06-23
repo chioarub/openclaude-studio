@@ -580,6 +580,70 @@ describe('OpenClaude data discovery', () => {
   });
 });
 
+describe('config directory conflict diagnostics', () => {
+  test('warns when OPENCLAUDE_CONFIG_DIR and CLAUDE_CONFIG_DIR differ', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
+    const preferred = await mkdtemp(join(tmpdir(), 'ocs-preferred-'));
+    const paths = createOpenClaudePaths({
+      home,
+      env: {
+        OPENCLAUDE_CONFIG_DIR: preferred,
+        CLAUDE_CONFIG_DIR: '/tmp/legacy-and-different',
+      },
+    });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ projects: {} }), 'utf8');
+
+    const result = await readProjectSummariesWithDiagnostics(paths, new Date('2026-06-23T00:00:00Z'));
+
+    const conflict = result.diagnostics.find(
+      diagnostic =>
+        diagnostic.level === 'warn' &&
+        diagnostic.message.includes('OPENCLAUDE_CONFIG_DIR'),
+    );
+
+    expect(conflict).toBeDefined();
+    // Privacy: the message must never embed path values.
+    expect(conflict?.message).not.toContain(preferred);
+    expect(conflict?.message).not.toContain('/tmp/legacy-and-different');
+    expect(conflict?.message).not.toContain(home);
+  });
+
+  test('does not warn when only one variable is set', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
+    const preferred = await mkdtemp(join(tmpdir(), 'ocs-preferred-'));
+    const paths = createOpenClaudePaths({
+      home,
+      env: { OPENCLAUDE_CONFIG_DIR: preferred },
+    });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ projects: {} }), 'utf8');
+
+    const result = await readProjectSummariesWithDiagnostics(paths, new Date('2026-06-23T00:00:00Z'));
+
+    expect(
+      result.diagnostics.some(diagnostic => diagnostic.message.includes('CLAUDE_CONFIG_DIR')),
+    ).toBe(false);
+  });
+
+  test('does not warn when both variables are set to the same value', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-data-'));
+    const shared = await mkdtemp(join(tmpdir(), 'ocs-shared-'));
+    const paths = createOpenClaudePaths({
+      home,
+      env: {
+        OPENCLAUDE_CONFIG_DIR: shared,
+        CLAUDE_CONFIG_DIR: shared,
+      },
+    });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ projects: {} }), 'utf8');
+
+    const result = await readProjectSummariesWithDiagnostics(paths, new Date('2026-06-23T00:00:00Z'));
+
+    expect(
+      result.diagnostics.some(diagnostic => diagnostic.message.includes('OPENCLAUDE_CONFIG_DIR')),
+    ).toBe(false);
+  });
+});
+
 function jsonl(value: unknown): string {
   return JSON.stringify(value);
 }

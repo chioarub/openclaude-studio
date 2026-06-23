@@ -30,6 +30,8 @@ The server redacts likely secrets before returning data to the browser. Current 
 
 Session Change Review can display code or configuration text from current project files and OpenClaude file-history backups. Those reads are bounded, symlink-safe, and redacted before diff generation, but redaction remains best effort. Review screenshots, copied diffs, and recordings before sharing them.
 
+When `OPENCLAUDE_CONFIG_DIR` and `CLAUDE_CONFIG_DIR` are both set and disagree, Studio emits a warning diagnostic through `/api/projects`. That specific message intentionally contains only the variable names and the resolution outcome — it never includes the configured path values, the home directory, or any local file contents. Other diagnostics in the same response (e.g. "File does not exist") may include paths by established convention; the conflict warning is deliberately more conservative because the conflict itself is the sensitive signal.
+
 Redaction is defense in depth, not a guarantee. New providers, unusual token formats, or arbitrary user content may still contain sensitive data.
 
 ## Contributor Rules

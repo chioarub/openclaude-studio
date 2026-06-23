@@ -1,22 +1,258 @@
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
 export type PathOptions = {
   home?: string;
   env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
+  existsSync?: (path: string) => boolean;
 };
 
 export type OpenClaudePaths = ReturnType<typeof createOpenClaudePaths>;
 
+/**
+ * Which environment variable (or default) provided the OpenClaude config root.
+ * Mirrors upstream OpenClaude precedence.
+ */
+export type ConfigDirSource = 'openclaude' | 'legacy' | 'default';
+
+/**
+ * Non-sensitive metadata describing how the OpenClaude config root was chosen.
+ * Suitable for diagnostics; contains no path values.
+ */
+export type ConfigDirResolution = {
+  source: ConfigDirSource;
+  conflict: boolean;
+  legacyFilenameFallback: boolean;
+  legacyDirectoryFallback: boolean;
+};
+
+const PREFERRED_CONFIG_DIR_ENV = 'OPENCLAUDE_CONFIG_DIR';
+const LEGACY_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
+
+/**
+ * Trims and Unicode-normalizes a config-dir env value. Used at the boundary so
+ * conflict detection and home resolution see the same canonical form: an NFD
+ * override and its NFC equivalent must not be treated as different paths.
+ * Returns `undefined` for empty/whitespace values (treated as unset).
+ */
+function normalizeConfigDirValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed.normalize('NFC') : undefined;
+}
+
+/**
+ * Resolves which value (preferred or legacy) to use for the OpenClaude config
+ * root, mirroring upstream OpenClaude precedence.
+ *
+ * Rules:
+ * - `OPENCLAUDE_CONFIG_DIR` is preferred over the legacy `CLAUDE_CONFIG_DIR`.
+ * - Empty or whitespace-only values are treated as unset. Upstream's
+ *   `resolveConfigDirEnv` operates on raw values and does not trim; Studio
+ *   intentionally trims because a stray trailing newline in an env file is a
+ *   common cause of "wrong root" bugs and upstream's untrimmed value would
+ *   simply resolve to a nonexistent directory. This is a deliberate,
+ *   user-friendlier divergence from upstream.
+ * - Values are NFC-normalized so Unicode-equivalent overrides compare equal.
+ * - When both are set and differ, the preferred variable wins.
+ *
+ * Exported for tests. Returns `undefined` when neither variable is set.
+ */
+export function resolveConfigDirEnv(env: {
+  openClaudeConfigDir?: string;
+  legacyConfigDir?: string;
+}): string | undefined {
+  const open = normalizeConfigDirValue(env.openClaudeConfigDir);
+  const legacy = normalizeConfigDirValue(env.legacyConfigDir);
+  return open || legacy || undefined;
+}
+
+/**
+ * Compares two override paths for conflict detection. On Windows, filesystem
+ * paths are case-insensitive, so a case-only difference (e.g. `C:\Foo` vs
+ * `c:\foo`) points to the same directory and must not be reported as a
+ * conflict. Upstream's string compare is case-sensitive, which produces
+ * spurious warnings on Windows; Studio intentionally matches the filesystem
+ * semantics of the host platform instead.
+ *
+ * Exported for direct unit testing of the platform branch.
+ */
+export function overridesConflict(
+  preferred: string,
+  legacy: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (preferred === legacy) {
+    return false;
+  }
+  if (platform === 'win32') {
+    return preferred.toLowerCase() !== legacy.toLowerCase();
+  }
+  return true;
+}
+
+/**
+ * Resolves the OpenClaude data home and the global config file path, mirroring
+ * upstream OpenClaude's `getClaudeConfigHomeDir()` + `getGlobalClaudeFile()`
+ * read-location semantics.
+ *
+ * Two distinct paths are resolved:
+ *
+ * 1. Data home (`openClaudeHome`) — where projects/, sessions/, logs/, etc.
+ *    live. Mirrors `getClaudeConfigHomeDir`, minus the migration writes Studio
+ *    is not allowed to perform:
+ *    - With an override env var set, that value wins (preferred over legacy),
+ *      NFC-normalized.
+ *    - Without one, the default is `"<home>/.openclaude"`. When that directory
+ *      is missing and `"<home>/.claude"` exists, upstream falls back to the
+ *      legacy directory after a failed migration. Studio cannot migrate, but
+ *      reads from the same legacy directory so users with an incomplete
+ *      migration still see their data instead of an empty dashboard.
+ *
+ * 2. Config root — where the global config file lives. Mirrors
+ *    `getGlobalClaudeFile`'s `configDirEnv || homedir()`:
+ *    - With an override, the config root IS the override (file at
+ *      `"<override>/.openclaude.json"`).
+ *    - Without one, the config root is `"<home>"` (file at
+ *      `"<home>/.openclaude.json"`). Note: the config file lives directly in
+ *      home, NOT inside the `.openclaude` data directory.
+ *
+ * Global config file precedence (mirrors upstream `getGlobalClaudeFile`):
+ * - `.config.json` is probed under the **data home** (mirrors upstream's
+ *   `getClaudeConfigHomeDir()`), i.e. `"<openClaudeHome>/.config.json"`. This
+ *   is upstream's oldest-format fallback and applies in both the default and
+ *   override paths.
+ * - `.openclaude.json` is probed under the **config root**, i.e.
+ *   `"<configRoot>/.openclaude.json"`. This is the modern default.
+ * - Under an explicit config dir (override set), if the modern file is missing
+ *   and `"<configRoot>/.claude.json"` exists, fall back to the legacy
+ *   filename. The default home path does not get this fallback because
+ *   upstream migrates those installs to the modern filename.
+ *
+ * No filesystem writes. `existsSync` is a stat-style check used only to pick
+ * between filenames and to detect the legacy-directory fallback; it does not
+ * itself authorize any read. Note that `existsSync` follows symlinks (it
+ * returns `false` only for a broken link), so symlink safety for the actual
+ * config reads is enforced downstream in `readRawOpenClaudeConfig`, not here.
+ */
+export function resolveOpenClaudeConfigDir(options: {
+  home: string;
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>;
+  existsSync?: (path: string) => boolean;
+}): {
+  openClaudeHome: string;
+  openClaudeConfig: string;
+  source: ConfigDirSource;
+  conflict: boolean;
+  legacyFilenameFallback: boolean;
+  legacyDirectoryFallback: boolean;
+} {
+  const home = options.home;
+  const env = options.env;
+  const exists = options.existsSync ?? ((path: string) => existsSync(path));
+
+  const preferred = normalizeConfigDirValue(env[PREFERRED_CONFIG_DIR_ENV]);
+  const legacy = normalizeConfigDirValue(env[LEGACY_CONFIG_DIR_ENV]);
+  const hasOverride = Boolean(preferred ?? legacy);
+  const conflict = Boolean(
+    preferred && legacy && overridesConflict(preferred, legacy),
+  );
+
+  const selected = preferred ?? legacy;
+  const source: ConfigDirSource = preferred
+    ? 'openclaude'
+    : legacy
+      ? 'legacy'
+      : 'default';
+
+  // Resolve the OpenClaude data home (projects/, sessions/, etc.) and the
+  // config root (where the global config file lives). These are the same path
+  // when an override is set, but differ in the default case:
+  //   - data home defaults to <home>/.openclaude
+  //   - config root defaults to <home> (so the file is <home>/.openclaude.json)
+  // This mirrors upstream: getClaudeConfigHomeDir() returns the data home,
+  // getGlobalClaudeFile() uses `configDirEnv || homedir()` as the config root.
+  let legacyDirectoryFallback = false;
+  let openClaudeHome: string;
+  let configRoot: string;
+  if (selected) {
+    // `selected` is already NFC-normalized by normalizeConfigDirValue().
+    openClaudeHome = selected;
+    configRoot = selected;
+  } else {
+    const modernDir = join(home, '.openclaude').normalize('NFC');
+    const legacyDir = join(home, '.claude').normalize('NFC');
+    if (!exists(modernDir) && exists(legacyDir)) {
+      // Migration failed and only ~/.claude exists: upstream reads data from
+      // ~/.claude. The config file still lives at <home>/.openclaude.json (or
+      // its legacy fallbacks) because getGlobalClaudeFile uses homedir().
+      openClaudeHome = legacyDir;
+      legacyDirectoryFallback = true;
+      configRoot = home.normalize('NFC');
+    } else {
+      openClaudeHome = modernDir;
+      configRoot = home.normalize('NFC');
+    }
+  }
+
+  // Resolve the global config file. Upstream uses TWO different base paths:
+  //   - .config.json  is probed under the data home (getClaudeConfigHomeDir),
+  //                    i.e. <home>/.openclaude/.config.json (or the override).
+  //   - .openclaude.json / .claude.json  are probed under the config root
+  //                    (configDirEnv || homedir()), i.e. <home>/.openclaude.json.
+  // When an override is set, the data home and config root are the same path,
+  // so all three files are probed in the same directory. In the default case,
+  // .config.json lives inside the .openclaude data directory while the modern
+  // and legacy filenames live directly in the home directory.
+  const configJson = join(openClaudeHome, '.config.json');
+  const openClaudeJson = join(configRoot, '.openclaude.json');
+  const claudeJson = join(configRoot, '.claude.json');
+
+  let openClaudeConfig: string;
+  let legacyFilenameFallback = false;
+
+  if (exists(configJson)) {
+    openClaudeConfig = configJson;
+    legacyFilenameFallback = true;
+  } else if (hasOverride && !exists(openClaudeJson) && exists(claudeJson)) {
+    openClaudeConfig = claudeJson;
+    legacyFilenameFallback = true;
+  } else {
+    openClaudeConfig = openClaudeJson;
+  }
+
+  return {
+    openClaudeHome,
+    openClaudeConfig,
+    source,
+    conflict,
+    legacyFilenameFallback,
+    legacyDirectoryFallback,
+  };
+}
+
 export function createOpenClaudePaths(options: PathOptions = {}) {
   const home = options.home ?? homedir();
   const env = options.env ?? process.env;
-  const openClaudeHome = env.CLAUDE_CONFIG_DIR || join(home, '.openclaude');
+
+  const resolution = resolveOpenClaudeConfigDir({
+    home,
+    env,
+    ...(options.existsSync ? { existsSync: options.existsSync } : {}),
+  });
+
+  const openClaudeHome = resolution.openClaudeHome;
 
   return {
     home,
     openClaudeHome,
-    openClaudeConfig: join(home, '.openclaude.json'),
+    openClaudeConfig: resolution.openClaudeConfig,
+    configDirResolution: {
+      source: resolution.source,
+      conflict: resolution.conflict,
+      legacyFilenameFallback: resolution.legacyFilenameFallback,
+      legacyDirectoryFallback: resolution.legacyDirectoryFallback,
+    } satisfies ConfigDirResolution,
     projectsDir: join(openClaudeHome, 'projects'),
     debugDir: join(openClaudeHome, 'debug'),
     sessionsDir: join(openClaudeHome, 'sessions'),

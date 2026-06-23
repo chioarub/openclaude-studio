@@ -777,6 +777,64 @@ describe('HTTP server', () => {
     expect(response.statusCode).toBe(404);
     expect(response.json()).toMatchObject({ code: 'NOT_FOUND' });
   });
+
+  test('surfaces a config-dir conflict warning through /api/projects diagnostics', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-conflict-'));
+    const preferred = await mkdtemp(join(tmpdir(), 'ocs-preferred-'));
+    const server = await buildServer({
+      env: {
+        OPENCLAUDE_CONFIG_DIR: preferred,
+        CLAUDE_CONFIG_DIR: '/tmp/different-legacy-value',
+      },
+      home,
+      version: '0.0.1-test',
+    });
+    servers.push(server);
+
+    const response = await server.inject({ method: 'GET', url: '/api/projects' });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { diagnostics?: Array<{ level: string; message: string }> };
+    const conflict = body.diagnostics?.find(
+      diagnostic =>
+        diagnostic.level === 'warn' && diagnostic.message.includes('OPENCLAUDE_CONFIG_DIR'),
+    );
+
+    expect(conflict).toBeDefined();
+    // Privacy: the conflict diagnostic itself must not leak any path value.
+    // (Other diagnostics in the response may include paths — that is the
+    // established pattern elsewhere in the API and out of scope for this PR.)
+    expect(conflict?.message).not.toContain(preferred);
+    expect(conflict?.message).not.toContain('/tmp/different-legacy-value');
+    expect(conflict?.message).not.toContain(home);
+  });
+
+  test('still surfaces the config-dir conflict warning when the global config is missing', async () => {
+    // Regression: the diagnostic must appear even when readRawOpenClaudeConfig
+    // cannot find the config file — that is exactly when users misconfigure.
+    const home = await mkdtemp(join(tmpdir(), 'ocs-conflict-missing-'));
+    const preferred = await mkdtemp(join(tmpdir(), 'ocs-preferred-missing-'));
+    const server = await buildServer({
+      env: {
+        OPENCLAUDE_CONFIG_DIR: preferred,
+        CLAUDE_CONFIG_DIR: '/tmp/different-legacy-value',
+      },
+      home,
+      version: '0.0.1-test',
+    });
+    servers.push(server);
+
+    const response = await server.inject({ method: 'GET', url: '/api/projects' });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { diagnostics?: Array<{ level: string; message: string }> };
+    expect(
+      body.diagnostics?.some(
+        diagnostic =>
+          diagnostic.level === 'warn' && diagnostic.message.includes('OPENCLAUDE_CONFIG_DIR'),
+      ),
+    ).toBe(true);
+  });
 });
 
 async function testServer(home = '/tmp/ocs-empty-home'): Promise<FastifyInstance> {
