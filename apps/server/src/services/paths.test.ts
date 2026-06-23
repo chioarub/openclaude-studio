@@ -1,13 +1,44 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+
+// Track every call into the fs module so the write-safety test can prove the
+// resolver touches only stat-style APIs. vi.hoisted runs before the mock
+// factory below, which is itself hoisted above all imports.
+const { fsCalls, resetFsCalls } = vi.hoisted(() => {
+  const fsCalls: Array<{ method: string; args: unknown[] }> = [];
+  return {
+    fsCalls,
+    resetFsCalls: () => {
+      fsCalls.length = 0;
+    },
+  };
+});
+
+vi.mock('node:fs', async () => {
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  const wrapped: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(actual)) {
+    if (typeof value === 'function') {
+      const fnName = name;
+      wrapped[fnName] = (...args: unknown[]) => {
+        fsCalls.push({ method: fnName, args });
+        return (value as (...a: unknown[]) => unknown).apply(actual, args);
+      };
+    } else {
+      wrapped[name] = value;
+    }
+  }
+  return wrapped;
+});
 
 import {
   createOpenClaudePaths,
   encodeProjectPath,
   isProjectTranscriptCwd,
   isProjectTranscriptDirectoryName,
+  overridesConflict,
   resolveConfigDirEnv,
   resolveOpenClaudeConfigDir,
 } from './paths.js';
@@ -47,6 +78,32 @@ describe('resolveConfigDirEnv', () => {
   });
 });
 
+describe('overridesConflict', () => {
+  test('returns false when both values are identical', () => {
+    expect(overridesConflict('/same', '/same', 'linux')).toBe(false);
+    expect(overridesConflict('/same', '/same', 'win32')).toBe(false);
+  });
+
+  test('returns true when values differ on POSIX', () => {
+    expect(overridesConflict('/a', '/b', 'linux')).toBe(true);
+    expect(overridesConflict('/a', '/b', 'darwin')).toBe(true);
+  });
+
+  test('treats case-only differences as the same path on Windows', () => {
+    // C:\Foo and c:\foo point to the same directory on Windows.
+    expect(overridesConflict('C:\\Foo', 'c:\\foo', 'win32')).toBe(false);
+  });
+
+  test('still reports real conflicts on Windows when paths differ beyond case', () => {
+    expect(overridesConflict('C:\\Foo', 'C:\\Bar', 'win32')).toBe(true);
+  });
+
+  test('does not apply Windows case-folding on POSIX', () => {
+    // On POSIX, /Foo and /foo are different directories.
+    expect(overridesConflict('/Foo', '/foo', 'linux')).toBe(true);
+  });
+});
+
 describe('resolveOpenClaudeConfigDir', () => {
   function resolve(
     env: Record<string, string | undefined>,
@@ -62,18 +119,20 @@ describe('resolveOpenClaudeConfigDir', () => {
     });
   }
 
-  test('uses the default home when neither variable is set', () => {
-    const result = resolve({});
+  test('uses the default home when neither variable is set and no legacy artifacts exist', () => {
+    // Inject existsSync so the test does not depend on the developer's real home.
+    const result = resolve({}, { existsSync: () => false });
 
     expect(result.openClaudeHome).toBe(join('/tmp/example-home', '.openclaude'));
     expect(result.openClaudeConfig).toBe(join('/tmp/example-home', '.openclaude.json'));
     expect(result.source).toBe('default');
     expect(result.conflict).toBe(false);
     expect(result.legacyFilenameFallback).toBe(false);
+    expect(result.legacyDirectoryFallback).toBe(false);
   });
 
   test('honors OPENCLAUDE_CONFIG_DIR and places the config file inside the override', () => {
-    const result = resolve({ OPENCLAUDE_CONFIG_DIR: '/tmp/openclaude' });
+    const result = resolve({ OPENCLAUDE_CONFIG_DIR: '/tmp/openclaude' }, { existsSync: () => false });
 
     expect(result.openClaudeHome).toBe('/tmp/openclaude');
     expect(result.openClaudeConfig).toBe(join('/tmp/openclaude', '.openclaude.json'));
@@ -83,7 +142,7 @@ describe('resolveOpenClaudeConfigDir', () => {
   });
 
   test('honors CLAUDE_CONFIG_DIR as a legacy alias', () => {
-    const result = resolve({ CLAUDE_CONFIG_DIR: '/tmp/legacy' });
+    const result = resolve({ CLAUDE_CONFIG_DIR: '/tmp/legacy' }, { existsSync: () => false });
 
     expect(result.openClaudeHome).toBe('/tmp/legacy');
     expect(result.openClaudeConfig).toBe(join('/tmp/legacy', '.openclaude.json'));
@@ -115,7 +174,7 @@ describe('resolveOpenClaudeConfigDir', () => {
   });
 
   test('treats empty-string values as unset', () => {
-    const result = resolve({ OPENCLAUDE_CONFIG_DIR: '', CLAUDE_CONFIG_DIR: '' });
+    const result = resolve({ OPENCLAUDE_CONFIG_DIR: '', CLAUDE_CONFIG_DIR: '' }, { existsSync: () => false });
 
     expect(result.source).toBe('default');
     expect(result.openClaudeHome).toBe(join('/tmp/example-home', '.openclaude'));
@@ -135,12 +194,11 @@ describe('resolveOpenClaudeConfigDir', () => {
     expect(result.openClaudeConfig).toBe(join('/tmp/custom', '.claude.json'));
     expect(result.legacyFilenameFallback).toBe(true);
     expect(result.source).toBe('openclaude');
-    // Both candidate paths were inspected, but nothing else.
     expect(seen).toContain(join('/tmp/custom', '.openclaude.json'));
     expect(seen).toContain(join('/tmp/custom', '.claude.json'));
   });
 
-  test('prefers the oldest-format .config.json when newer files are absent', () => {
+  test('prefers the oldest-format .config.json inside an explicit root when newer files are absent', () => {
     const existsSync = (path: string) => path === join('/tmp/custom', '.config.json');
 
     const result = resolve({ OPENCLAUDE_CONFIG_DIR: '/tmp/custom' }, { existsSync });
@@ -149,7 +207,7 @@ describe('resolveOpenClaudeConfigDir', () => {
     expect(result.legacyFilenameFallback).toBe(true);
   });
 
-  test('prefers .openclaude.json when both legacy and new files exist', () => {
+  test('prefers .openclaude.json when both legacy and new files exist under an override', () => {
     const existsSync = (path: string) =>
       path === join('/tmp/custom', '.openclaude.json') ||
       path === join('/tmp/custom', '.claude.json');
@@ -167,44 +225,136 @@ describe('resolveOpenClaudeConfigDir', () => {
     expect(result.legacyFilenameFallback).toBe(false);
   });
 
-  test('does not consult the filesystem when no override is set', () => {
-    const seen: string[] = [];
-    const existsSync = (path: string) => {
-      seen.push(path);
-      return false;
-    };
+  test('falls back to .config.json in the default home when .openclaude.json is missing', () => {
+    // Regression: the .config.json fallback must run in the default-home path,
+    // not only under an explicit override. Mirrors upstream getGlobalClaudeFile().
+    // The config file lives in <home>, not in <home>/.openclaude.
+    const existsSync = (path: string) => path === join('/tmp/example-home', '.config.json');
+
+    const result = resolve({}, { existsSync });
+
+    expect(result.openClaudeHome).toBe(join('/tmp/example-home', '.openclaude'));
+    expect(result.openClaudeConfig).toBe(join('/tmp/example-home', '.config.json'));
+    expect(result.legacyFilenameFallback).toBe(true);
+    expect(result.source).toBe('default');
+  });
+
+  test('falls back to the legacy .claude directory in the default home when .openclaude is missing', () => {
+    // Regression: when migration failed and only ~/.claude exists, upstream
+    // reads data from ~/.claude but the global config file still lives at
+    // <home>/.openclaude.json (getGlobalClaudeFile uses homedir()).
+    const existsSync = (path: string) =>
+      path === join('/tmp/example-home', '.claude') ||
+      path === join('/tmp/example-home', '.openclaude.json');
+
+    const result = resolve({}, { existsSync });
+
+    expect(result.openClaudeHome).toBe(join('/tmp/example-home', '.claude'));
+    expect(result.legacyDirectoryFallback).toBe(true);
+    expect(result.openClaudeConfig).toBe(join('/tmp/example-home', '.openclaude.json'));
+    expect(result.source).toBe('default');
+  });
+
+  test('does not fall back to .claude directory when .openclaude exists', () => {
+    const existsSync = (path: string) =>
+      path === join('/tmp/example-home', '.openclaude') ||
+      path === join('/tmp/example-home', '.openclaude.json');
+
+    const result = resolve({}, { existsSync });
+
+    expect(result.openClaudeHome).toBe(join('/tmp/example-home', '.openclaude'));
+    expect(result.legacyDirectoryFallback).toBe(false);
+  });
+
+  test('does not apply the .claude.json filename fallback in the default home', () => {
+    // Upstream only applies the legacy filename fallback under an explicit
+    // config dir. In the default home, presence of .claude.json alone must
+    // not select it — the modern filename is used regardless.
+    const existsSync = (path: string) => path === join('/tmp/example-home', '.claude.json');
 
     const result = resolve({}, { existsSync });
 
     expect(result.openClaudeConfig).toBe(join('/tmp/example-home', '.openclaude.json'));
     expect(result.legacyFilenameFallback).toBe(false);
-    expect(seen).toEqual([]);
   });
 
   test('normalizes the override path to NFC Unicode', () => {
     // 'é' as a decomposed (NFD) sequence: 'e' + combining acute accent.
     const nfd = 'cafe\u0301';
-    const result = resolve({ OPENCLAUDE_CONFIG_DIR: `/tmp/${nfd}` });
+    const result = resolve({ OPENCLAUDE_CONFIG_DIR: `/tmp/${nfd}` }, { existsSync: () => false });
 
     expect(result.openClaudeHome).toBe(`/tmp/${nfd.normalize('NFC')}`);
   });
 
-  test('never writes to the filesystem', () => {
-    // Using a real temp dir ensures any accidental write would be observable.
+  test('resolution is idempotent — same inputs produce identical outputs', () => {
     const temp = mkdtempSync(join(tmpdir(), 'studio-paths-'));
     const result = resolve({ OPENCLAUDE_CONFIG_DIR: temp });
-
-    expect(result.openClaudeHome).toBe(temp);
-    expect(result.openClaudeConfig).toBe(join(temp, '.openclaude.json'));
-    // Resolution is pure — same inputs, same output.
     const again = resolve({ OPENCLAUDE_CONFIG_DIR: temp });
+
     expect(again).toEqual(result);
+  });
+});
+
+describe('resolveOpenClaudeConfigDir write safety', () => {
+  afterEach(() => {
+    resetFsCalls();
+  });
+
+  test('never invokes any filesystem write API during resolution', () => {
+    // The fs module is wrapped (top of file) to record every call. Resolution
+    // must touch only existsSync (stat-style). If any write-capable method
+    // fires, the test fails. This catches accidental writes even if a future
+    // refactor moves them into a helper.
+    const writeMethods = new Set([
+      'writeFile',
+      'writeFileSync',
+      'mkdir',
+      'mkdirSync',
+      'copyFile',
+      'copyFileSync',
+      'rename',
+      'renameSync',
+      'unlink',
+      'unlinkSync',
+      'rmdir',
+      'rmdirSync',
+      'appendFile',
+      'appendFileSync',
+      'createWriteStream',
+    ]);
+
+    const temp = mkdtempSync(join(tmpdir(), 'studio-paths-'));
+    mkdirSync(join(temp, '.openclaude'), { recursive: true });
+    // Config file lives in <home>, not in <home>/.openclaude.
+    writeFileSync(join(temp, '.openclaude.json'), '{}');
+
+    resetFsCalls();
+
+    // Default-home path with modern artifacts present — exercises every branch.
+    const result = resolveOpenClaudeConfigDir({
+      home: temp,
+      env: {},
+    });
+
+    expect(result.openClaudeConfig).toBe(join(temp, '.openclaude.json'));
+
+    const writeCallsDuringResolution = fsCalls.filter(call => writeMethods.has(call.method));
+    expect(writeCallsDuringResolution).toEqual([]);
+
+    // And the only read-style call should be existsSync.
+    const methodsCalled = new Set(fsCalls.map(call => call.method));
+    expect(methodsCalled).toEqual(new Set(['existsSync']));
   });
 });
 
 describe('OpenClaude paths', () => {
   test('resolves default paths from the provided home directory', () => {
-    const paths = createOpenClaudePaths({ home: '/tmp/example-home', env: {} });
+    // Inject existsSync so the test does not depend on the developer's home.
+    const paths = createOpenClaudePaths({
+      home: '/tmp/example-home',
+      env: {},
+      existsSync: () => false,
+    });
 
     expect(paths.openClaudeConfig).toBe('/tmp/example-home/.openclaude.json');
     expect(paths.openClaudeHome).toBe('/tmp/example-home/.openclaude');
@@ -217,6 +367,7 @@ describe('OpenClaude paths', () => {
       source: 'default',
       conflict: false,
       legacyFilenameFallback: false,
+      legacyDirectoryFallback: false,
     });
   });
 
@@ -253,6 +404,7 @@ describe('OpenClaude paths', () => {
     const paths = createOpenClaudePaths({
       home: '/tmp/example-home',
       env: { CLAUDE_CONFIG_DIR: '/tmp/custom-openclaude' },
+      existsSync: () => false,
     });
 
     expect(paths.openClaudeHome).toBe('/tmp/custom-openclaude');

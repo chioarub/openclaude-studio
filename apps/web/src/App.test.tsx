@@ -1608,6 +1608,29 @@ describe('App', () => {
     await waitFor(() => expect(screen.queryByText('Refreshing workspace')).not.toBeInTheDocument());
   });
 
+  test('renders the OPENCLAUDE_CONFIG_DIR conflict warning from /api/projects', async () => {
+    const fetchMock = mockApi({
+      projectDiagnostics: [
+        {
+          level: 'warn',
+          message:
+            'Both OPENCLAUDE_CONFIG_DIR and CLAUDE_CONFIG_DIR are set to different values. OpenClaude Studio uses OPENCLAUDE_CONFIG_DIR (preferred) and ignores CLAUDE_CONFIG_DIR. Align the values to silence this warning.',
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /Diagnostics/i })[0]!);
+
+    expect(
+      await screen.findByText(/Both OPENCLAUDE_CONFIG_DIR and CLAUDE_CONFIG_DIR are set to different values/),
+    ).toBeInTheDocument();
+  });
+
   test('scopes log and project diagnostics to the selected project', async () => {
     const fetchMock = mockApi({
       projects: [
