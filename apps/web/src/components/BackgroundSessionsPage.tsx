@@ -292,9 +292,19 @@ function SessionsTable({
             return (
               <tr
                 key={session.id}
+                tabIndex={0}
+                role="button"
+                aria-label={`Open details for ${session.name ?? session.shortId}`}
+                aria-pressed={isSelected}
                 onClick={() => onSelect(session.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onSelect(session.id);
+                  }
+                }}
                 className={cn(
-                  'cursor-pointer border-b border-hairline-soft/60 transition-colors',
+                  'cursor-pointer border-b border-hairline-soft/60 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary',
                   isSelected ? 'bg-primary/5' : 'hover:bg-surface-soft/40',
                 )}
               >
@@ -656,6 +666,12 @@ function emptyStatusCounts(): Record<BackgroundSessionStatus, number> {
   return { running: 0, unknown: 0, exited: 0, failed: 0, stale: 0, killed: 0 };
 }
 
+function toNonNegativeInt(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : fallback;
+}
+
 function normalizeBackgroundSessionsResponse(value: unknown): BackgroundSessionsResponse {
   const record = isRecord(value) ? value : {};
   const sessions = normalizeSessionSummaries(record.sessions);
@@ -674,9 +690,9 @@ function normalizeBackgroundSessionLogsResponse(value: unknown): BackgroundSessi
     sessionId,
     stream,
     entries: normalizeLogEntries(record.entries),
-    start: typeof record.start === 'number' ? Math.floor(record.start) : 0,
-    count: typeof record.count === 'number' ? Math.floor(record.count) : 0,
-    totalLines: typeof record.totalLines === 'number' ? Math.floor(record.totalLines) : 0,
+    start: toNonNegativeInt(record.start),
+    count: toNonNegativeInt(record.count),
+    totalLines: toNonNegativeInt(record.totalLines),
     truncated: Boolean(record.truncated),
     diagnostics: normalizeDiagnostics(record.diagnostics),
   };
@@ -722,7 +738,7 @@ function normalizeCommandSummary(value: unknown): BackgroundSessionSummary['comm
   if (!isRecord(value)) return { binary: null, flagCount: 0, truncated: false };
   return {
     binary: readNullableString(value.binary),
-    flagCount: typeof value.flagCount === 'number' ? Math.floor(value.flagCount) : 0,
+    flagCount: toNonNegativeInt(value.flagCount),
     truncated: Boolean(value.truncated),
   };
 }
@@ -748,7 +764,7 @@ function normalizeLogEntries(value: unknown): BackgroundSessionLogEntry[] {
   return value.map((entry) => {
     const record = isRecord(entry) ? entry : {};
     const id = typeof record.id === 'string' ? record.id : '';
-    const lineNumber = typeof record.lineNumber === 'number' ? Math.floor(record.lineNumber) : 0;
+    const lineNumber = toNonNegativeInt(record.lineNumber);
     const text = typeof record.text === 'string' ? record.text : '';
     return { id, lineNumber, text };
   });
@@ -762,7 +778,7 @@ function normalizeStatusCounts(
   const record = isRecord(value) ? value : {};
   for (const status of STATUS_ORDER) {
     const raw = record[status];
-    counts[status] = typeof raw === 'number' && Number.isFinite(raw) ? Math.floor(raw) : 0;
+    counts[status] = toNonNegativeInt(raw);
   }
   // Recompute from the normalized session list if the server-provided counts are missing or zero.
   if (Object.values(counts).every((count) => count === 0) && sessions.length > 0) {

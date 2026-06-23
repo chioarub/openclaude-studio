@@ -1778,6 +1778,54 @@ describe('App', () => {
     expect(screen.getByText('1 session')).toBeInTheDocument();
   });
 
+  test('opens the detail panel via keyboard activation', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
+    const fetchMock = mockApi({
+      backgroundSessions: [
+        {
+          id: 'bg-kb-001',
+          shortId: 'bg-kb',
+          name: 'kb-task',
+          pid: 1,
+          cwd: '/tmp',
+          recordedStatus: 'running',
+          terminal: false,
+          processPresence: 'unknown',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          sessionId: null,
+          startedAt: '2026-06-01T10:00:00.000Z',
+          updatedAt: '2026-06-01T10:05:00.000Z',
+          durationMs: 300000,
+          commandSummary: { binary: 'openclaude', flagCount: 1, truncated: false },
+          project: null,
+          sessionLink: null,
+          stdoutLogAvailable: false,
+          stderrLogAvailable: false,
+        },
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Background Sessions' });
+    const row = screen.getByRole('button', { name: /Open details for kb-task/i });
+    row.focus();
+    await user.keyboard('{Enter}');
+
+    expect(await screen.findByRole('dialog', { name: /kb-task details/i })).toBeInTheDocument();
+  });
+
   test('shows an empty state when no background sessions exist', async () => {
     window.history.pushState(null, '', '/background-sessions');
     const fetchMock = mockApi();
