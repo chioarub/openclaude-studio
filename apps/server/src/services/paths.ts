@@ -117,10 +117,13 @@ export function overridesConflict(
  *      `"<home>/.openclaude.json"`). Note: the config file lives directly in
  *      home, NOT inside the `.openclaude` data directory.
  *
- * Global config file precedence inside the config root:
- * - If `"<configRoot>/.config.json"` exists, it wins (upstream's oldest
- *   format fallback, any path).
- * - Otherwise prefer `"<configRoot>/.openclaude.json"`.
+ * Global config file precedence (mirrors upstream `getGlobalClaudeFile`):
+ * - `.config.json` is probed under the **data home** (mirrors upstream's
+ *   `getClaudeConfigHomeDir()`), i.e. `"<openClaudeHome>/.config.json"`. This
+ *   is upstream's oldest-format fallback and applies in both the default and
+ *   override paths.
+ * - `.openclaude.json` is probed under the **config root**, i.e.
+ *   `"<configRoot>/.openclaude.json"`. This is the modern default.
  * - Under an explicit config dir (override set), if the modern file is missing
  *   and `"<configRoot>/.claude.json"` exists, fall back to the legacy
  *   filename. The default home path does not get this fallback because
@@ -192,11 +195,16 @@ export function resolveOpenClaudeConfigDir(options: {
     }
   }
 
-  // Resolve the global config file inside the config root. Precedence:
-  //   .config.json  (oldest format, checked first, any path)
-  //   .openclaude.json  (modern default)
-  //   .claude.json  (legacy filename, override path only)
-  const configJson = join(configRoot, '.config.json');
+  // Resolve the global config file. Upstream uses TWO different base paths:
+  //   - .config.json  is probed under the data home (getClaudeConfigHomeDir),
+  //                    i.e. <home>/.openclaude/.config.json (or the override).
+  //   - .openclaude.json / .claude.json  are probed under the config root
+  //                    (configDirEnv || homedir()), i.e. <home>/.openclaude.json.
+  // When an override is set, the data home and config root are the same path,
+  // so all three files are probed in the same directory. In the default case,
+  // .config.json lives inside the .openclaude data directory while the modern
+  // and legacy filenames live directly in the home directory.
+  const configJson = join(openClaudeHome, '.config.json');
   const openClaudeJson = join(configRoot, '.openclaude.json');
   const claudeJson = join(configRoot, '.claude.json');
 

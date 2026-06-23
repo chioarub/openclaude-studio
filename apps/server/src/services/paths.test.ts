@@ -238,18 +238,35 @@ describe('resolveOpenClaudeConfigDir', () => {
     expect(result.legacyFilenameFallback).toBe(false);
   });
 
-  test('falls back to .config.json in the default home when .openclaude.json is missing', () => {
-    // Regression: the .config.json fallback must run in the default-home path,
-    // not only under an explicit override. Mirrors upstream getGlobalClaudeFile().
-    // The config file lives in <home>, not in <home>/.openclaude.
-    const existsSync = (path: string) => path === join('/tmp/example-home', '.config.json');
+  test('falls back to .config.json in the data home when .openclaude.json is missing', () => {
+    // Mirrors upstream getGlobalClaudeFile(): .config.json is probed under the
+    // data home (getClaudeConfigHomeDir => <home>/.openclaude), NOT under <home>.
+    // A stray <home>/.config.json from another tool must NOT be read as the
+    // OpenClaude global config — that would be an out-of-scope read.
+    const existsSync = (path: string) =>
+      path === join('/tmp/example-home', '.openclaude') ||
+      path === join('/tmp/example-home', '.openclaude', '.config.json');
 
     const result = resolve({}, { existsSync });
 
     expect(result.openClaudeHome).toBe(join('/tmp/example-home', '.openclaude'));
-    expect(result.openClaudeConfig).toBe(join('/tmp/example-home', '.config.json'));
+    expect(result.openClaudeConfig).toBe(join('/tmp/example-home', '.openclaude', '.config.json'));
     expect(result.legacyFilenameFallback).toBe(true);
     expect(result.source).toBe('default');
+  });
+
+  test('does not read a stray <home>/.config.json as the OpenClaude global config', () => {
+    // Regression guard: a generic <home>/.config.json created by another tool
+    // must not be mistaken for the OpenClaude legacy config file. Only the
+    // file inside the data home (<home>/.openclaude/.config.json) qualifies.
+    const existsSync = (path: string) =>
+      path === join('/tmp/example-home', '.openclaude') ||
+      path === join('/tmp/example-home', '.config.json');
+
+    const result = resolve({}, { existsSync });
+
+    expect(result.openClaudeConfig).toBe(join('/tmp/example-home', '.openclaude.json'));
+    expect(result.legacyFilenameFallback).toBe(false);
   });
 
   test('falls back to the legacy .claude directory in the default home when .openclaude is missing', () => {
