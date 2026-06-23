@@ -2257,9 +2257,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path.startsWith('/api/background-sessions/') && path.endsWith('/logs')) {
+      const sessionId = path.split('/')[3] ?? 'bg-1';
       return jsonResponse(
         options.backgroundLogsResponse ?? {
-          sessionId: 'bg-1',
+          sessionId,
           stream: requestUrl.searchParams.get('stream') === 'stderr' ? 'stderr' : 'stdout',
           entries: options.backgroundLogEntries ?? [],
           start: 0,

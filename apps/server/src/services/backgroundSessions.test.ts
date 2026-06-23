@@ -153,20 +153,25 @@ describe('listBackgroundSessions', () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-bg-'));
     const paths = createOpenClaudePaths({ home, env: {} });
     await mkdir(sessionsDir(paths), { recursive: true });
+    // Filenames that pass the .json extension filter but fail SAFE_ID_PATTERN:
+    // leading dash, leading dot, and path traversal are all rejected.
     await writeFile(
-      join(sessionsDir(paths), '../secret.json'),
-      JSON.stringify(validSessionFixture()),
+      join(sessionsDir(paths), '-unsafe.json'),
+      JSON.stringify(validSessionFixture({ id: '-unsafe' })),
       'utf8',
     );
     await writeFile(
-      join(sessionsDir(paths), '.hidden'),
-      JSON.stringify(validSessionFixture()),
+      join(sessionsDir(paths), '.hidden.json'),
+      JSON.stringify(validSessionFixture({ id: '.hidden' })),
       'utf8',
     );
 
     const result = await listBackgroundSessions(paths);
 
     expect(result.sessions).toEqual([]);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('unsafe id') }),
+    );
   });
 
   test('skips symlinked metadata files', async () => {
