@@ -265,13 +265,27 @@ function StudioApp() {
     setPlansTasksDiagnostics(nextDiagnostics);
   }, []);
 
+  // When opening a linked background session that belongs to a different
+  // project, the project change would normally trigger the
+  // useEffect([selectedProjectId]) below and clear selectedSessionId before
+  // the details modal can open. Track the pending session so the clear is
+  // suppressed once, then applied on subsequent manual project changes.
+  const pendingLinkedSessionRef = useRef<string | null>(null);
+
   const handleOpenBackgroundSession = useCallback((projectId: string, sessionId: string) => {
+    pendingLinkedSessionRef.current = sessionId;
     setSelectedProjectId(projectId);
     setSelectedSessionId(sessionId);
     void navigate('/sessions');
   }, [navigate]);
 
   useEffect(() => {
+    if (pendingLinkedSessionRef.current !== null) {
+      // This project change was triggered by the link handler; preserve the
+      // intended session selection instead of clearing it.
+      pendingLinkedSessionRef.current = null;
+      return;
+    }
     setSelectedSessionId(null);
     setPlansTasksDiagnostics([]);
   }, [selectedProjectId]);
