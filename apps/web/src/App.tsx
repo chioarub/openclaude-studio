@@ -3336,7 +3336,7 @@ function SessionsTable({
   );
 }
 
-function PageHeader({
+export function PageHeader({
   aside,
   icon: Icon,
   status,
@@ -3368,7 +3368,7 @@ function PageHeader({
   );
 }
 
-function QuickStat({ label, value }: { label: string; value: number | string }) {
+export function QuickStat({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="quick-stat">
       <span>{label}</span>
@@ -3389,7 +3389,7 @@ function Metric({ icon, label, value }: { icon: ReactNode; label: string; value:
   );
 }
 
-function SectionHeading({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+export function SectionHeading({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
   return (
     <div className="section-heading">
       <Icon className="h-4 w-4" aria-hidden="true" />
@@ -3409,15 +3409,15 @@ function Info({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Badge({ label, tone }: { label: string; tone: 'danger' | 'muted' | 'success' | 'warning' }) {
+export function Badge({ label, tone }: { label: string; tone: 'danger' | 'muted' | 'success' | 'warning' }) {
   return <span className={`badge badge-${tone}`}>{label}</span>;
 }
 
-function EmptyState({ label }: { label: string }) {
+export function EmptyState({ label }: { label: string }) {
   return <div className="empty-state">{label}</div>;
 }
 
-function PageStack({ children }: { children: ReactNode }) {
+export function PageStack({ children }: { children: ReactNode }) {
   return <div className="space-y-5">{children}</div>;
 }
 

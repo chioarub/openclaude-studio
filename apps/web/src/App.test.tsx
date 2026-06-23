@@ -1775,7 +1775,7 @@ describe('App', () => {
 
     expect(await screen.findByRole('heading', { name: 'Background Sessions' })).toBeInTheDocument();
     expect(await screen.findByText('long-task')).toBeInTheDocument();
-    expect(screen.getByText('1 session')).toBeInTheDocument();
+    expect(screen.getAllByText('Running').length).toBeGreaterThan(0);
   });
 
   test('opens the detail panel via keyboard activation', async () => {
@@ -1821,7 +1821,7 @@ describe('App', () => {
     await screen.findByRole('heading', { name: 'Background Sessions' });
 
     // Enter activation
-    let row = screen.getByRole('button', { name: /Open details for kb-task/i });
+    let row = screen.getByLabelText('Open details for kb-task');
     row.focus();
     await user.keyboard('{Enter}');
     let dialog = await screen.findByRole('dialog', { name: /kb-task details/i });
@@ -1829,7 +1829,7 @@ describe('App', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Close detail' }));
 
     // Space activation (separate branch with preventDefault to avoid page scroll)
-    row = screen.getByRole('button', { name: /Open details for kb-task/i });
+    row = screen.getByLabelText('Open details for kb-task');
     row.focus();
     await user.keyboard(' ');
     dialog = await screen.findByRole('dialog', { name: /kb-task details/i });

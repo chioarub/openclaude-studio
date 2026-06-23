@@ -14,13 +14,23 @@ import {
   Check,
   Copy,
   RefreshCcw,
+  Search,
   TerminalSquare,
+  X,
 } from 'lucide-react';
 
 import type { ApiClient } from '../api.js';
 import { ApiRequestError } from '../api.js';
-import { cn } from '../lib/cn.js';
+import {
+  Badge,
+  EmptyState,
+  PageHeader,
+  PageStack,
+  QuickStat,
+  SectionHeading,
+} from './shared.js';
 import { LoadingOverlay } from './LoadingState.js';
+import { cn } from '../lib/cn.js';
 
 type BackgroundSessionsPageProps = {
   api: ApiClient;
@@ -38,17 +48,22 @@ const STATUS_ORDER: BackgroundSessionStatus[] = [
   'killed',
 ];
 
-const STATUS_BADGE_STYLES: Record<BackgroundSessionStatus, string> = {
-  running: 'border-primary/25 bg-primary/10 text-primary',
-  unknown: 'border-hairline-soft bg-surface-soft/80 text-muted',
-  exited: 'border-hairline-soft bg-surface-soft/80 text-muted',
-  failed: 'border-danger/35 bg-danger/10 text-danger',
-  stale: 'border-warning/35 bg-warning/10 text-warning',
-  killed: 'border-danger/35 bg-danger/10 text-danger',
-};
-
 const DEFAULT_LOG_COUNT = 100;
 const REFRESH_INTERVAL_MS = 15_000;
+
+function statusTone(status: BackgroundSessionStatus): 'danger' | 'muted' | 'success' | 'warning' {
+  switch (status) {
+    case 'running':
+      return 'success';
+    case 'failed':
+    case 'killed':
+      return 'danger';
+    case 'stale':
+      return 'warning';
+    default:
+      return 'muted';
+  }
+}
 
 export function BackgroundSessionsPage({ api, onOpenSession }: BackgroundSessionsPageProps) {
   const [response, setResponse] = useState<BackgroundSessionsResponse | null>(null);
@@ -116,59 +131,58 @@ export function BackgroundSessionsPage({ api, onOpenSession }: BackgroundSession
     [sessions, selectedId],
   );
 
-  const headerLabel = `${sessions.length} session${sessions.length === 1 ? '' : 's'}`;
+  const runningCount = statusCounts.running ?? 0;
+  const failedCount = (statusCounts.failed ?? 0) + (statusCounts.killed ?? 0);
+  const headerLabel = `${sessions.length} session${sessions.length === 1 ? '' : 's'} loaded`;
 
   return (
-    <section aria-busy={loading} className="panel relative min-h-[60vh]">
-      {loading && response ? <LoadingOverlay label="Refreshing background sessions" /> : null}
-
-      <header className="page-header">
-        <div className="page-header-title">
-          <div className="icon-frame">
-            <TerminalSquare className="h-6 w-6" aria-hidden="true" />
+    <PageStack>
+      <PageHeader
+        icon={TerminalSquare}
+        status={headerLabel}
+        title="Background Sessions"
+        aside={
+          <div className="page-header-stats">
+            <QuickStat label="Running" value={runningCount} />
+            <QuickStat label="Failed" value={failedCount} />
+            <button
+              aria-label="Refresh background sessions"
+              className="h-9 w-9 items-center justify-center rounded-md border border-hairline bg-canvas text-muted transition-colors hover:bg-surface-soft hover:text-ink disabled:pointer-events-none disabled:opacity-50 hidden md:inline-flex"
+              disabled={loading}
+              onClick={() => void fetchSessions()}
+              title="Refresh background sessions"
+              type="button"
+            >
+              <RefreshCcw aria-hidden="true" className={cn('h-4 w-4', loading && 'animate-spin')} />
+            </button>
           </div>
-          <div className="min-w-0">
-            <h1 className="font-display text-[34px] leading-none text-ink md:text-[40px]">Background Sessions</h1>
-            <div className="mt-2 flex min-w-0 items-center gap-2">
-              <span className="status-dot" />
-              <span className="truncate text-xs font-medium uppercase leading-none tracking-widest text-muted-soft">
-                {headerLabel}
-              </span>
-            </div>
-          </div>
-        </div>
-        <div className="page-header-aside">
-          <button
-            aria-label="Refresh background sessions"
-            type="button"
-            className="btn-ghost"
-            onClick={() => void fetchSessions()}
-          >
-            <RefreshCcw className="h-4 w-4" aria-hidden="true" />
-            <span className="hidden md:inline">Refresh</span>
-          </button>
-        </div>
-      </header>
+        }
+      />
 
       {error ? (
-        <div className="px-6 py-8">
+        <section className="panel">
           <ErrorBanner message={error} degraded={degraded} />
-        </div>
+        </section>
       ) : (
-        <>
-          <StatusCounters counts={statusCounts} total={sessions.length} />
+        <section aria-busy={loading} className="panel loading-boundary">
+          <div className="section-heading-row">
+            <SectionHeading icon={TerminalSquare} label="Sessions" />
+            <span className="text-xs font-medium uppercase tracking-widest text-muted-soft">
+              {filtered.length} shown
+            </span>
+          </div>
 
-          <div className="flex flex-wrap items-center gap-3 px-6 py-4">
-            <label className="relative flex-1 min-w-[200px]">
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <label className="relative min-w-[200px] flex-1">
               <span className="sr-only">Search background sessions</span>
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-soft" aria-hidden="true" />
               <input
                 type="search"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search by name, id, provider, model, or project"
+                placeholder="Search name, id, provider, model, project"
                 className="input w-full pl-9"
               />
-              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-soft" />
             </label>
             <label className="flex items-center gap-2">
               <span className="text-xs font-medium uppercase tracking-widest text-muted-soft">Status</span>
@@ -187,173 +201,85 @@ export function BackgroundSessionsPage({ api, onOpenSession }: BackgroundSession
             </label>
           </div>
 
-          {!loading && filtered.length === 0 ? (
-            <div className="px-6 pb-12">
-              {sessions.length === 0 ? (
-                <EmptyState
-                  title="No background sessions found"
-                  body="Detached background sessions started with openclaude --bg will appear here."
-                />
-              ) : (
-                <EmptyState
-                  title="No sessions match your filters"
-                  body="Try clearing the search or selecting a different status."
-                />
-              )}
-            </div>
-          ) : (
-            <SessionsTable
-              sessions={filtered}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-            />
-          )}
+          <div className="mt-4 overflow-x-auto">
+            {!loading && filtered.length === 0 ? (
+              <EmptyState
+                label={
+                  sessions.length === 0
+                    ? 'No background sessions found'
+                    : 'No sessions match your filters'
+                }
+              />
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th>Provider</th>
+                    <th>Project</th>
+                    <th>Started</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((session) => (
+                    <tr
+                      key={session.id}
+                      tabIndex={0}
+                      aria-label={`Open details for ${session.name ?? session.shortId}`}
+                      onClick={() => setSelectedId(session.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          setSelectedId(session.id);
+                        }
+                      }}
+                      className="cursor-pointer hover:bg-surface-soft/50 transition-colors"
+                    >
+                      <td className="max-w-[280px]">
+                        <div className="flex flex-col">
+                          <span className="truncate font-medium text-ink">{session.name ?? 'unnamed'}</span>
+                          <span className="font-mono text-[11px] text-muted-soft">{session.shortId}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <Badge label={capitalize(session.recordedStatus)} tone={statusTone(session.recordedStatus)} />
+                      </td>
+                      <td className="max-w-[200px] truncate">{session.provider ?? '—'}</td>
+                      <td className="max-w-[200px] truncate">{session.project?.projectName ?? '—'}</td>
+                      <td className="whitespace-nowrap text-muted">{formatTimestamp(session.startedAt)}</td>
+                      <td className="whitespace-nowrap text-muted">{formatTimestamp(session.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
 
           {diagnostics.length > 0 ? (
-            <div className="px-6 py-4">
+            <div className="mt-4">
               <DiagnosticsList diagnostics={diagnostics} />
             </div>
           ) : null}
 
-          {selected ? (
-            <SessionDetail
-              api={api}
-              session={selected}
-              onClose={() => setSelectedId(null)}
-              onOpenSession={onOpenSession}
-            />
-          ) : null}
-        </>
+          {loading ? <LoadingOverlay label={response ? 'Refreshing background sessions' : 'Loading background sessions'} /> : null}
+        </section>
       )}
 
-      <div className="px-6 py-3 text-[11px] text-muted-soft">
+      <p className="text-[11px] text-muted-soft">
         Privacy: background logs may contain prompts and model output. Secrets are redacted server-side, but treat every line as potentially sensitive.
-      </div>
-    </section>
-  );
-}
+      </p>
 
-function StatusCounters({
-  counts,
-  total,
-}: {
-  counts: Record<BackgroundSessionStatus, number>;
-  total: number;
-}) {
-  return (
-    <div className="grid grid-cols-2 gap-2 px-6 py-4 sm:grid-cols-3 lg:grid-cols-7">
-      <Counter label="Total" value={total} className="border-hairline-soft bg-surface-soft/80 text-ink" />
-      {STATUS_ORDER.map((status) => (
-        <Counter
-          key={status}
-          label={capitalize(status)}
-          value={counts[status] ?? 0}
-          className={cn('border', STATUS_BADGE_STYLES[status])}
+      {selected ? (
+        <SessionDetail
+          api={api}
+          session={selected}
+          onClose={() => setSelectedId(null)}
+          onOpenSession={onOpenSession}
         />
-      ))}
-    </div>
-  );
-}
-
-function Counter({ label, value, className }: { label: string; value: number; className?: string }) {
-  return (
-    <div className={cn('flex flex-col rounded-lg px-3 py-2', className)}>
-      <span className="text-[10px] font-semibold uppercase tracking-widest opacity-80">{label}</span>
-      <span className="font-display text-xl leading-none">{value}</span>
-    </div>
-  );
-}
-
-function SessionsTable({
-  sessions,
-  selectedId,
-  onSelect,
-}: {
-  sessions: BackgroundSessionSummary[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-}) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-hairline-soft text-left text-[11px] uppercase tracking-widest text-muted-soft">
-            <th className="px-6 py-2 font-medium">Name</th>
-            <th className="px-3 py-2 font-medium">Status</th>
-            <th className="px-3 py-2 font-medium">Provider</th>
-            <th className="px-3 py-2 font-medium">Project</th>
-            <th className="px-3 py-2 font-medium">Started</th>
-            <th className="px-3 py-2 font-medium">Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sessions.map((session) => {
-            const isSelected = session.id === selectedId;
-            return (
-              <tr
-                key={session.id}
-                tabIndex={0}
-                role="button"
-                aria-label={`Open details for ${session.name ?? session.shortId}`}
-                aria-pressed={isSelected}
-                onClick={() => onSelect(session.id)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    onSelect(session.id);
-                  }
-                }}
-                className={cn(
-                  'cursor-pointer border-b border-hairline-soft/60 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary',
-                  isSelected ? 'bg-primary/5' : 'hover:bg-surface-soft/40',
-                )}
-              >
-                <td className="px-6 py-3">
-                  <div className="flex flex-col">
-                    <span className="font-medium text-ink">{session.name ?? <span className="text-muted">unnamed</span>}</span>
-                    <span className="font-mono text-[11px] text-muted-soft">{session.shortId}</span>
-                  </div>
-                </td>
-                <td className="px-3 py-3">
-                  <StatusBadge status={session.recordedStatus} terminal={session.terminal} />
-                </td>
-                <td className="px-3 py-3">
-                  <div className="flex flex-col">
-                    <span className="text-ink">{session.provider ?? <span className="text-muted">—</span>}</span>
-                    {session.model ? (
-                      <span className="text-[11px] text-muted-soft">{session.model}</span>
-                    ) : null}
-                  </div>
-                </td>
-                <td className="px-3 py-3">
-                  {session.project ? (
-                    <span className="text-ink">{session.project.projectName}</span>
-                  ) : (
-                    <span className="text-muted">—</span>
-                  )}
-                </td>
-                <td className="px-3 py-3 text-muted">{formatTimestamp(session.startedAt)}</td>
-                <td className="px-3 py-3 text-muted">{formatTimestamp(session.updatedAt)}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function StatusBadge({ status, terminal }: { status: BackgroundSessionStatus; terminal: boolean }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium',
-        STATUS_BADGE_STYLES[status],
-      )}
-    >
-      <span className={cn('h-1.5 w-1.5 rounded-full', terminal ? 'bg-current opacity-50' : 'bg-current animate-pulse')} />
-      {capitalize(status)}
-    </span>
+      ) : null}
+    </PageStack>
   );
 }
 
@@ -418,18 +344,23 @@ function SessionDetail({
         role="dialog"
         aria-label={`Background session ${session.name ?? session.id} details`}
       >
-        <header className="flex items-start justify-between border-b border-hairline-soft px-6 py-4">
+        <header className="flex items-start justify-between gap-3 border-b border-hairline px-6 py-4">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <StatusBadge status={session.recordedStatus} terminal={session.terminal} />
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge label={capitalize(session.recordedStatus)} tone={statusTone(session.recordedStatus)} />
               <span className="font-mono text-[11px] text-muted-soft">{session.shortId}</span>
             </div>
             <h2 className="mt-2 truncate font-display text-2xl text-ink">
               {session.name ?? 'Unnamed session'}
             </h2>
           </div>
-          <button type="button" className="btn-ghost" aria-label="Close detail" onClick={onClose}>
-            ✕
+          <button
+            type="button"
+            aria-label="Close detail"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-hairline bg-canvas text-muted transition-colors hover:bg-surface-soft hover:text-ink"
+            onClick={onClose}
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </header>
 
@@ -437,7 +368,8 @@ function SessionDetail({
           <DetailGrid session={session} onOpenSession={onOpenSession} />
 
           <div className="mt-6">
-            <div className="flex items-center gap-1 border-b border-hairline-soft">
+            <SectionHeading icon={TerminalSquare} label={stream === 'stderr' ? 'Stderr' : 'Stdout'} />
+            <div className="mt-3 flex items-center gap-1 border-b border-hairline">
               {(['stdout', 'stderr'] as const).map((option) => (
                 <button
                   key={option}
@@ -460,12 +392,9 @@ function SessionDetail({
               {logError ? (
                 <ErrorBanner message={logError} degraded={false} />
               ) : !logAvailable ? (
-                <EmptyState
-                  title={`No ${stream} log available`}
-                  body="This session does not have a captured log for the selected stream."
-                />
+                <EmptyState label={`No ${stream} log available`} />
               ) : logs && logs.entries.length === 0 ? (
-                <EmptyState title="Log is empty" body="No lines were captured yet." />
+                <EmptyState label="Log is empty" />
               ) : (
                 <LogWindow
                   entries={logs?.entries ?? []}
@@ -537,8 +466,8 @@ function DetailGrid({
 function DetailItem({ label, value, hint, mono }: { label: string; value: string; hint?: string; mono?: boolean }) {
   return (
     <div className="flex flex-col gap-1">
-      <dt className="text-[11px] font-medium uppercase tracking-widest text-muted-soft">{label}</dt>
-      <dd className={cn('text-ink', mono && 'font-mono text-[12px] break-all')}>{value}</dd>
+      <dt className="text-xs font-medium text-muted">{label}</dt>
+      <dd className={cn('text-sm font-medium text-ink', mono && 'font-mono break-all')}>{value}</dd>
       {hint ? <dd className="text-[11px] text-muted-soft">{hint}</dd> : null}
     </div>
   );
@@ -564,7 +493,7 @@ function LogWindow({
           Log was truncated. Showing the most recent {entries.length} of {totalLines} lines.
         </p>
       ) : null}
-      <div className="max-h-[400px] overflow-y-auto rounded-lg border border-hairline-soft bg-surface-soft/40">
+      <div className="max-h-[400px] overflow-y-auto rounded-lg border border-hairline bg-surface-soft/40">
         {entries.map((entry, index) => (
           <div
             key={entry.id}
@@ -610,23 +539,13 @@ function ErrorBanner({ message, degraded }: { message: string; degraded: boolean
   );
 }
 
-function EmptyState({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-hairline-soft px-6 py-12 text-center">
-      <TerminalSquare className="h-8 w-8 text-muted-soft" aria-hidden="true" />
-      <p className="mt-3 font-medium text-ink">{title}</p>
-      <p className="mt-1 text-sm text-muted-soft">{body}</p>
-    </div>
-  );
-}
-
 function DiagnosticsList({ diagnostics }: { diagnostics: Diagnostic[] }) {
   return (
-    <details className="rounded-lg border border-hairline-soft bg-surface-soft/40">
+    <details className="rounded-lg border border-hairline bg-surface-soft/40">
       <summary className="cursor-pointer px-4 py-2 text-xs font-medium uppercase tracking-widest text-muted-soft">
         {diagnostics.length} diagnostic{diagnostics.length === 1 ? '' : 's'}
       </summary>
-      <ul className="border-t border-hairline-soft px-4 py-2 text-xs">
+      <ul className="border-t border-hairline px-4 py-2 text-xs">
         {diagnostics.map((diagnostic, index) => (
           <li key={index} className={cn('py-1', diagnostic.level === 'warn' ? 'text-warning' : 'text-muted')}>
             <span className="font-mono uppercase">{diagnostic.level}</span>
@@ -635,15 +554,6 @@ function DiagnosticsList({ diagnostics }: { diagnostics: Diagnostic[] }) {
         ))}
       </ul>
     </details>
-  );
-}
-
-function SearchIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-      <circle cx="11" cy="11" r="8" />
-      <line x1="21" y1="21" x2="16.65" y2="16.65" />
-    </svg>
   );
 }
 
@@ -664,12 +574,6 @@ function matchesSearch(session: BackgroundSessionSummary, query: string): boolea
 
 function emptyStatusCounts(): Record<BackgroundSessionStatus, number> {
   return { running: 0, unknown: 0, exited: 0, failed: 0, stale: 0, killed: 0 };
-}
-
-function toNonNegativeInt(value: unknown, fallback = 0): number {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? Math.max(0, Math.floor(value))
-    : fallback;
 }
 
 function normalizeBackgroundSessionsResponse(value: unknown): BackgroundSessionsResponse {
@@ -777,10 +681,8 @@ function normalizeStatusCounts(
   const counts = emptyStatusCounts();
   const record = isRecord(value) ? value : {};
   for (const status of STATUS_ORDER) {
-    const raw = record[status];
-    counts[status] = toNonNegativeInt(raw);
+    counts[status] = toNonNegativeInt(record[status]);
   }
-  // Recompute from the normalized session list if the server-provided counts are missing or zero.
   if (Object.values(counts).every((count) => count === 0) && sessions.length > 0) {
     for (const session of sessions) {
       counts[session.recordedStatus] += 1;
@@ -806,6 +708,12 @@ function readStatusValue(value: unknown): BackgroundSessionStatus | null {
 
 function readNullableString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function toNonNegativeInt(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : fallback;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
