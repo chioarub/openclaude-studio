@@ -487,5 +487,6 @@ describe('readBackgroundSessionLogs', () => {
 
     expect(result.entries).toEqual([]);
     expect(result.totalLines).toBe(6000);
+    expect(result.start).toBe(100);
   });
 });
