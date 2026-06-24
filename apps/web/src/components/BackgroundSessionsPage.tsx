@@ -413,7 +413,12 @@ function SessionDetail({
               ) : !logAvailable ? (
                 <EmptyState label={`No ${stream} log available`} />
               ) : logs && logs.entries.length === 0 ? (
-                <EmptyState label="Log is empty" />
+                <div className="rounded-lg border border-dashed border-hairline px-6 py-10 text-center">
+                  <p className="font-medium text-ink">No {stream} output captured yet</p>
+                  <p className="mt-1 text-sm text-muted-soft">
+                    The log file exists but is empty. Output appears here once the background session writes to {stream}.
+                  </p>
+                </div>
               ) : (
                 <LogWindow
                   entries={logs?.entries ?? []}
