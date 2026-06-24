@@ -1,20 +1,33 @@
 import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 
 import type {
   Diagnostic,
   ProviderCustomHeaderSummary,
   ProviderProfileField,
   ProviderProfileTemplate,
+  ProviderCredentialState,
   ProviderProfileValidation,
   ProviderProfileValidationIssue,
   ProviderProfilesResponse,
   ProviderTemplateId,
   SafeProviderProfile,
+  StartupProviderProfileSummary,
 } from '@openclaude-studio/shared';
 
 import type { OpenClaudePaths } from './paths.js';
 import { redactUrl } from './redaction.js';
 import { readRawOpenClaudeConfig, type OpenClaudeConfig } from './openclaudeData.js';
+import { readBoundedTextFile } from './safeFile.js';
+import {
+  configuredStartupCredentials,
+  configuredStartupNonSecretFields,
+  isSupportedStartupProfile,
+  recognizeStudioProvider,
+  startupBaseUrlFromEnv,
+  summarizeProviderCredentialState,
+  summarizeStartupCredentialState,
+} from './providerRecognition.js';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -23,6 +36,8 @@ type ProfileContext = {
 };
 
 const httpTokenPattern = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
+const startupProfileFileName = '.openclaude-profile.json';
+const maxStartupProfileBytes = 64 * 1024;
 
 const templates: ProviderProfileTemplate[] = [
   {
@@ -195,7 +210,10 @@ const templates: ProviderProfileTemplate[] = [
   },
 ];
 
-export async function readProviderProfiles(paths: OpenClaudePaths): Promise<ProviderProfilesResponse> {
+export async function readProviderProfiles(
+  paths: OpenClaudePaths,
+  env: Record<string, string | undefined> = process.env,
+): Promise<ProviderProfilesResponse> {
   const { path, exists, config, diagnostics: configDiagnostics } = await readRawOpenClaudeConfig(paths);
   const rawProfiles = getProviderProfiles(config);
   const ids = rawProfiles.map((profile, index) => profileId(profile, index));
@@ -204,6 +222,7 @@ export async function readProviderProfiles(paths: OpenClaudePaths): Promise<Prov
   const selectedActiveIndex = selectActiveProviderIndex(config, rawProfiles);
   const selectedActiveId = selectedActiveIndex === null ? null : profileId(rawProfiles[selectedActiveIndex] ?? {}, selectedActiveIndex);
   const diagnostics: Diagnostic[] = [...configDiagnostics];
+  const startupProfile = await readStartupProviderProfile(paths);
 
   if (rawProfiles.length === 0) {
     diagnostics.push({ level: 'warn', message: 'No provider profiles are configured.' });
@@ -220,9 +239,9 @@ export async function readProviderProfiles(paths: OpenClaudePaths): Promise<Prov
   }
 
   const profiles = rawProfiles.map((profile, index) =>
-    toSafeProviderProfile(profile, index, selectedActiveIndex, { duplicateIds }),
+    toSafeProviderProfile(profile, index, selectedActiveIndex, { duplicateIds }, env),
   );
-  const summary = summarizeProfiles(profiles);
+  const summary = summarizeProfiles(profiles, startupProfile);
 
   return {
     path,
@@ -230,6 +249,7 @@ export async function readProviderProfiles(paths: OpenClaudePaths): Promise<Prov
     activeProviderProfileId: configuredActiveId,
     sensitiveFieldsRedacted: true,
     profiles,
+    startupProfile,
     templates: getProviderProfileTemplates(),
     summary: {
       ...summary,
@@ -253,31 +273,12 @@ export function inferProviderTemplateId(profile: {
   provider?: string | null;
   baseUrl?: string | null;
 }): ProviderTemplateId {
-  const provider = (profile.provider ?? '').toLowerCase();
-  const baseUrl = (profile.baseUrl ?? '').toLowerCase();
-
-  if (provider === 'anthropic' || baseUrl.includes('api.anthropic.com')) {
-    return 'anthropic';
-  }
-  if (provider === 'gemini' || baseUrl.includes('generativelanguage.googleapis.com')) {
-    return 'gemini';
-  }
-  if (baseUrl.includes('api.z.ai')) {
-    return 'zai-coding-plan';
-  }
-  if (baseUrl.includes('chatgpt.com/backend-api/codex')) {
-    return 'codex-oauth';
-  }
-  if (provider === 'ollama') {
-    return 'ollama';
-  }
-  if (provider === 'mistral' || baseUrl.includes('api.mistral.ai')) {
-    return 'mistral';
-  }
-  if (baseUrl === 'https://api.openai.com/v1' || baseUrl === 'https://api.openai.com/v1/') {
-    return 'openai';
-  }
-  return 'custom-openai';
+  const recognizedProvider = recognizeStudioProvider({
+    provider: profile.provider ?? null,
+    baseUrl: profile.baseUrl ?? null,
+    apiKeySet: false,
+  });
+  return templateIdFromProfile(profile.provider, recognizedProvider.id);
 }
 
 function toSafeProviderProfile(
@@ -285,13 +286,26 @@ function toSafeProviderProfile(
   index: number,
   selectedActiveIndex: number | null,
   context: ProfileContext,
+  env: Record<string, string | undefined>,
 ): SafeProviderProfile {
   const id = profileId(profile, index);
   const name = trimmedString(profile.name) ?? 'Unnamed provider';
   const provider = trimmedString(profile.provider) ?? 'unknown';
   const model = trimmedString(profile.model) ?? 'default';
   const baseUrlRaw = trimmedString(profile.baseUrl);
-  const templateId = inferProviderTemplateId({ provider, baseUrl: baseUrlRaw });
+  const recognizedProvider = recognizeStudioProvider({
+    provider,
+    baseUrl: baseUrlRaw,
+    apiKeySet: hasNonEmptyString(profile.apiKey) || hasNonEmptyString(profile.authHeaderValue),
+  });
+  const credential = summarizeProviderCredentialState({
+    savedApiKey: profile.apiKey,
+    savedAuthHeaderValue: profile.authHeaderValue,
+    env,
+    credentialEnvVars: recognizedProvider.credentialEnvVars,
+    envSourceLabel: 'Studio server env',
+  });
+  const templateId = templateIdFromProfile(provider, recognizedProvider.id);
   const template = templates.find((item) => item.id === templateId) ?? templates[templates.length - 1]!;
   const apiFormat = trimmedString(profile.apiFormat);
   const authHeader = trimmedString(profile.authHeader);
@@ -311,9 +325,121 @@ function toSafeProviderProfile(
     authHeader,
     authScheme,
     customHeaders: summarizeCustomHeaders(profile.customHeaders),
+    recognizedProvider,
+    credential,
     templateId,
     templateLabel: template.label,
     validation,
+  };
+}
+
+async function readStartupProviderProfile(paths: OpenClaudePaths): Promise<StartupProviderProfileSummary> {
+  const path = join(paths.openClaudeHome, startupProfileFileName);
+  const result = await readBoundedTextFile(path, { maxBytes: maxStartupProfileBytes });
+  const fallbackRecognition = recognizeStudioProvider({ provider: null, baseUrl: null, apiKeySet: false });
+  const emptyCredential: ProviderCredentialState = {
+    credentialMode: 'none',
+    credentialCount: 0,
+    credentialConfigured: false,
+    credentialInvalid: false,
+    credentialSources: [],
+  };
+
+  if (!result.exists) {
+    return {
+      path,
+      exists: false,
+      profile: null,
+      createdAt: null,
+      configuredNonSecretFields: [],
+      credentials: [],
+      credential: emptyCredential,
+      recognizedProvider: fallbackRecognition,
+      diagnostics: result.diagnostics,
+    };
+  }
+
+  if (result.truncated) {
+    return {
+      path,
+      exists: true,
+      profile: null,
+      createdAt: null,
+      configuredNonSecretFields: [],
+      credentials: [],
+      credential: emptyCredential,
+      recognizedProvider: fallbackRecognition,
+      diagnostics: [
+        ...result.diagnostics,
+        {
+          level: 'error',
+          message: `Startup profile exceeds the ${maxStartupProfileBytes} byte read limit.`,
+          path,
+        },
+      ],
+    };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.content);
+  } catch (error) {
+    return {
+      path,
+      exists: true,
+      profile: null,
+      createdAt: null,
+      configuredNonSecretFields: [],
+      credentials: [],
+      credential: emptyCredential,
+      recognizedProvider: fallbackRecognition,
+      diagnostics: [
+        {
+          level: 'error',
+          message: `Unable to parse startup profile: ${errorMessage(error)}`,
+          path,
+        },
+      ],
+    };
+  }
+
+  if (!isRecord(parsed) || !isSupportedStartupProfile(parsed.profile) || !isRecord(parsed.env) || (
+    parsed.createdAt !== undefined && typeof parsed.createdAt !== 'string'
+  )) {
+    return {
+      path,
+      exists: true,
+      profile: null,
+      createdAt: null,
+      configuredNonSecretFields: [],
+      credentials: [],
+      credential: emptyCredential,
+      recognizedProvider: fallbackRecognition,
+      diagnostics: [
+        {
+          level: 'error',
+          message: 'Startup profile must contain a non-empty profile string, env object, and optional createdAt string.',
+          path,
+        },
+      ],
+    };
+  }
+
+  const credential = summarizeStartupCredentialState(parsed.env);
+  return {
+    path,
+    exists: true,
+    profile: parsed.profile,
+    createdAt: typeof parsed.createdAt === 'string' ? parsed.createdAt : null,
+    configuredNonSecretFields: configuredStartupNonSecretFields(parsed.env),
+    credentials: configuredStartupCredentials(parsed.env),
+    credential,
+    recognizedProvider: recognizeStudioProvider({
+      provider: parsed.profile,
+      baseUrl: startupBaseUrlFromEnv(parsed.env),
+      apiKeySet: credential.credentialConfigured,
+    }),
+    diagnostics: result.diagnostics,
   };
 }
 
@@ -446,15 +572,51 @@ function validateBaseUrl(baseUrl: string, issues: ProviderProfileValidationIssue
   }
 }
 
-function summarizeProfiles(profiles: SafeProviderProfile[]): ProviderProfilesResponse['summary'] {
+function summarizeProfiles(
+  profiles: SafeProviderProfile[],
+  startupProfile: StartupProviderProfileSummary,
+): ProviderProfilesResponse['summary'] {
   return {
     total: profiles.length,
     active: profiles.filter((profile) => profile.active).length,
     valid: profiles.filter((profile) => profile.validation.status === 'valid').length,
     warnings: profiles.filter((profile) => profile.validation.status === 'warning').length,
     errors: profiles.filter((profile) => profile.validation.status === 'error').length,
+    recognized: profiles.filter((profile) => profile.recognizedProvider.id !== 'custom').length,
+    startupProfileConfigured: startupProfile.exists && startupProfile.profile !== null,
     templates: templates.length,
   };
+}
+
+function templateIdFromProfile(provider: string | null | undefined, recognizedProviderId: string): ProviderTemplateId {
+  const providerId = provider?.trim().toLowerCase();
+  if (providerId === 'openai' && (
+    recognizedProviderId === 'ollama' ||
+    recognizedProviderId === 'lmstudio' ||
+    recognizedProviderId === 'atomic-chat'
+  )) {
+    return 'custom-openai';
+  }
+
+  switch (recognizedProviderId) {
+    case 'anthropic':
+      return 'anthropic';
+    case 'openai':
+      return 'openai';
+    case 'gemini':
+      return 'gemini';
+    case 'zai':
+      return 'zai-coding-plan';
+    case 'codex':
+    case 'codex-oauth':
+      return 'codex-oauth';
+    case 'ollama':
+      return 'ollama';
+    case 'mistral':
+      return 'mistral';
+    default:
+      return 'custom-openai';
+  }
 }
 
 function summarizeCustomHeaders(value: unknown): ProviderCustomHeaderSummary[] {
@@ -544,4 +706,8 @@ function isLoopbackHost(hostname: string): boolean {
 
 function isRecord(value: unknown): value is UnknownRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

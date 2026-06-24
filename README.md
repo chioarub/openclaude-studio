@@ -19,7 +19,7 @@ OpenClaude keeps useful local context in files that are awkward to inspect by ha
 - Inspect sessions, assistant messages, tool calls, tool results, errors, changed files, usage, and cost.
 - Review linked plans, linked tasks, and checklist progress without opening raw task files.
 - Search project-scoped debug logs without opening raw log files.
-- Review provider profiles, validation diagnostics, and safe templates while keeping secret fields redacted.
+- Review provider profiles, startup launch profile diagnostics, provider recognition, and safe templates while keeping credential values redacted.
 - Diagnose missing, malformed, or unavailable local data.
 
 ## Current Scope
@@ -33,7 +33,7 @@ The current MVP line includes:
 - Read-only Session Change Review with bounded, redacted diffs from file-history backups and current project files
 - Changed files, token usage, cost summary, linked plans, linked tasks, and file-history context for sessions
 - Plans & Tasks view with checklist progress, linked sessions, task status groups, and detail panes
-- Read-only provider profile management with active profile inspection, validation diagnostics, and safe templates
+- Read-only provider profile management with active profile inspection, provider recognition, credential-pool metadata, validation diagnostics, and safe templates
 - Project-scoped diagnostics
 - Project-scoped debug log viewing, filtering, search, virtualized scrolling, and copy-to-clipboard for log messages
 - Background session monitoring with status counters, search, filters, project linking, and bounded redacted stdout/stderr log inspection
@@ -81,6 +81,7 @@ Local server on 127.0.0.1:43110
 ~/.openclaude/file-history/
 ~/.openclaude/debug/
 ~/.openclaude/bg-sessions/
+~/.openclaude/.openclaude-profile.json
 ```
 
 The web UI can run locally during development or be hosted as static assets. The server should run on the same machine as OpenClaude because it reads local OpenClaude files.
@@ -92,6 +93,8 @@ The web UI can run locally during development or be hosted as static assets. The
 - The hosted web app runs in your browser and talks to your local server.
 - The app code does not intentionally collect telemetry; review your own hosting configuration if you deploy a fork.
 - Project discovery may show project paths found in OpenClaude transcript metadata, including historical paths that are no longer present on disk.
+- Provider credential diagnostics expose configured booleans, counts, and source labels only; they do not expose credential values, masked values, fingerprints, or pool order.
+- Environment visibility reflects the Studio server process and persisted startup profile data, not necessarily another running OpenClaude process.
 - Redaction is defense in depth, not a guarantee for every possible secret format.
 - Review logs, screenshots, and recordings before sharing them publicly.
 
@@ -217,6 +220,7 @@ OpenClaude Studio is designed to be conservative by default:
 - File reads are bounded.
 - Symlink traversal is avoided for sensitive local file reads.
 - Provider URLs, auth fields, bearer tokens, common API key formats, and log messages are redacted where possible.
+- Provider credential pools are summarized as safe metadata only.
 
 Redaction is defense in depth, not a guarantee for every possible secret format. Avoid sharing screenshots or logs without reviewing them.
 
@@ -234,12 +238,12 @@ Shipped in the MVP line:
 - [x] Session Change Review with read-only per-session diffs, backup status, diagnostics, and risk flags
 - [x] Plans and tasks views linked back to sessions
 - [x] File history and backup context for selected sessions
-- [x] Active provider inspection with secret fields redacted
+- [x] Active provider inspection with recognition and credential metadata
 - [x] Project-scoped diagnostics
 - [x] Debug log viewing, filtering, search, virtualized scrolling, and log-message copy
 - [x] Dark and light themes
 - [x] Custom local API URL setting for non-default ports
-- [x] Provider profile management with safe templates and validation
+- [x] Provider profile management with safe templates, validation, and startup launch profile diagnostics
 - [x] Conservative read-only local API
 
 Planned and open for discussion:

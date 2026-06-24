@@ -42,6 +42,16 @@ If both variables are set to different values, Studio uses `OPENCLAUDE_CONFIG_DI
 
 Studio never migrates or copies OpenClaude data. It only reads from the selected root.
 
+## Provider or credential status looks wrong
+
+Studio reads saved provider profiles from the resolved OpenClaude configuration source and, when present, the startup launch profile at `<resolved OpenClaude config root>/.openclaude-profile.json`.
+
+Credential status is value-free. Studio reports whether a credential appears configured, whether an OpenAI-compatible pool has a parsed non-empty count, and whether a documented placeholder was detected. It never shows credential values or validates them over the network.
+
+Environment-based credential diagnostics describe only the environment inherited by the Studio server process. If OpenClaude was launched from another shell, service manager, or app with different variables, Studio may not see the same environment. Restart `npx openclaude-studio` from the same shell if you expect inherited environment variables to match.
+
+Dynamic providers may show discovery capability without a copied model catalog. Studio does not call provider APIs, so configured models and recognition diagnostics are local inspection only.
+
 ## Port already in use
 
 Start the local API on another loopback port:

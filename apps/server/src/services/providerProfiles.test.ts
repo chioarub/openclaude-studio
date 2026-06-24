@@ -1,9 +1,13 @@
-import { writeFile, mkdtemp } from 'node:fs/promises';
+import { mkdir, symlink, writeFile, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import { createOpenClaudePaths } from './paths.js';
+import {
+  getStudioProviderDescriptors,
+  recognizeStudioProvider,
+} from './providerRecognition.js';
 import {
   getProviderProfileTemplates,
   inferProviderTemplateId,
@@ -115,7 +119,7 @@ describe('Provider profile management data', () => {
       'utf8',
     );
 
-    const result = await readProviderProfiles(paths);
+    const result = await readProviderProfiles(paths, {});
 
     expect(result.path).toBe(paths.openClaudeConfig);
     expect(result.exists).toBe(true);
@@ -190,7 +194,7 @@ describe('Provider profile management data', () => {
       'utf8',
     );
 
-    const result = await readProviderProfiles(paths);
+    const result = await readProviderProfiles(paths, {});
 
     expect(result.summary).toMatchObject({ total: 2, active: 1, errors: 2 });
     expect(result.profiles.map((profile) => profile.active)).toEqual([true, false]);
@@ -226,7 +230,8 @@ describe('Provider profile management data', () => {
       'utf8',
     );
 
-    const result = await readProviderProfiles(paths);
+    const result = await readProviderProfiles(paths, {});
+    const fallback = await readProviderProfiles(paths, { OPENAI_API_KEY: 'sk-env-fallback' });
 
     expect(result.profiles[0]).toMatchObject({
       apiKeySet: false,
@@ -241,6 +246,14 @@ describe('Provider profile management data', () => {
         ]),
       },
     });
+    expect(fallback.profiles[0]?.credential).toEqual({
+      credentialMode: 'single',
+      credentialCount: 1,
+      credentialConfigured: true,
+      credentialInvalid: false,
+      credentialSources: ['Studio server env: OPENAI_API_KEY'],
+    });
+    expect(JSON.stringify(fallback)).not.toContain('sk-env-fallback');
   });
 
   test('trims configured active ids and profile ids before matching them', async () => {
@@ -264,13 +277,531 @@ describe('Provider profile management data', () => {
       'utf8',
     );
 
-    const result = await readProviderProfiles(paths);
+    const result = await readProviderProfiles(paths, {});
 
     expect(result.activeProviderProfileId).toBe('openai-profile');
     expect(result.profiles[0]).toMatchObject({
       id: 'openai-profile',
       active: true,
       validation: { status: 'valid' },
+    });
+  });
+
+  test('returns provider recognition and safe credential-pool metadata without secrets', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        activeProviderProfileId: 'fireworks-profile',
+        providerProfiles: [
+          {
+            id: 'fireworks-profile',
+            name: 'Fireworks Team',
+            provider: 'openai',
+            baseUrl: 'https://api.fireworks.ai/inference/v1',
+            model: 'accounts/fireworks/models/test-model',
+            apiKey: 'fw-secret-a, fw-secret-b',
+          },
+          {
+            id: 'near-profile',
+            name: 'NEAR Team',
+            provider: 'openai',
+            baseUrl: 'https://foo.completions.near.ai/v1',
+            model: 'anthropic/claude-sonnet-4-6',
+            customHeaders: {
+              Authorization: 'Bearer near-private',
+              'X-Trace': 'enabled',
+            },
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const result = await readProviderProfiles(paths, {});
+
+    expect(result.summary).toMatchObject({
+      total: 2,
+      recognized: 2,
+      startupProfileConfigured: false,
+    });
+    expect(result.profiles[0]).toMatchObject({
+      provider: 'openai',
+      recognizedProvider: {
+        id: 'fireworks',
+        label: 'Fireworks AI',
+        category: 'hosted',
+        transport: 'openai-compatible',
+        discoveryMode: 'static',
+        credentialEnvVars: ['FIREWORKS_API_KEY', 'OPENAI_API_KEYS', 'OPENAI_API_KEY'],
+        safeTemplateAvailable: false,
+        inspectionOnly: false,
+      },
+      credential: {
+        credentialMode: 'pool',
+        credentialCount: 2,
+        credentialConfigured: true,
+        credentialInvalid: false,
+        credentialSources: ['saved profile apiKey'],
+      },
+    });
+    expect(result.profiles[1]).toMatchObject({
+      recognizedProvider: {
+        id: 'nearai',
+        label: 'NEAR AI',
+        category: 'hosted',
+      },
+      credential: {
+        credentialMode: 'none',
+        credentialCount: 0,
+        credentialConfigured: false,
+        credentialInvalid: false,
+      },
+    });
+    expect(result.profiles[1]?.customHeaders).toEqual([
+      { name: 'Authorization', sensitive: true, valueSet: true },
+      { name: 'X-Trace', sensitive: false, valueSet: true },
+    ]);
+    expect(JSON.stringify(result)).not.toContain('fw-secret-a');
+    expect(JSON.stringify(result)).not.toContain('fw-secret-b');
+    expect(JSON.stringify(result)).not.toContain('near-private');
+  });
+
+  test('respects OpenAI pool and singular credential precedence from the Studio server environment', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [
+          {
+            id: 'openai-profile',
+            name: 'OpenAI Team',
+            provider: 'openai',
+            baseUrl: 'https://api.openai.com/v1',
+            model: 'gpt-example',
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const pooled = await readProviderProfiles(paths, {
+      OPENAI_API_KEYS: ' sk-env-a , , sk-env-b ',
+      OPENAI_API_KEY: 'sk-env-c',
+    });
+    expect(pooled.profiles[0]?.credential).toEqual({
+      credentialMode: 'pool',
+      credentialCount: 2,
+      credentialConfigured: true,
+      credentialInvalid: false,
+      credentialSources: ['Studio server env: OPENAI_API_KEYS'],
+    });
+
+    const delimiterOnlyPool = await readProviderProfiles(paths, {
+      OPENAI_API_KEYS: ', ,',
+      OPENAI_API_KEY: 'sk-env-c',
+    });
+    expect(delimiterOnlyPool.profiles[0]?.credential).toEqual({
+      credentialMode: 'single',
+      credentialCount: 1,
+      credentialConfigured: true,
+      credentialInvalid: false,
+      credentialSources: ['Studio server env: OPENAI_API_KEY'],
+    });
+
+    const duplicatePool = await readProviderProfiles(paths, {
+      OPENAI_API_KEYS: 'sk-env-a,sk-env-a',
+    });
+    expect(duplicatePool.profiles[0]?.credential).toEqual({
+      credentialMode: 'pool',
+      credentialCount: 2,
+      credentialConfigured: true,
+      credentialInvalid: false,
+      credentialSources: ['Studio server env: OPENAI_API_KEYS'],
+    });
+
+    const placeholderPool = await readProviderProfiles(paths, {
+      OPENAI_API_KEYS: 'sk-env-a,SUA_CHAVE',
+      OPENAI_API_KEY: 'sk-env-c',
+    });
+    expect(placeholderPool.profiles[0]?.credential).toEqual({
+      credentialMode: 'unknown',
+      credentialCount: 2,
+      credentialConfigured: false,
+      credentialInvalid: true,
+      credentialSources: ['Studio server env: OPENAI_API_KEYS'],
+    });
+    expect(JSON.stringify(pooled)).not.toContain('sk-env-a');
+    expect(JSON.stringify(pooled)).not.toContain('sk-env-b');
+    expect(JSON.stringify(delimiterOnlyPool)).not.toContain('sk-env-c');
+    expect(JSON.stringify(duplicatePool)).not.toContain('sk-env-a');
+    expect(JSON.stringify(placeholderPool)).not.toContain('sk-env-a');
+    expect(JSON.stringify(placeholderPool)).not.toContain('SUA_CHAVE');
+  });
+
+  test('reports invalid saved credentials without falling back to lower-precedence environment credentials', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [
+          {
+            id: 'openai-profile',
+            name: 'OpenAI Team',
+            provider: 'openai',
+            baseUrl: 'https://api.openai.com/v1',
+            model: 'gpt-example',
+            apiKey: 'SUA_CHAVE',
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const result = await readProviderProfiles(paths, { OPENAI_API_KEY: 'sk-env-c' });
+
+    expect(result.profiles[0]?.credential).toEqual({
+      credentialMode: 'unknown',
+      credentialCount: 1,
+      credentialConfigured: false,
+      credentialInvalid: true,
+      credentialSources: ['saved profile apiKey'],
+    });
+    expect(JSON.stringify(result)).not.toContain('SUA_CHAVE');
+    expect(JSON.stringify(result)).not.toContain('sk-env-c');
+  });
+
+  test('exposes startup profile metadata from the config root without returning env values', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(paths.openClaudeHome, { recursive: true });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({ providerProfiles: [] }),
+      'utf8',
+    );
+    await writeFile(
+      join(paths.openClaudeHome, '.openclaude-profile.json'),
+      JSON.stringify({
+        profile: 'openai',
+        createdAt: '2026-06-24T12:00:00.000Z',
+        env: {
+          OPENAI_BASE_URL: 'https://api.openai.com/v1',
+          OPENAI_MODEL: 'gpt-example',
+          OPENAI_API_KEYS: 'startup-secret-a,startup-secret-b',
+          OPENAI_AUTH_HEADER_VALUE: 'Bearer startup-private',
+          ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer private',
+          AWS_ACCESS_KEY_ID: 'startup-access-key-id',
+          AWS_SECRET_ACCESS_KEY: 'startup-secret-access-key',
+          DATABASE_CONNECTION_STRING: 'postgres://user:password@host/db',
+          DATABASE_URL: 'postgres://user:password@host/db',
+          DEEPSEEK_API_KEY: 'startup-deepseek-secret',
+          GIT_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----',
+          JWT_SECRET_KEY: 'startup-jwt-secret-key',
+          SAFE_LABEL: 'internal provider label',
+          SERVICE_ACCESS_TOKEN: 'startup-access-token',
+          XAI_CREDENTIAL_SOURCE: 'oauth',
+        },
+        ignored: 'not returned',
+      }),
+      'utf8',
+    );
+
+    const result = await readProviderProfiles(paths);
+
+    expect(result.startupProfile).toMatchObject({
+      exists: true,
+      profile: 'openai',
+      createdAt: '2026-06-24T12:00:00.000Z',
+      configuredNonSecretFields: ['OPENAI_BASE_URL', 'OPENAI_MODEL'],
+      credentials: [
+        { name: 'ANTHROPIC_CUSTOM_HEADERS', configured: true },
+        { name: 'DEEPSEEK_API_KEY', configured: true },
+        { name: 'OPENAI_API_KEYS', configured: true },
+        { name: 'OPENAI_AUTH_HEADER_VALUE', configured: true },
+        { name: 'XAI_CREDENTIAL_SOURCE', configured: true },
+      ],
+      credential: {
+        credentialMode: 'pool',
+        credentialCount: 2,
+        credentialConfigured: true,
+        credentialInvalid: false,
+        credentialSources: ['startup profile env: OPENAI_API_KEYS'],
+      },
+      recognizedProvider: {
+        id: 'openai',
+        label: 'OpenAI',
+      },
+    });
+    expect(JSON.stringify(result.startupProfile)).not.toContain('startup-secret-a');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('startup-secret-b');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('startup-private');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('Bearer private');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('AWS_ACCESS_KEY_ID');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('startup-access-key-id');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('AWS_SECRET_ACCESS_KEY');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('startup-secret-access-key');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('DATABASE_CONNECTION_STRING');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('postgres://user:password@host/db');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('DATABASE_URL');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('startup-deepseek-secret');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('GIT_PRIVATE_KEY');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('BEGIN PRIVATE KEY');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('JWT_SECRET_KEY');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('startup-jwt-secret-key');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('SAFE_LABEL');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('internal provider label');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('SERVICE_ACCESS_TOKEN');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('startup-access-token');
+    expect(JSON.stringify(result.startupProfile)).not.toContain('ignored');
+  });
+
+  test('degrades unknown future startup profiles to custom recognition', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(paths.openClaudeHome, { recursive: true });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ providerProfiles: [] }), 'utf8');
+    await writeFile(
+      join(paths.openClaudeHome, '.openclaude-profile.json'),
+      JSON.stringify({
+        profile: 'future-provider',
+        env: {
+          OPENAI_BASE_URL: 'https://future.example/v1',
+          OPENAI_MODEL: 'future-model',
+        },
+      }),
+      'utf8',
+    );
+
+    const result = await readProviderProfiles(paths);
+
+    expect(result.startupProfile).toMatchObject({
+      exists: true,
+      profile: 'future-provider',
+      configuredNonSecretFields: ['OPENAI_BASE_URL', 'OPENAI_MODEL'],
+      recognizedProvider: {
+        id: 'custom',
+        label: 'Custom OpenAI-compatible',
+      },
+      diagnostics: [],
+    });
+  });
+
+  test('reports missing, malformed, symlinked, and oversized startup profiles through diagnostics', async () => {
+    const missingHome = await mkdtemp(join(tmpdir(), 'ocs-providers-missing-'));
+    const missingPaths = createOpenClaudePaths({ home: missingHome, env: {} });
+    await writeFile(missingPaths.openClaudeConfig, JSON.stringify({ providerProfiles: [] }), 'utf8');
+    const missing = await readProviderProfiles(missingPaths);
+    expect(missing.startupProfile).toMatchObject({
+      exists: false,
+      profile: null,
+      diagnostics: [expect.objectContaining({ level: 'info', message: 'File does not exist.' })],
+    });
+
+    const malformedHome = await mkdtemp(join(tmpdir(), 'ocs-providers-malformed-'));
+    const malformedPaths = createOpenClaudePaths({ home: malformedHome, env: {} });
+    await mkdir(malformedPaths.openClaudeHome, { recursive: true });
+    await writeFile(malformedPaths.openClaudeConfig, JSON.stringify({ providerProfiles: [] }), 'utf8');
+    await writeFile(join(malformedPaths.openClaudeHome, '.openclaude-profile.json'), '{"profile":42}', 'utf8');
+    const malformed = await readProviderProfiles(malformedPaths);
+    expect(malformed.startupProfile).toMatchObject({
+      exists: true,
+      profile: null,
+      diagnostics: [expect.objectContaining({ level: 'error', message: 'Startup profile must contain a non-empty profile string, env object, and optional createdAt string.' })],
+    });
+
+    const symlinkHome = await mkdtemp(join(tmpdir(), 'ocs-providers-symlink-'));
+    const symlinkPaths = createOpenClaudePaths({ home: symlinkHome, env: {} });
+    await mkdir(symlinkPaths.openClaudeHome, { recursive: true });
+    await writeFile(symlinkPaths.openClaudeConfig, JSON.stringify({ providerProfiles: [] }), 'utf8');
+    const target = join(symlinkHome, 'private-profile.json');
+    await writeFile(target, JSON.stringify({ profile: 'openai', env: {}, createdAt: '2026-06-24T12:00:00.000Z' }), 'utf8');
+    await symlink(target, join(symlinkPaths.openClaudeHome, '.openclaude-profile.json'));
+    const symlinked = await readProviderProfiles(symlinkPaths);
+    expect(symlinked.startupProfile).toMatchObject({
+      exists: false,
+      profile: null,
+      diagnostics: [expect.objectContaining({ level: 'warn', message: 'Symlinked files are not read.' })],
+    });
+
+    const oversizedHome = await mkdtemp(join(tmpdir(), 'ocs-providers-oversized-'));
+    const oversizedPaths = createOpenClaudePaths({ home: oversizedHome, env: {} });
+    await mkdir(oversizedPaths.openClaudeHome, { recursive: true });
+    await writeFile(oversizedPaths.openClaudeConfig, JSON.stringify({ providerProfiles: [] }), 'utf8');
+    await writeFile(
+      join(oversizedPaths.openClaudeHome, '.openclaude-profile.json'),
+      JSON.stringify({ profile: 'openai', env: { OPENAI_MODEL: 'x'.repeat(80 * 1024) }, createdAt: '2026-06-24T12:00:00.000Z' }),
+      'utf8',
+    );
+    const oversized = await readProviderProfiles(oversizedPaths);
+    expect(oversized.startupProfile).toMatchObject({
+      exists: true,
+      profile: null,
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({ level: 'error', message: 'Startup profile exceeds the 65536 byte read limit.' }),
+      ]),
+    });
+  });
+});
+
+describe('Provider recognition registry', () => {
+  test('covers current upstream first-class routes without turning every route into a template', () => {
+    expect(getStudioProviderDescriptors().map((descriptor) => descriptor.id)).toEqual([
+      'anthropic',
+      'atlas-cloud',
+      'bankr',
+      'deepseek',
+      'fireworks',
+      'gemini',
+      'minimax',
+      'moonshot',
+      'nearai',
+      'openai',
+      'venice',
+      'xai',
+      'xiaomi-mimo',
+      'zai',
+      'atomic-chat',
+      'azure-openai',
+      'bedrock',
+      'foundry',
+      'custom',
+      'dashscope-cn',
+      'dashscope-intl',
+      'github-enterprise',
+      'github',
+      'gitlawb-opengateway',
+      'groq',
+      'hicap',
+      'kimi-code',
+      'lmstudio',
+      'mistral',
+      'nvidia-nim',
+      'ollama',
+      'opencode-go',
+      'opencode',
+      'openrouter',
+      'together',
+      'vertex',
+      'xiaomi-mimo-token',
+      'codex',
+      'codex-oauth',
+    ]);
+
+    const templates = getProviderProfileTemplates().map((template) => template.id);
+    expect(templates).toEqual([
+      'anthropic',
+      'openai',
+      'gemini',
+      'zai-coding-plan',
+      'codex-oauth',
+      'ollama',
+      'mistral',
+      'custom-openai',
+    ]);
+    expect(templates).not.toContain('fireworks');
+    expect(templates).not.toContain('nearai');
+    expect(templates).not.toContain('atlas-cloud');
+  });
+
+  test.each([
+    ['anthropic', 'anthropic'],
+    ['atlas-cloud', 'atlas-cloud'],
+    ['bankr', 'bankr'],
+    ['deepseek', 'deepseek'],
+    ['fireworks', 'fireworks'],
+    ['gemini', 'gemini'],
+    ['minimax', 'minimax'],
+    ['moonshot', 'moonshot'],
+    ['nearai', 'nearai'],
+    ['openai', 'openai'],
+    ['venice', 'venice'],
+    ['xai', 'xai'],
+    ['xiaomi-mimo', 'xiaomi-mimo'],
+    ['zai', 'zai'],
+    ['atomic-chat', 'atomic-chat'],
+    ['azure-openai', 'azure-openai'],
+    ['bedrock', 'bedrock'],
+    ['foundry', 'foundry'],
+    ['custom', 'custom'],
+    ['dashscope-cn', 'dashscope-cn'],
+    ['dashscope-intl', 'dashscope-intl'],
+    ['github-enterprise', 'github-enterprise'],
+    ['github', 'github'],
+    ['gitlawb-opengateway', 'gitlawb-opengateway'],
+    ['groq', 'groq'],
+    ['hicap', 'hicap'],
+    ['kimi-code', 'kimi-code'],
+    ['lmstudio', 'lmstudio'],
+    ['mistral', 'mistral'],
+    ['nvidia-nim', 'nvidia-nim'],
+    ['ollama', 'ollama'],
+    ['opencode-go', 'opencode-go'],
+    ['opencode', 'opencode'],
+    ['openrouter', 'openrouter'],
+    ['together', 'together'],
+    ['vertex', 'vertex'],
+    ['xiaomi-mimo-token', 'xiaomi-mimo-token'],
+    ['codex', 'codex-oauth'],
+    ['codex-oauth', 'codex-oauth'],
+  ])('recognizes provider identifier %s as %s', (provider, expectedId) => {
+    expect(recognizeStudioProvider({ provider, baseUrl: null, apiKeySet: false }).id).toBe(expectedId);
+  });
+
+  test('recognizes Codex API-key and OAuth modes separately', () => {
+    expect(recognizeStudioProvider({ provider: 'codex', baseUrl: null, apiKeySet: true }).id).toBe('codex');
+    expect(recognizeStudioProvider({ provider: 'codex', baseUrl: null, apiKeySet: false }).id).toBe('codex-oauth');
+  });
+
+  test.each([
+    ['https://api.anthropic.com/v1', 'anthropic'],
+    ['https://api.fireworks.ai/inference/v1', 'fireworks'],
+    ['https://API.Fireworks.AI/inference/v1', 'fireworks'],
+    ['https://generativelanguage.googleapis.com/v1beta/models', 'gemini'],
+    ['https://cloud-api.near.ai/v1', 'nearai'],
+    ['https://foo.completions.near.ai/v1', 'nearai'],
+    ['https://api.atlascloud.ai/v1', 'atlas-cloud'],
+    ['https://api.x.ai/v1', 'xai'],
+    ['https://api.xiaomimimo.com/v1', 'xiaomi-mimo'],
+    ['https://api.mimo-v2.com/v1', 'xiaomi-mimo'],
+    ['https://token-plan-cn.xiaomimimo.com/v1', 'xiaomi-mimo-token'],
+    ['https://opencode.ai/zen/go/v1', 'opencode-go'],
+    ['https://opencode.ai/zen/v1', 'opencode'],
+    ['https://opengateway.gitlawb.com/v1', 'gitlawb-opengateway'],
+    ['https://integrate.api.nvidia.com/v1', 'nvidia-nim'],
+    ['http://localhost:11434/v1', 'ollama'],
+    ['http://127.0.0.1:1234/v1', 'lmstudio'],
+    ['http://127.0.0.1:1337/v1', 'atomic-chat'],
+    ['https://chatgpt.com/backend-api/codex', 'codex-oauth'],
+  ])('recognizes controlled hostname %s as %s', (baseUrl, expectedId) => {
+    expect(recognizeStudioProvider({ provider: 'openai', baseUrl, apiKeySet: false }).id).toBe(expectedId);
+  });
+
+  test.each([
+    'https://api.fireworks.ai.evil.test/inference/v1',
+    'https://cloud-api.near.ai.evil.test/v1',
+    'https://evilcompletions.near.ai/v1',
+    'https://api.x.ai.attacker.example/v1',
+    'https://chatgpt.com.attacker.example/backend-api/codex',
+    'https://api.remote.example:1234/v1',
+  ])('does not recognize deceptive hostname %s', (baseUrl) => {
+    expect(recognizeStudioProvider({ provider: 'openai', baseUrl, apiKeySet: false }).id).toBe('custom');
+  });
+
+  test('classifies unknown future provider ids as custom', () => {
+    const recognized = recognizeStudioProvider({
+      provider: 'future-provider',
+      baseUrl: 'https://future.example/v1',
+      apiKeySet: false,
+    });
+
+    expect(recognized).toMatchObject({
+      id: 'custom',
+      label: 'Custom OpenAI-compatible',
+      category: 'custom',
     });
   });
 });

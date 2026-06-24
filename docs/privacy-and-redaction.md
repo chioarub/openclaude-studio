@@ -13,6 +13,7 @@ The local API may read:
 - `~/.openclaude/file-history/`
 - `~/.openclaude/debug/`
 - `~/.openclaude/bg-sessions/`
+- `~/.openclaude/.openclaude-profile.json`
 
 The app is read-only in the current MVP line. It should not write OpenClaude config, sessions, logs, provider profiles, project files, tasks, plans, or file-history data.
 
@@ -25,9 +26,17 @@ The server redacts likely secrets before returning data to the browser. Current 
 - Known provider secret fields
 - Provider profile credentials and custom header values
 - URL usernames and passwords
-- Common URL query secret names
+- Common URL query secret names and URL fragments
 - Bearer tokens
+- Environment-style secret assignments, including plural credential pools such as `OPENAI_API_KEYS`
+- Provider-specific key names and custom authorization header fields
 - Common API key formats in logs and messages
+
+Provider inspection returns credential metadata only: configured booleans, parsed non-empty counts, invalid placeholder flags, and source labels. It never returns credential values, masked values, hashes, prefixes, lengths, or credential-pool order.
+
+Startup profile inspection is limited to `<resolved OpenClaude config root>/.openclaude-profile.json` when that file exists. Studio parses only `profile`, `env`, and `createdAt`; known credential `env` fields become configured/not-configured booleans, and only known-safe non-secret configured field names may be listed. Unknown `env` names are omitted rather than exposed as non-secret fields. Studio does not read arbitrary `.env` files, shell history, Codex auth files, keychains, browser storage, or provider-specific credential stores.
+
+Environment-based provider diagnostics describe only environment variables inherited by the Studio server process. They do not prove what credentials another OpenClaude process has loaded.
 
 Session Change Review can display code or configuration text from current project files and OpenClaude file-history backups. Those reads are bounded, symlink-safe, and redacted before diff generation, but redaction remains best effort. Review screenshots, copied diffs, and recordings before sharing them.
 
