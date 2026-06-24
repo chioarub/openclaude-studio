@@ -4,6 +4,13 @@ All notable changes to OpenClaude Studio are documented here.
 
 This project uses semantic versioning for the published `openclaude-studio` npm package.
 
+## 0.4.0
+
+- Added read-only background session monitoring with status counters, search, filters, project linking, and bounded redacted stdout/stderr inspection.
+- Added `OPENCLAUDE_CONFIG_DIR` precedence over the legacy `CLAUDE_CONFIG_DIR` alias, with diagnostics when both are set differently.
+- Added accessible loading indicators and shared loading-state UI for slower local API responses.
+- Refreshed dependencies and documentation for the current local data, troubleshooting, privacy, and security scope.
+
 ## 0.3.0
 
 - Added provider profile management with a read-only local API, web UI, validation diagnostics, safe templates, copyable commands, and secret redaction.
