@@ -1826,7 +1826,7 @@ describe('App', () => {
     await user.keyboard('{Enter}');
     let dialog = await screen.findByRole('dialog', { name: /kb-task details/i });
     expect(dialog).toBeInTheDocument();
-    await user.click(within(dialog).getByRole('button', { name: 'Close detail' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Close dialog' }));
 
     // Space activation (separate branch with preventDefault to avoid page scroll)
     row = screen.getByLabelText('Open details for kb-task');
