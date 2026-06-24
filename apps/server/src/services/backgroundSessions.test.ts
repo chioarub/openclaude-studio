@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -205,6 +205,45 @@ describe('listBackgroundSessions', () => {
     expect(result.diagnostics).toEqual([
       expect.objectContaining({ level: 'warn', message: expect.stringContaining('oversized') }),
     ]);
+  });
+
+  test('skips unreadable metadata files and continues with a diagnostic', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-bg-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const metaPath = join(sessionsDir(paths), 'unreadable.json');
+    await writeSession(paths, 'unreadable', validSessionFixture({ id: 'unreadable' }));
+    await chmod(metaPath, 0);
+
+    try {
+      const result = await listBackgroundSessions(paths);
+
+      expect(result.sessions).toEqual([]);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({ level: 'warn', message: expect.stringContaining('could not be read') }),
+      );
+    } finally {
+      await chmod(metaPath, 0o600).catch(() => undefined);
+    }
+  });
+
+  test('reports a diagnostic when the project index cannot be loaded', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-bg-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await writeSession(paths, 'abc12345', validSessionFixture({ cwd: join(home, 'project-a') }));
+    await writeFile(paths.openClaudeConfig, '{}', 'utf8');
+    await chmod(paths.openClaudeConfig, 0);
+
+    try {
+      const result = await listBackgroundSessions(paths);
+
+      expect(result.sessions).toHaveLength(1);
+      expect(result.sessions[0]?.project).toBeNull();
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({ level: 'warn', message: expect.stringContaining('project index') }),
+      );
+    } finally {
+      await chmod(paths.openClaudeConfig, 0o600).catch(() => undefined);
+    }
   });
 
   test('normalizes missing optional fields to null', async () => {
@@ -425,6 +464,30 @@ describe('readBackgroundSessionLogs', () => {
     // reading the entire oversized file.
     expect(result.entries[2]?.text.startsWith('L2999')).toBe(true);
     expect(result.totalLines).toBe(result.entries[2]?.lineNumber);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('line numbers are relative') }),
+    );
+  });
+
+  test('returns empty entries with a diagnostic when a log file is unreadable', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-bg-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const logPath = join(logsDir(paths), 'unreadable.out.log');
+    await mkdir(logsDir(paths), { recursive: true });
+    await writeFile(logPath, 'secret output\n', 'utf8');
+    await chmod(logPath, 0);
+
+    try {
+      const result = await readBackgroundSessionLogs(paths, 'unreadable', {});
+
+      expect(result.entries).toEqual([]);
+      expect(result.totalLines).toBe(0);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({ level: 'warn', message: expect.stringContaining('could not be read') }),
+      );
+    } finally {
+      await chmod(logPath, 0o600).catch(() => undefined);
+    }
   });
 
   test('reports line-limit truncation and preserves original line numbers', async () => {

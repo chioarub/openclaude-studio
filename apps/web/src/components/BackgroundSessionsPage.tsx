@@ -34,6 +34,7 @@ import { cn } from '../lib/cn.js';
 type BackgroundSessionsPageProps = {
   api: ApiClient;
   onOpenSession: (projectId: string, sessionId: string) => void;
+  refreshToken: number;
 };
 
 type StatusOption = 'all' | BackgroundSessionStatus;
@@ -63,7 +64,7 @@ function statusTone(status: BackgroundSessionStatus): 'danger' | 'muted' | 'succ
   }
 }
 
-export function BackgroundSessionsPage({ api, onOpenSession }: BackgroundSessionsPageProps) {
+export function BackgroundSessionsPage({ api, onOpenSession, refreshToken }: BackgroundSessionsPageProps) {
   const [response, setResponse] = useState<BackgroundSessionsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -98,11 +99,9 @@ export function BackgroundSessionsPage({ api, onOpenSession }: BackgroundSession
 
   useEffect(() => {
     void fetchSessions();
-    // Load once on mount. The global top-bar refresh button reloads the whole
-    // workspace (including this page). No silent polling — consistent with
-    // every other content page.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api]);
+    // Reload on mount, API URL changes, and explicit global top-bar refreshes.
+    // No silent polling — consistent with every other content page.
+  }, [fetchSessions, refreshToken]);
 
   const sessions = response?.sessions ?? [];
   const statusCounts = response?.statusCounts ?? emptyStatusCounts();
@@ -534,7 +533,7 @@ function LogWindow({
               aria-label="Copy log line"
               onClick={() => onCopy(entry, index)}
               className={cn(
-                'shrink-0 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100',
+                'shrink-0 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
                 copiedLine === index ? 'text-success' : 'text-muted-soft hover:text-primary',
               )}
             >
@@ -571,7 +570,7 @@ function DiagnosticsList({ diagnostics }: { diagnostics: Diagnostic[] }) {
       </summary>
       <ul className="border-t border-hairline px-4 py-2 text-xs">
         {diagnostics.map((diagnostic, index) => (
-          <li key={index} className={cn('py-1', diagnostic.level === 'warn' ? 'text-warning' : 'text-muted')}>
+          <li key={index} className={cn('py-1', diagnosticTone(diagnostic.level))}>
             <span className="font-mono uppercase">{diagnostic.level}</span>
             <span className="ml-2">{diagnostic.message}</span>
           </li>
@@ -579,6 +578,12 @@ function DiagnosticsList({ diagnostics }: { diagnostics: Diagnostic[] }) {
       </ul>
     </details>
   );
+}
+
+function diagnosticTone(level: Diagnostic['level']): string {
+  if (level === 'error') return 'text-error';
+  if (level === 'warn') return 'text-warning';
+  return 'text-muted';
 }
 
 function matchesSearch(session: BackgroundSessionSummary, query: string): boolean {
@@ -689,11 +694,12 @@ function normalizeSessionLink(value: unknown): BackgroundSessionSummary['session
 
 function normalizeLogEntries(value: unknown): BackgroundSessionLogEntry[] {
   if (!Array.isArray(value)) return [];
-  return value.map((entry) => {
+  return value.map((entry, index) => {
     const record = isRecord(entry) ? entry : {};
-    const id = typeof record.id === 'string' ? record.id : '';
     const lineNumber = toNonNegativeInt(record.lineNumber);
     const text = typeof record.text === 'string' ? record.text : '';
+    const rawId = typeof record.id === 'string' ? record.id.trim() : '';
+    const id = rawId || `line:${lineNumber}:${index}:${text.length}`;
     return { id, lineNumber, text };
   });
 }

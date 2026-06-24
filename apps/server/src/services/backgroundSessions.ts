@@ -16,7 +16,7 @@ import type {
   Diagnostic,
 } from '@openclaude-studio/shared';
 
-import { readProjectSummaries } from './openclaudeData.js';
+import { readProjectSummariesWithDiagnostics } from './openclaudeData.js';
 import type { OpenClaudePaths } from './paths.js';
 import { isProjectTranscriptCwd } from './paths.js';
 import { redactTextSecrets } from './redaction.js';
@@ -46,6 +46,8 @@ const DEFAULT_LOG_COUNT = 250;
 const MAX_LOG_COUNT = 1_000;
 const MAX_COMMAND_BINARY_LENGTH = 64;
 const MAX_COMMAND_FLAG_COUNT = 32;
+const NOFOLLOW_OPEN_FLAG = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
+const NONBLOCK_OPEN_FLAG = typeof constants.O_NONBLOCK === 'number' ? constants.O_NONBLOCK : 0;
 
 export type BackgroundLogWindowRequest = {
   stream?: BackgroundSessionLogStream;
@@ -101,8 +103,8 @@ export async function listBackgroundSessions(
   const sessionsDir = join(sessionsRoot, 'sessions');
   const logsDir = join(sessionsRoot, 'logs');
 
-  const projects = await loadProjectIndex(paths);
   const diagnostics: Diagnostic[] = [];
+  const projects = await loadProjectIndex(paths, diagnostics);
 
   const entries = await readSessionsDir(sessionsDir, diagnostics);
   const summaries: BackgroundSessionSummary[] = [];
@@ -124,7 +126,7 @@ export async function listBackgroundSessions(
       continue;
     }
 
-    const statResult = await safeStat(metaPath);
+    const statResult = await safeLstat(metaPath, diagnostics);
     if (!statResult || statResult.isSymbolicLink() || !statResult.isFile()) {
       diagnostics.push({
         level: 'warn',
@@ -134,7 +136,7 @@ export async function listBackgroundSessions(
       continue;
     }
 
-    const parsed = await readSessionMetadata(metaPath, statResult.size, diagnostics);
+    const parsed = await readSessionMetadata(metaPath, diagnostics);
     if (!parsed) {
       continue;
     }
@@ -158,16 +160,23 @@ export async function listBackgroundSessions(
   };
 }
 
-async function safeStat(path: string): Promise<{ size: number; isFile: () => boolean; isSymbolicLink: () => boolean } | null> {
+async function safeLstat(
+  path: string,
+  diagnostics: Diagnostic[],
+): Promise<{ isFile: () => boolean; isSymbolicLink: () => boolean } | null> {
   try {
     const stats = await lstat(path);
     return {
-      size: stats.size,
       isFile: () => stats.isFile(),
       isSymbolicLink: () => stats.isSymbolicLink(),
     };
   } catch (error) {
-    if (isNodeFileError(error, 'ENOENT')) {
+    if (isUnavailableFileError(error)) {
+      diagnostics.push({
+        level: 'warn',
+        message: 'Background session metadata file could not be read.',
+        path,
+      });
       return null;
     }
     throw error;
@@ -276,28 +285,25 @@ async function readSessionsDir(
       });
       return [];
     }
+    if (isNodeFileError(error, 'EACCES', 'EPERM')) {
+      diagnostics.push({
+        level: 'warn',
+        message: 'Background sessions directory could not be read.',
+        path: sessionsDir,
+      });
+      return [];
+    }
     throw error;
   }
 }
 
 async function readSessionMetadata(
   metaPath: string,
-  size: number,
   diagnostics: Diagnostic[],
 ): Promise<RawBackgroundSessionRecord | null> {
-  if (size > MAX_SESSION_METADATA_BYTES) {
-    diagnostics.push({
-      level: 'warn',
-      message: `Skipped oversized background session metadata file (${size} bytes).`,
-      path: metaPath,
-    });
-    return null;
-  }
-
-  const noFollowFlag = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
   let handle;
   try {
-    handle = await open(metaPath, constants.O_RDONLY | noFollowFlag);
+    handle = await open(metaPath, constants.O_RDONLY | NOFOLLOW_OPEN_FLAG | NONBLOCK_OPEN_FLAG);
   } catch (error) {
     if (isNodeFileError(error, 'ELOOP') || isNodeFileError(error, 'EMLINK')) {
       diagnostics.push({
@@ -307,10 +313,38 @@ async function readSessionMetadata(
       });
       return null;
     }
+    if (isUnavailableFileError(error)) {
+      diagnostics.push({
+        level: 'warn',
+        message: 'Background session metadata file could not be read.',
+        path: metaPath,
+      });
+      return null;
+    }
     throw error;
   }
 
   try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      diagnostics.push({
+        level: 'warn',
+        message: `Skipped background session metadata file that is not a regular file.`,
+        path: metaPath,
+      });
+      return null;
+    }
+
+    if (stats.size > MAX_SESSION_METADATA_BYTES) {
+      diagnostics.push({
+        level: 'warn',
+        message: `Skipped oversized background session metadata file (${stats.size} bytes).`,
+        path: metaPath,
+      });
+      return null;
+    }
+
+    const size = stats.size;
     const buffer = Buffer.alloc(size);
     const { bytesRead } = await handle.read(buffer, 0, size, 0);
     const text = buffer.subarray(0, bytesRead).toString('utf8');
@@ -506,11 +540,22 @@ function summarizeCommand(command: unknown): BackgroundSessionCommandSummary {
   };
 }
 
-async function loadProjectIndex(paths: OpenClaudePaths): Promise<ProjectIndex> {
+async function loadProjectIndex(paths: OpenClaudePaths, diagnostics: Diagnostic[]): Promise<ProjectIndex> {
   let projects;
   try {
-    projects = await readProjectSummaries(paths);
+    const response = await readProjectSummariesWithDiagnostics(paths);
+    projects = response.projects;
+    if (response.diagnostics.some((diagnostic) => diagnostic.level !== 'info')) {
+      diagnostics.push({
+        level: 'warn',
+        message: 'Background session project index could not be fully loaded; linked project fields may be unavailable.',
+      });
+    }
   } catch {
+    diagnostics.push({
+      level: 'warn',
+      message: 'Background session project index could not be loaded; linked project fields are unavailable.',
+    });
     return { byId: new Map(), byPath: new Map() };
   }
 
@@ -614,7 +659,15 @@ async function logsAvailable(
     }
     return true;
   } catch (error) {
-    if (isNodeFileError(error, 'ENOENT')) {
+    if (isNodeFileError(error, 'ENOENT', 'ENOTDIR')) {
+      return false;
+    }
+    if (isNodeFileError(error, 'EACCES', 'EPERM')) {
+      diagnostics.push({
+        level: 'warn',
+        message: `Background session "${id}" ${stream} log file could not be read.`,
+        path: canonicalPath,
+      });
       return false;
     }
     throw error;
@@ -648,10 +701,18 @@ async function readBoundedLogLines(
   try {
     stats = await lstat(logPath);
   } catch (error) {
-    if (isNodeFileError(error, 'ENOENT')) {
+    if (isNodeFileError(error, 'ENOENT', 'ENOTDIR')) {
       diagnostics.push({
         level: 'info',
         message: 'Log file does not exist.',
+        path: logPath,
+      });
+      return emptyLogResult;
+    }
+    if (isNodeFileError(error, 'EACCES', 'EPERM')) {
+      diagnostics.push({
+        level: 'warn',
+        message: 'Log file could not be read.',
         path: logPath,
       });
       return emptyLogResult;
@@ -677,10 +738,9 @@ async function readBoundedLogLines(
     return emptyLogResult;
   }
 
-  const noFollowFlag = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
   let handle;
   try {
-    handle = await open(logPath, constants.O_RDONLY | noFollowFlag);
+    handle = await open(logPath, constants.O_RDONLY | NOFOLLOW_OPEN_FLAG | NONBLOCK_OPEN_FLAG);
   } catch (error) {
     if (isNodeFileError(error, 'ELOOP') || isNodeFileError(error, 'EMLINK')) {
       diagnostics.push({
@@ -690,16 +750,34 @@ async function readBoundedLogLines(
       });
       return emptyLogResult;
     }
+    if (isUnavailableFileError(error)) {
+      diagnostics.push({
+        level: 'warn',
+        message: 'Log file could not be read.',
+        path: logPath,
+      });
+      return emptyLogResult;
+    }
     throw error;
   }
 
   try {
-    const byteTruncated = stats.size > MAX_LOG_BYTES;
-    const bytesToRead = Math.min(stats.size, MAX_LOG_BYTES);
+    const openedStats = await handle.stat();
+    if (!openedStats.isFile()) {
+      diagnostics.push({
+        level: 'warn',
+        message: 'Log path is not a regular file.',
+        path: logPath,
+      });
+      return emptyLogResult;
+    }
+
+    const byteTruncated = openedStats.size > MAX_LOG_BYTES;
+    const bytesToRead = Math.min(openedStats.size, MAX_LOG_BYTES);
     // When the file exceeds the byte cap, read the tail of the file (the most
     // recent output) so tail windows reflect current activity instead of the
     // oldest bytes. Logs are append-only.
-    const readOffset = byteTruncated ? stats.size - MAX_LOG_BYTES : 0;
+    const readOffset = byteTruncated ? openedStats.size - MAX_LOG_BYTES : 0;
     const buffer = Buffer.alloc(bytesToRead);
     const { bytesRead } = await handle.read(buffer, 0, bytesToRead, readOffset);
     const text = buffer.subarray(0, bytesRead).toString('utf8');
@@ -707,7 +785,7 @@ async function readBoundedLogLines(
     if (byteTruncated) {
       diagnostics.push({
         level: 'warn',
-        message: `Log file was truncated to the most recent ${MAX_LOG_BYTES} bytes.`,
+        message: `Log file was truncated to the most recent ${MAX_LOG_BYTES} bytes; line numbers are relative to that retained byte window.`,
         path: logPath,
       });
     }
@@ -782,6 +860,10 @@ function normalizeCount(value: number | undefined): number {
   return Math.min(Math.floor(value), MAX_LOG_COUNT);
 }
 
-function isNodeFileError(error: unknown, code: string): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error && error.code === code;
+function isUnavailableFileError(error: unknown): error is NodeJS.ErrnoException {
+  return isNodeFileError(error, 'ENOENT', 'ENOTDIR', 'EACCES', 'EPERM');
+}
+
+function isNodeFileError(error: unknown, ...codes: string[]): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && codes.includes(String(error.code));
 }

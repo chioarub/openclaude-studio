@@ -82,6 +82,7 @@ Read scope is limited to:
 ```
 
 Studio derives log paths from validated session ids and the trusted logs root. It does not trust `stdoutLogPath` or `stderrLogPath` values embedded in metadata as read authorization.
+When a log file exceeds the byte read cap, Studio returns the retained tail window only; `totalLines`, `start`, and per-entry `lineNumber` values are relative to that retained byte window because the server does not read discarded bytes to count their lines.
 
 Endpoints:
 

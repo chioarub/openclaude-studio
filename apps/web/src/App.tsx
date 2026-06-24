@@ -244,6 +244,7 @@ function StudioApp() {
   const [logQuery, setLogQuery] = useState('');
   const [logLevel, setLogLevel] = useState<LogLevelFilter>('all');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [backgroundSessionsRefreshToken, setBackgroundSessionsRefreshToken] = useState(0);
   const [status, setStatus] = useState<LoadState>('idle');
   const [loadingLabel, setLoadingLabel] = useState('Loading workspace');
   const [logRangeLoading, setLogRangeLoading] = useState(false);
@@ -272,12 +273,13 @@ function StudioApp() {
   // suppressed once, then applied on subsequent manual project changes.
   const pendingLinkedSessionRef = useRef<string | null>(null);
 
-  const handleOpenBackgroundSession = useCallback((projectId: string, sessionId: string) => {
-    pendingLinkedSessionRef.current = sessionId;
+  function handleOpenBackgroundSession(projectId: string, sessionId: string) {
+    pendingLinkedSessionRef.current = projectId === selectedProjectId ? null : sessionId;
     setSelectedProjectId(projectId);
     setSelectedSessionId(sessionId);
+    void loadWorkspace({ projectId });
     void navigate('/sessions');
-  }, [navigate]);
+  }
 
   useEffect(() => {
     if (pendingLinkedSessionRef.current !== null) {
@@ -426,13 +428,18 @@ function StudioApp() {
     }
   }
 
+  function refreshWorkspace() {
+    setBackgroundSessionsRefreshToken((value) => value + 1);
+    void refreshHealth();
+    void loadWorkspace();
+  }
+
   function updateServerUrl(nextBaseUrl: string) {
     const normalizedBaseUrl = normalizeBaseUrl(nextBaseUrl);
     saveServerUrl(normalizedBaseUrl);
 
     if (normalizedBaseUrl === baseUrl) {
-      void refreshHealth();
-      void loadWorkspace();
+      refreshWorkspace();
       return;
     }
 
@@ -475,8 +482,7 @@ function StudioApp() {
             void loadWorkspace({ projectId });
           }}
           onRefresh={() => {
-            void refreshHealth();
-            void loadWorkspace();
+            refreshWorkspace();
           }}
         />
         <main className="mx-auto w-full max-w-[1420px] px-4 py-5 md:px-6 lg:px-8">
@@ -541,6 +547,7 @@ function StudioApp() {
                 <BackgroundSessionsPage
                   api={api}
                   onOpenSession={handleOpenBackgroundSession}
+                  refreshToken={backgroundSessionsRefreshToken}
                 />
               }
             />
