@@ -1,4 +1,4 @@
-import { mkdir, symlink, writeFile, mkdtemp } from 'node:fs/promises';
+import { chmod, mkdir, symlink, writeFile, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -590,6 +590,87 @@ describe('Provider profile management data', () => {
     });
   });
 
+  test('scopes startup credential state to the recognized provider', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(paths.openClaudeHome, { recursive: true });
+    await writeFile(paths.openClaudeConfig, JSON.stringify({ providerProfiles: [] }), 'utf8');
+    await writeFile(
+      join(paths.openClaudeHome, '.openclaude-profile.json'),
+      JSON.stringify({
+        profile: 'openai',
+        env: {
+          OPENAI_MODEL: 'gpt-example',
+          CODEX_API_KEY: 'codex-secret',
+        },
+      }),
+      'utf8',
+    );
+
+    const openai = await readProviderProfiles(paths);
+    expect(openai.startupProfile).toMatchObject({
+      profile: 'openai',
+      recognizedProvider: { id: 'openai' },
+      credential: {
+        credentialMode: 'none',
+        credentialCount: 0,
+        credentialConfigured: false,
+        credentialInvalid: false,
+        credentialSources: [],
+      },
+    });
+    expect(JSON.stringify(openai.startupProfile)).not.toContain('codex-secret');
+
+    await writeFile(
+      join(paths.openClaudeHome, '.openclaude-profile.json'),
+      JSON.stringify({
+        profile: 'codex',
+        env: {
+          CODEX_CREDENTIAL_SOURCE: 'oauth',
+          CHATGPT_ACCOUNT_ID: 'account-id',
+        },
+      }),
+      'utf8',
+    );
+    const codexOauth = await readProviderProfiles(paths);
+    expect(codexOauth.startupProfile).toMatchObject({
+      profile: 'codex',
+      recognizedProvider: { id: 'codex-oauth' },
+      credential: {
+        credentialMode: 'none',
+        credentialCount: 0,
+        credentialConfigured: false,
+        credentialInvalid: false,
+        credentialSources: [],
+      },
+    });
+    expect(JSON.stringify(codexOauth.startupProfile)).not.toContain('account-id');
+
+    await writeFile(
+      join(paths.openClaudeHome, '.openclaude-profile.json'),
+      JSON.stringify({
+        profile: 'codex',
+        env: {
+          CODEX_API_KEY: 'codex-secret',
+        },
+      }),
+      'utf8',
+    );
+    const codexApiKey = await readProviderProfiles(paths);
+    expect(codexApiKey.startupProfile).toMatchObject({
+      profile: 'codex',
+      recognizedProvider: { id: 'codex' },
+      credential: {
+        credentialMode: 'single',
+        credentialCount: 1,
+        credentialConfigured: true,
+        credentialInvalid: false,
+        credentialSources: ['startup profile env: CODEX_API_KEY'],
+      },
+    });
+    expect(JSON.stringify(codexApiKey.startupProfile)).not.toContain('codex-secret');
+  });
+
   test('reports missing, malformed, symlinked, and oversized startup profiles through diagnostics', async () => {
     const missingHome = await mkdtemp(join(tmpdir(), 'ocs-providers-missing-'));
     const missingPaths = createOpenClaudePaths({ home: missingHome, env: {} });
@@ -625,6 +706,20 @@ describe('Provider profile management data', () => {
       exists: false,
       profile: null,
       diagnostics: [expect.objectContaining({ level: 'warn', message: 'Symlinked files are not read.' })],
+    });
+
+    const unreadableHome = await mkdtemp(join(tmpdir(), 'ocs-providers-unreadable-'));
+    const unreadablePaths = createOpenClaudePaths({ home: unreadableHome, env: {} });
+    await mkdir(unreadablePaths.openClaudeHome, { recursive: true });
+    await writeFile(unreadablePaths.openClaudeConfig, JSON.stringify({ providerProfiles: [] }), 'utf8');
+    const unreadableProfilePath = join(unreadablePaths.openClaudeHome, '.openclaude-profile.json');
+    await writeFile(unreadableProfilePath, JSON.stringify({ profile: 'openai', env: {}, createdAt: '2026-06-24T12:00:00.000Z' }), 'utf8');
+    await chmod(unreadableProfilePath, 0);
+    const unreadable = await readProviderProfiles(unreadablePaths);
+    expect(unreadable.startupProfile).toMatchObject({
+      exists: true,
+      profile: null,
+      diagnostics: [expect.objectContaining({ level: 'warn', message: expect.stringContaining('Unable to read startup profile:') })],
     });
 
     const oversizedHome = await mkdtemp(join(tmpdir(), 'ocs-providers-oversized-'));
@@ -756,6 +851,16 @@ describe('Provider recognition registry', () => {
     expect(recognizeStudioProvider({ provider: 'codex', baseUrl: null, apiKeySet: false }).id).toBe('codex-oauth');
   });
 
+  test('recognizes GitHub Enterprise Copilot only by explicit provider id', () => {
+    expect(
+      recognizeStudioProvider({
+        provider: 'github-enterprise',
+        baseUrl: 'https://api.githubcopilot.com',
+        apiKeySet: true,
+      }).id,
+    ).toBe('github-enterprise');
+  });
+
   test.each([
     ['https://api.anthropic.com/v1', 'anthropic'],
     ['https://api.fireworks.ai/inference/v1', 'fireworks'],
@@ -771,6 +876,7 @@ describe('Provider recognition registry', () => {
     ['https://opencode.ai/zen/go/v1', 'opencode-go'],
     ['https://opencode.ai/zen/v1', 'opencode'],
     ['https://opengateway.gitlawb.com/v1', 'gitlawb-opengateway'],
+    ['https://api.githubcopilot.com', 'github'],
     ['https://integrate.api.nvidia.com/v1', 'nvidia-nim'],
     ['http://localhost:11434/v1', 'ollama'],
     ['http://127.0.0.1:1234/v1', 'lmstudio'],

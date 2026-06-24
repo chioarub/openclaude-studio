@@ -89,7 +89,7 @@ The startup profile reader parses only documented `profile`, `env`, and `created
 
 Provider recognition is best effort and derived from OpenClaude route identifiers and controlled host matches. Studio does not copy dynamic model catalogs or make network calls to discover or validate models. Unknown future providers degrade to a custom OpenAI-compatible classification.
 
-When re-syncing provider recognition, compare Studio's static registry and startup `env` allowlists against the current OpenClaude route descriptors and `providerProfile` `PROFILE_ENV_KEYS`. The current registry was synced from OpenClaude upstream `main` at `66ddbece19ed2b9735c7e6501c3cfbba4181ca75`.
+When re-syncing provider recognition, compare Studio's static registry and startup `env` allowlists against current OpenClaude route descriptors and `providerProfile` `PROFILE_ENV_KEYS`. Keep the registry static and reviewed rather than importing OpenClaude at runtime.
 
 Credential diagnostics are intentionally value-free. The API can report:
 

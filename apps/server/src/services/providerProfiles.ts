@@ -335,7 +335,6 @@ function toSafeProviderProfile(
 
 async function readStartupProviderProfile(paths: OpenClaudePaths): Promise<StartupProviderProfileSummary> {
   const path = join(paths.openClaudeHome, startupProfileFileName);
-  const result = await readBoundedTextFile(path, { maxBytes: maxStartupProfileBytes });
   const fallbackRecognition = recognizeStudioProvider({ provider: null, baseUrl: null, apiKeySet: false });
   const emptyCredential: ProviderCredentialState = {
     credentialMode: 'none',
@@ -344,6 +343,30 @@ async function readStartupProviderProfile(paths: OpenClaudePaths): Promise<Start
     credentialInvalid: false,
     credentialSources: [],
   };
+  const unavailableSummary = (diagnostics: Diagnostic[]): StartupProviderProfileSummary => ({
+    path,
+    exists: true,
+    profile: null,
+    createdAt: null,
+    configuredNonSecretFields: [],
+    credentials: [],
+    credential: emptyCredential,
+    recognizedProvider: fallbackRecognition,
+    diagnostics,
+  });
+
+  let result: Awaited<ReturnType<typeof readBoundedTextFile>>;
+  try {
+    result = await readBoundedTextFile(path, { maxBytes: maxStartupProfileBytes });
+  } catch (error) {
+    return unavailableSummary([
+      {
+        level: 'warn',
+        message: `Unable to read startup profile: ${errorMessage(error)}`,
+        path,
+      },
+    ]);
+  }
 
   if (!result.exists) {
     return {
@@ -425,7 +448,13 @@ async function readStartupProviderProfile(paths: OpenClaudePaths): Promise<Start
     };
   }
 
-  const credential = summarizeStartupCredentialState(parsed.env);
+  const baseUrl = startupBaseUrlFromEnv(parsed.env);
+  const recognizedProvider = recognizeStudioProvider({
+    provider: parsed.profile,
+    baseUrl,
+    apiKeySet: hasNonEmptyString(parsed.env.CODEX_API_KEY),
+  });
+  const credential = summarizeStartupCredentialState(parsed.env, recognizedProvider.credentialEnvVars);
   return {
     path,
     exists: true,
@@ -434,11 +463,7 @@ async function readStartupProviderProfile(paths: OpenClaudePaths): Promise<Start
     configuredNonSecretFields: configuredStartupNonSecretFields(parsed.env),
     credentials: configuredStartupCredentials(parsed.env),
     credential,
-    recognizedProvider: recognizeStudioProvider({
-      provider: parsed.profile,
-      baseUrl: startupBaseUrlFromEnv(parsed.env),
-      apiKeySet: credential.credentialConfigured,
-    }),
+    recognizedProvider,
     diagnostics: result.diagnostics,
   };
 }

@@ -1600,6 +1600,17 @@ function normalizeSafeProviderProfile(input: unknown, index: number): SafeProvid
   const validationIssues = Array.isArray(validation.issues)
     ? validation.issues.map(normalizeProviderProfileValidationIssue)
     : [];
+  const apiKeySet = profile.apiKeySet === true;
+  const authHeaderValueSet = profile.authHeaderValueSet === true;
+  const legacyCredentialFallback: ProviderCredentialState | undefined = apiKeySet || authHeaderValueSet
+    ? {
+        credentialMode: 'single',
+        credentialCount: 1,
+        credentialConfigured: true,
+        credentialInvalid: false,
+        credentialSources: [],
+      }
+    : undefined;
 
   return {
     id: stringOrFallback(profile.id, `provider_${index + 1}`),
@@ -1608,8 +1619,8 @@ function normalizeSafeProviderProfile(input: unknown, index: number): SafeProvid
     model: stringOrFallback(profile.model, ''),
     baseUrl: stringOrNull(profile.baseUrl),
     active: profile.active === true,
-    apiKeySet: profile.apiKeySet === true,
-    authHeaderValueSet: profile.authHeaderValueSet === true,
+    apiKeySet,
+    authHeaderValueSet,
     apiFormat: stringOrNull(profile.apiFormat),
     authHeader: stringOrNull(profile.authHeader),
     authScheme: stringOrNull(profile.authScheme),
@@ -1620,7 +1631,7 @@ function normalizeSafeProviderProfile(input: unknown, index: number): SafeProvid
       ...defaultStudioProviderRecognition(),
       label: stringOrFallback(profile.templateLabel, 'Custom OpenAI-compatible'),
     }),
-    credential: normalizeProviderCredentialState(profile.credential),
+    credential: normalizeProviderCredentialState(profile.credential, legacyCredentialFallback),
     templateId: providerTemplateIdOr(profile.templateId, 'custom-openai'),
     templateLabel: stringOrFallback(profile.templateLabel, 'Custom OpenAI-compatible'),
     validation: {
@@ -1693,17 +1704,23 @@ function defaultStudioProviderRecognition(): StudioProviderRecognition {
   };
 }
 
-function normalizeProviderCredentialState(input: unknown): ProviderCredentialState {
+function normalizeProviderCredentialState(input: unknown, fallback?: ProviderCredentialState): ProviderCredentialState {
   const credential = isRecord(input) ? input : {};
 
   return {
-    credentialMode: providerCredentialModeOr(credential.credentialMode, 'unknown'),
+    credentialMode: providerCredentialModeOr(credential.credentialMode, fallback?.credentialMode ?? 'unknown'),
     credentialCount: typeof credential.credentialCount === 'number' && Number.isFinite(credential.credentialCount)
       ? Math.max(0, Math.trunc(credential.credentialCount))
-      : null,
-    credentialConfigured: credential.credentialConfigured === true,
-    credentialInvalid: credential.credentialInvalid === true,
-    credentialSources: stringArrayOrEmpty(credential.credentialSources),
+      : fallback?.credentialCount ?? null,
+    credentialConfigured: typeof credential.credentialConfigured === 'boolean'
+      ? credential.credentialConfigured
+      : fallback?.credentialConfigured ?? false,
+    credentialInvalid: typeof credential.credentialInvalid === 'boolean'
+      ? credential.credentialInvalid
+      : fallback?.credentialInvalid ?? false,
+    credentialSources: Array.isArray(credential.credentialSources)
+      ? stringArrayOrEmpty(credential.credentialSources)
+      : fallback?.credentialSources ?? [],
   };
 }
 
@@ -2188,13 +2205,16 @@ function providerCredentialLabel(credential: ProviderCredentialState): string {
   }
 
   if (credential.credentialMode === 'pool') {
+    if (!credential.credentialConfigured) {
+      return 'credential pool not configured';
+    }
     return credential.credentialCount !== null
       ? `credential pool (${credential.credentialCount})`
       : 'credential pool';
   }
 
   if (credential.credentialMode === 'single') {
-    return 'credential configured';
+    return credential.credentialConfigured ? 'credential configured' : 'credential not configured';
   }
 
   if (credential.credentialMode === 'none') {

@@ -797,9 +797,26 @@ describe('App', () => {
             templateLabel: 'Custom OpenAI-compatible',
             validation: { status: 'valid', issues: [] },
           },
+          {
+            id: 'legacy-saved',
+            name: 'Legacy Saved Provider',
+            provider: 'openai',
+            model: 'gpt-example',
+            baseUrl: 'https://api.openai.com/v1',
+            active: false,
+            apiKeySet: true,
+            authHeaderValueSet: false,
+            apiFormat: null,
+            authHeader: null,
+            authScheme: null,
+            customHeaders: [],
+            templateId: 'openai',
+            templateLabel: 'OpenAI',
+            validation: { status: 'valid', issues: [] },
+          },
         ],
         templates: [],
-        summary: { total: 1, active: 1, valid: 1, warnings: 0, errors: 0, templates: 0 },
+        summary: { total: 2, active: 1, valid: 2, warnings: 0, errors: 0, templates: 0 },
         diagnostics: [],
       },
     }));
@@ -814,6 +831,10 @@ describe('App', () => {
     expect(providerCard).not.toBeNull();
     expect(within(providerCard!).getByText('Custom OpenAI-compatible')).toBeInTheDocument();
     expect(within(providerCard!).getByText('credential state unavailable')).toBeInTheDocument();
+
+    const savedProviderCard = (await screen.findByText('Legacy Saved Provider')).closest('article');
+    expect(savedProviderCard).not.toBeNull();
+    expect(within(savedProviderCard!).getByText('credential configured')).toBeInTheDocument();
   });
 
   test('renders non-object provider profile payloads without crashing', async () => {

@@ -1,6 +1,7 @@
 const redactedValue = '<redacted>';
-const secretKeyPattern =
-  /(?:api[_-]?keys?|access[_-]?key(?:[_-]?id)?|secret[_-]?access[_-]?key|private[_-]?key|key[_-]?id|access[_-]?token|refresh[_-]?token|connection[_-]?string|token|secret|password|authorization|auth[_-]?header[_-]?value|credential|account[_-]?id|custom[_-]?headers?)/i;
+const secretKeyAlternation =
+  'api[_-]?keys?|access[_-]?key(?:[_-]?id)?|secret[_-]?access[_-]?key|private[_-]?key|key[_-]?id|access[_-]?token|refresh[_-]?token|connection[_-]?string|token|secret|password|authorization|auth[_-]?header[_-]?value|credential|account[_-]?id|custom[_-]?headers?';
+const secretKeyPattern = new RegExp(`(?:${secretKeyAlternation})`, 'i');
 const environmentSecretAssignmentKey =
   '[A-Z_][A-Z0-9_]*(?:API_KEYS?|ACCESS_KEY(?:_ID)?|SECRET_ACCESS_KEY|PRIVATE_KEY|KEY_ID|ACCESS_TOKEN|REFRESH_TOKEN|TOKEN|SECRET|PASSWORD|AUTH_HEADER_VALUE|CREDENTIAL|CUSTOM_HEADERS|ACCOUNT_ID|CONNECTION_STRING)';
 const quotedEnvironmentSecretAssignmentPattern = new RegExp(
@@ -14,6 +15,10 @@ const bearerEnvironmentSecretAssignmentPattern = new RegExp(
 const unquotedEnvironmentSecretAssignmentPattern = new RegExp(
   `\\b(${environmentSecretAssignmentKey}\\s*=\\s*)([^\\s"']+)`,
   'g',
+);
+const querySecretParameterPattern = new RegExp(
+  `([?&][A-Za-z0-9_-]*(?:${secretKeyAlternation})[A-Za-z0-9_-]*=)([^&#\\s"']+)`,
+  'gi',
 );
 const jwtLikeFragmentPattern = /(?:[A-Za-z0-9_-]+\.){2}[A-Za-z0-9_-]+/;
 const opaqueTokenLikeFragmentPattern = /(?=[A-Za-z0-9_+/=-]{24,})(?=.*[0-9+/=_])[A-Za-z0-9_+/=-]{24,}/;
@@ -42,7 +47,7 @@ export function redactTextSecrets(content: string): string {
       `$1${redactedValue}@`,
     )
     .replace(
-      /([?&][A-Za-z0-9_-]*(?:api[_-]?keys?|access[_-]?key(?:[_-]?id)?|secret[_-]?access[_-]?key|private[_-]?key|key[_-]?id|access[_-]?token|refresh[_-]?token|connection[_-]?string|token|secret|password|authorization|auth[_-]?header[_-]?value|credential|account[_-]?id)[A-Za-z0-9_-]*=)([^&#\s"']+)/gi,
+      querySecretParameterPattern,
       `$1${redactedValue}`,
     )
     .replace(

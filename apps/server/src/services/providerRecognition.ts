@@ -31,10 +31,9 @@ type CredentialStateInput = {
 
 const openAiCredentialEnvVars = ['OPENAI_API_KEYS', 'OPENAI_API_KEY'] as const;
 
-// Provider descriptors and startup env names are synced from OpenClaude upstream
-// main at 66ddbece19ed2b9735c7e6501c3cfbba4181ca75. Keep this static and
-// re-check upstream route descriptors plus providerProfile PROFILE_ENV_KEYS when
-// updating recognition; Studio must not import OpenClaude at runtime.
+// Keep this static and re-check upstream route descriptors plus providerProfile
+// PROFILE_ENV_KEYS when updating recognition; Studio must not import OpenClaude
+// at runtime.
 const startupCredentialKeys = new Set([
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_CUSTOM_HEADERS',
@@ -347,7 +346,7 @@ const descriptors: StudioProviderDescriptor[] = [
     id: 'github-enterprise',
     label: 'GitHub Copilot Enterprise',
     category: 'hosted',
-    defaultBaseUrl: 'https://api.githubcopilot.com',
+    defaultBaseUrl: null,
     authKind: 'token',
     credentialEnvVars: ['GITHUB_COPILOT_KEY', 'GITHUB_TOKEN', 'GH_TOKEN', 'OPENAI_API_KEYS', 'OPENAI_API_KEY'],
     transport: 'openai-compatible',
@@ -602,11 +601,11 @@ export function summarizeProviderCredentialState(input: CredentialStateInput): P
   return credentialStateFromEnv(input.env ?? {}, input.credentialEnvVars, input.envSourceLabel);
 }
 
-export function summarizeStartupCredentialState(env: UnknownRecord): ProviderCredentialState {
+export function summarizeStartupCredentialState(env: UnknownRecord, credentialEnvVars: string[]): ProviderCredentialState {
   const startupEnv = Object.fromEntries(
     Object.entries(env).filter(([, value]) => typeof value === 'string'),
   ) as Record<string, string | undefined>;
-  return credentialStateFromEnv(startupEnv, Object.keys(startupEnv).filter(isKnownStartupCredentialFieldName), 'startup profile env');
+  return credentialStateFromEnv(startupEnv, credentialEnvVars, 'startup profile env');
 }
 
 export function configuredStartupCredentials(env: UnknownRecord): Array<{ name: string; configured: boolean }> {

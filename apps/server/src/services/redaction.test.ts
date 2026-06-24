@@ -23,15 +23,15 @@ describe('redaction', () => {
 
   test('redacts query parameter secrets in text logs', () => {
     expect(
-      redactTextSecrets('GET https://api.example.test/v1?api_key=secret-value&access_key=access-secret&connection_string=db-secret&access_token=secret&model=x token=plain'),
+      redactTextSecrets('GET https://api.example.test/v1?api_key=secret-value&access_key=access-secret&connection_string=db-secret&custom_headers=Authorization:Bearer-secret&access_token=secret&model=x token=plain'),
     ).toBe(
-      'GET https://api.example.test/v1?api_key=<redacted>&access_key=<redacted>&connection_string=<redacted>&access_token=<redacted>&model=x token=<redacted>',
+      'GET https://api.example.test/v1?api_key=<redacted>&access_key=<redacted>&connection_string=<redacted>&custom_headers=<redacted>&access_token=<redacted>&model=x token=<redacted>',
     );
   });
 
   test('redacts URL credentials and query secrets', () => {
-    expect(redactUrl('https://user:pass@example.com/v1?api_key=secret&model=x')).toBe(
-      'https://example.com/v1?api_key=%3Credacted%3E&model=x',
+    expect(redactUrl('https://user:pass@example.com/v1?api_key=secret&custom_headers=secret&model=x')).toBe(
+      'https://example.com/v1?api_key=%3Credacted%3E&custom_headers=%3Credacted%3E&model=x',
     );
   });
 
