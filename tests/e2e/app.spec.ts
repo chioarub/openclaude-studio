@@ -47,6 +47,37 @@ test.beforeAll(async () => {
   await mkdir(join(paths.fileHistoryDir, 'session-1'), { recursive: true });
   await writeFile(join(paths.fileHistoryDir, 'session-1', 'api@v1'), 'export const value = 0;\n', 'utf8');
   await writeFile(
+    join(paths.projectsDir, encodeProjectPath(projectPath), 'session-1.replay.json'),
+    JSON.stringify({
+      sessionId: 'session-1',
+      version: 1,
+      createdAt: '2026-05-28T08:00:00.000Z',
+      summary: {
+        totalSteps: 1,
+        toolBreakdown: { Edit: 1 },
+        filesModified: ['src/api.ts'],
+        durationMs: 1500,
+        startTimestamp: '2026-05-28T08:00:00.000Z',
+        endTimestamp: '2026-05-28T08:00:01.500Z',
+        userRequests: 1,
+      },
+      steps: [
+        {
+          type: 'tool',
+          stepNumber: 1,
+          toolName: 'Edit',
+          toolUseId: 'tool-edit',
+          inputSummary: 'Edit src/api.ts',
+          resultStatus: 'success',
+          durationMs: 100,
+          timestamp: '2026-05-28T08:00:00.500Z',
+          filesModified: ['src/api.ts'],
+        },
+      ],
+    }),
+    'utf8',
+  );
+  await writeFile(
     join(paths.projectsDir, encodeProjectPath(projectPath), 'session-1.jsonl'),
     [
       JSON.stringify({
@@ -197,6 +228,9 @@ test('loads project overview, sessions, provider, and logs', async ({ page }) =>
   await detailsDialog.getByRole('tab', { name: /Conversation/ }).click();
   await detailsDialog.getByRole('button', { name: /tools used/i }).click();
   await expect(detailsDialog.getByText('Bash x1')).toBeVisible();
+  await detailsDialog.getByRole('tab', { name: /Replay/i }).click();
+  await expect(detailsDialog.getByRole('tabpanel', { name: /Replay/i })).toBeVisible();
+  await expect(detailsDialog.getByText('Edit src/api.ts')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(detailsDialog).toBeHidden();
   await page.getByRole('link', { name: /^Logs$/ }).click();
