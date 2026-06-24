@@ -157,7 +157,7 @@ const appRoutes: AppRoute[] = [
     name: 'Background',
     shortName: 'BG Sessions',
     path: '/background-sessions',
-    group: 'global',
+    group: 'maintenance',
     icon: TerminalSquare,
   },
   {

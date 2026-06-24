@@ -158,7 +158,8 @@ export function BackgroundSessionsPage({ api, onOpenSession }: BackgroundSession
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Search name, id, provider, model, project"
-                className="field-input w-full pl-9"
+                className="field-input w-full"
+                style={{ paddingLeft: '2.25rem' }}
               />
             </label>
           </div>
@@ -205,7 +206,7 @@ export function BackgroundSessionsPage({ api, onOpenSession }: BackgroundSession
                     <tr
                       key={session.id}
                       tabIndex={0}
-                      aria-label={`Open details for ${session.name ?? session.shortId}`}
+                      aria-label={`Open details for ${displayLabel(session)}`}
                       onClick={() => setSelectedId(session.id)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
@@ -217,7 +218,7 @@ export function BackgroundSessionsPage({ api, onOpenSession }: BackgroundSession
                     >
                       <td className="max-w-[280px]">
                         <div className="flex flex-col">
-                          <span className="truncate font-medium text-ink">{session.name ?? 'unnamed'}</span>
+                          <span className="truncate font-medium text-ink">{displayLabel(session)}</span>
                           <span className="font-mono text-[11px] text-muted-soft">{session.shortId}</span>
                         </div>
                       </td>
@@ -369,7 +370,7 @@ function SessionDetail({
               <span className="font-mono text-[11px] text-muted-soft">{session.shortId}</span>
             </div>
             <h2 className="mt-1 truncate text-[22px] font-medium leading-tight text-ink">
-              {session.name ?? 'Unnamed session'}
+              {displayLabel(session)}
             </h2>
           </div>
           <button
@@ -740,6 +741,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+/**
+ * Returns the most meaningful label for a background session. The upstream
+ * `name` field is optional (only set when the user passes --name), so most
+ * sessions have no name. Fall back to the working-directory basename (the
+ * project folder), then the command binary, then the short id.
+ */
+function displayLabel(session: BackgroundSessionSummary): string {
+  if (session.name) return session.name;
+  if (session.cwd) {
+    const parts = session.cwd.replace(/[\\/]+$/, '').split(/[\\/]/);
+    const tail = parts[parts.length - 1];
+    if (tail) return tail;
+  }
+  if (session.commandSummary.binary) return session.commandSummary.binary;
+  return session.shortId;
 }
 
 function formatTimestamp(value: string | null): string {
