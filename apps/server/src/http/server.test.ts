@@ -924,6 +924,23 @@ describe('HTTP server', () => {
     });
 
     expect(response.statusCode).toBe(400);
+
+    const encodedTraversal = await server.inject({
+      method: 'GET',
+      url: '/api/background-sessions/%2e%2e%5csecret/logs',
+      headers: tokenHeaders(),
+    });
+
+    expect(encodedTraversal.statusCode).toBe(400);
+
+    const overlongId = 'a'.repeat(129);
+    const overlong = await server.inject({
+      method: 'GET',
+      url: `/api/background-sessions/${overlongId}/logs`,
+      headers: tokenHeaders(),
+    });
+
+    expect(overlong.statusCode).toBe(404);
   });
 });
 

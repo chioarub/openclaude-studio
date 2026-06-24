@@ -86,10 +86,13 @@ export function BackgroundSessionsPage({ api, onOpenSession, refreshToken }: Bac
       setDegraded(false);
     } catch (caught) {
       if (requestId !== requestIdRef.current) return;
+      setResponse(null);
+      setSelectedId(null);
       if (caught instanceof ApiRequestError && caught.status === 404) {
         setDegraded(true);
         setError('Background session monitoring requires a newer local server.');
       } else {
+        setDegraded(false);
         setError(caught instanceof Error ? caught.message : 'Failed to load background sessions.');
       }
     } finally {
@@ -204,22 +207,18 @@ export function BackgroundSessionsPage({ api, onOpenSession, refreshToken }: Bac
                   {filtered.map((session) => (
                     <tr
                       key={session.id}
-                      tabIndex={0}
-                      aria-label={`Open details for ${displayLabel(session)}`}
-                      onClick={() => setSelectedId(session.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          setSelectedId(session.id);
-                        }
-                      }}
-                      className="cursor-pointer hover:bg-surface-soft/50 transition-colors"
+                      className="hover:bg-surface-soft/50 transition-colors"
                     >
                       <td className="max-w-[280px]">
-                        <div className="flex flex-col">
+                        <button
+                          type="button"
+                          aria-label={`Open details for ${displayLabel(session)}`}
+                          onClick={() => setSelectedId(session.id)}
+                          className="flex w-full flex-col rounded-md text-left focus:outline-none focus:ring-[3px] focus:ring-primary/15"
+                        >
                           <span className="truncate font-medium text-ink">{displayLabel(session)}</span>
                           <span className="font-mono text-[11px] text-muted-soft">{session.shortId}</span>
-                        </div>
+                        </button>
                       </td>
                       <td>
                         <Badge label={capitalize(session.recordedStatus)} tone={statusTone(session.recordedStatus)} />
@@ -652,7 +651,7 @@ function normalizeSessionSummary(value: unknown): BackgroundSessionSummary | nul
     cwd: readNullableString(value.cwd),
     recordedStatus,
     terminal: Boolean(value.terminal),
-    processPresence: value.processPresence === 'unknown' ? 'unknown' : 'unknown',
+    processPresence: 'unknown',
     provider: readNullableString(value.provider),
     model: readNullableString(value.model),
     sessionId: readNullableString(value.sessionId),
@@ -662,8 +661,8 @@ function normalizeSessionSummary(value: unknown): BackgroundSessionSummary | nul
     commandSummary: normalizeCommandSummary(value.commandSummary),
     project: normalizeProjectLink(value.project),
     sessionLink: normalizeSessionLink(value.sessionLink),
-    stdoutLogAvailable: Boolean(value.stdoutLogAvailable),
-    stderrLogAvailable: Boolean(value.stderrLogAvailable),
+    stdoutLogAvailable: typeof value.stdoutLogAvailable === 'boolean' ? value.stdoutLogAvailable : true,
+    stderrLogAvailable: typeof value.stderrLogAvailable === 'boolean' ? value.stderrLogAvailable : true,
   };
 }
 

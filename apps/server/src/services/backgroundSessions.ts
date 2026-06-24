@@ -1,5 +1,5 @@
 import { constants, type Dirent } from 'node:fs';
-import { lstat, open, readdir } from 'node:fs/promises';
+import { lstat, open, readdir, type FileHandle } from 'node:fs/promises';
 import { basename, join, resolve, sep } from 'node:path';
 
 import type {
@@ -39,6 +39,7 @@ const TERMINAL_STATUSES: ReadonlySet<BackgroundSessionStatus> = new Set([
 ]);
 
 const SAFE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const MAX_SESSION_ID_LENGTH = 128;
 const MAX_SESSION_METADATA_BYTES = 256 * 1024;
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
 const MAX_LOG_LINES = 5_000;
@@ -48,6 +49,10 @@ const MAX_COMMAND_BINARY_LENGTH = 64;
 const MAX_COMMAND_FLAG_COUNT = 32;
 const NOFOLLOW_OPEN_FLAG = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
 const NONBLOCK_OPEN_FLAG = typeof constants.O_NONBLOCK === 'number' ? constants.O_NONBLOCK : 0;
+
+function isSafeSessionId(value: string): boolean {
+  return value.length <= MAX_SESSION_ID_LENGTH && SAFE_ID_PATTERN.test(value);
+}
 
 export type BackgroundLogWindowRequest = {
   stream?: BackgroundSessionLogStream;
@@ -106,7 +111,19 @@ export async function listBackgroundSessions(
   const diagnostics: Diagnostic[] = [];
   const projects = await loadProjectIndex(paths, diagnostics);
 
-  const entries = await readSessionsDir(sessionsDir, diagnostics);
+  const sessionsDirSafe = await isSafeDirectoryChain(
+    paths.openClaudeHome,
+    ['bg-sessions', 'sessions'],
+    'Background sessions directory',
+    diagnostics,
+  );
+  const logsDirSafe = await isSafeDirectoryChain(
+    paths.openClaudeHome,
+    ['bg-sessions', 'logs'],
+    'Background session logs directory',
+    diagnostics,
+  );
+  const entries = sessionsDirSafe ? await readSessionsDir(sessionsDir, diagnostics) : [];
   const summaries: BackgroundSessionSummary[] = [];
 
   for (const entry of entries) {
@@ -117,7 +134,7 @@ export async function listBackgroundSessions(
 
     const id = name.slice(0, -5);
     const metaPath = join(sessionsDir, name);
-    if (!SAFE_ID_PATTERN.test(id)) {
+    if (!isSafeSessionId(id)) {
       diagnostics.push({
         level: 'warn',
         message: `Skipped background session metadata file with an unsafe id.`,
@@ -127,7 +144,10 @@ export async function listBackgroundSessions(
     }
 
     const statResult = await safeLstat(metaPath, diagnostics);
-    if (!statResult || statResult.isSymbolicLink() || !statResult.isFile()) {
+    if (!statResult) {
+      continue;
+    }
+    if (statResult.isSymbolicLink() || !statResult.isFile()) {
       diagnostics.push({
         level: 'warn',
         message: `Skipped background session metadata file that is not a regular file.`,
@@ -141,7 +161,7 @@ export async function listBackgroundSessions(
       continue;
     }
 
-    const summary = await buildSummary(id, parsed, logsDir, projects, diagnostics);
+    const summary = await buildSummary(id, parsed, logsDirSafe ? logsDir : null, projects, diagnostics);
     if (summary) {
       summaries.push(summary);
     }
@@ -194,24 +214,43 @@ export async function readBackgroundSessionLogs(
   sessionId: string,
   request: BackgroundLogWindowRequest = {},
 ): Promise<BackgroundSessionLogsResponse> {
-  if (!SAFE_ID_PATTERN.test(sessionId)) {
+  if (!isSafeSessionId(sessionId)) {
     throw invalidRequest('Invalid background session id.');
   }
 
   const stream: BackgroundSessionLogStream =
     request.stream === 'stderr' ? 'stderr' : 'stdout';
+  const requestedCount = normalizeCount(request.count);
+  const requestedStart = normalizeStart(request.start);
 
   const logsDir = join(paths.openClaudeHome, 'bg-sessions', 'logs');
+  const diagnostics: Diagnostic[] = [];
+  const logsDirSafe = await isSafeDirectoryChain(
+    paths.openClaudeHome,
+    ['bg-sessions', 'logs'],
+    'Background session logs directory',
+    diagnostics,
+  );
+  if (!logsDirSafe) {
+    return {
+      sessionId,
+      stream,
+      entries: [],
+      start: requestedStart,
+      count: requestedCount,
+      totalLines: 0,
+      truncated: false,
+      diagnostics,
+    };
+  }
+
   const logPath = join(logsDir, `${sessionId}.${stream === 'stderr' ? 'err' : 'out'}.log`);
 
-  const diagnostics: Diagnostic[] = [];
   const { lines, byteTruncated, lineTruncated, originalLineCount } = await readBoundedLogLines(
     logPath,
     diagnostics,
   );
 
-  const requestedCount = normalizeCount(request.count);
-  const requestedStart = normalizeStart(request.start);
   const truncated = byteTruncated || lineTruncated;
 
   if (lineTruncated && !byteTruncated) {
@@ -297,6 +336,62 @@ async function readSessionsDir(
   }
 }
 
+async function isSafeDirectoryChain(
+  root: string,
+  segments: string[],
+  label: string,
+  diagnostics: Diagnostic[],
+): Promise<boolean> {
+  let current = root;
+  for (const segment of segments) {
+    current = join(current, segment);
+    let stats;
+    try {
+      stats = await lstat(current);
+    } catch (error) {
+      if (isNodeFileError(error, 'ENOENT')) {
+        return true;
+      }
+      if (isNodeFileError(error, 'ENOTDIR')) {
+        diagnostics.push({
+          level: 'warn',
+          message: `${label} parent is not a directory and will not be read.`,
+          path: current,
+        });
+        return false;
+      }
+      if (isNodeFileError(error, 'EACCES', 'EPERM')) {
+        diagnostics.push({
+          level: 'warn',
+          message: `${label} could not be inspected for symlinks.`,
+          path: current,
+        });
+        return false;
+      }
+      throw error;
+    }
+
+    if (stats.isSymbolicLink()) {
+      diagnostics.push({
+        level: 'warn',
+        message: `${label} contains a symlink and will not be read.`,
+        path: current,
+      });
+      return false;
+    }
+
+    if (!stats.isDirectory()) {
+      diagnostics.push({
+        level: 'warn',
+        message: `${label} is not a directory and will not be read.`,
+        path: current,
+      });
+      return false;
+    }
+  }
+  return true;
+}
+
 async function readSessionMetadata(
   metaPath: string,
   diagnostics: Diagnostic[],
@@ -346,7 +441,7 @@ async function readSessionMetadata(
 
     const size = stats.size;
     const buffer = Buffer.alloc(size);
-    const { bytesRead } = await handle.read(buffer, 0, size, 0);
+    const bytesRead = await readIntoBuffer(handle, buffer, 0);
     const text = buffer.subarray(0, bytesRead).toString('utf8');
 
     let parsed: unknown;
@@ -411,18 +506,18 @@ function emptyRawRecord(): RawBackgroundSessionRecord {
 async function buildSummary(
   id: string,
   raw: RawBackgroundSessionRecord,
-  logsDir: string,
+  logsDir: string | null,
   projects: ProjectIndex,
   diagnostics: Diagnostic[],
 ): Promise<BackgroundSessionSummary | null> {
-  const recordedStatus = readStatus(raw.status);
-  if (!recordedStatus) {
+  const parsedStatus = readStatus(raw.status);
+  if (!parsedStatus) {
     diagnostics.push({
       level: 'warn',
-      message: `Skipped background session "${id}" with an unrecognized status.`,
+      message: `Background session "${id}" has an unrecognized status; normalized to unknown.`,
     });
-    return null;
   }
+  const recordedStatus: BackgroundSessionStatus = parsedStatus ?? 'unknown';
 
   const name = readNonEmptyString(raw.name);
   const pid = readPid(raw.pid);
@@ -433,20 +528,12 @@ async function buildSummary(
   const startedAt = readTimestamp(raw.startedAt);
   const updatedAt = readTimestamp(raw.updatedAt);
 
-  const stdoutLogAvailable = await logsAvailable(
-    logsDir,
-    id,
-    'stdout',
-    raw.stdoutLogPath,
-    diagnostics,
-  );
-  const stderrLogAvailable = await logsAvailable(
-    logsDir,
-    id,
-    'stderr',
-    raw.stderrLogPath,
-    diagnostics,
-  );
+  const stdoutLogAvailable = logsDir
+    ? await logsAvailable(logsDir, id, 'stdout', raw.stdoutLogPath, diagnostics)
+    : false;
+  const stderrLogAvailable = logsDir
+    ? await logsAvailable(logsDir, id, 'stderr', raw.stderrLogPath, diagnostics)
+    : false;
 
   const commandSummary = summarizeCommand(raw.command);
   const projectLink = cwd ? linkProject(cwd, projects) : null;
@@ -779,7 +866,7 @@ async function readBoundedLogLines(
     // oldest bytes. Logs are append-only.
     const readOffset = byteTruncated ? openedStats.size - MAX_LOG_BYTES : 0;
     const buffer = Buffer.alloc(bytesToRead);
-    const { bytesRead } = await handle.read(buffer, 0, bytesToRead, readOffset);
+    const bytesRead = await readIntoBuffer(handle, buffer, readOffset);
     const text = buffer.subarray(0, bytesRead).toString('utf8');
 
     if (byteTruncated) {
@@ -795,6 +882,23 @@ async function readBoundedLogLines(
   } finally {
     await handle.close().catch(() => undefined);
   }
+}
+
+async function readIntoBuffer(handle: FileHandle, buffer: Buffer, position: number): Promise<number> {
+  let totalBytesRead = 0;
+  while (totalBytesRead < buffer.length) {
+    const { bytesRead } = await handle.read(
+      buffer,
+      totalBytesRead,
+      buffer.length - totalBytesRead,
+      position + totalBytesRead,
+    );
+    if (bytesRead === 0) {
+      break;
+    }
+    totalBytesRead += bytesRead;
+  }
+  return totalBytesRead;
 }
 
 function splitAndRedact(

@@ -23,6 +23,7 @@ Local API on 127.0.0.1:43110
 ~/.openclaude/tasks/
 ~/.openclaude/file-history/
 ~/.openclaude/debug/
+~/.openclaude/bg-sessions/
 ```
 
 ## Server Responsibilities

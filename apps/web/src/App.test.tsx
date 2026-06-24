@@ -1780,6 +1780,7 @@ describe('App', () => {
 
   test('renders partial background session payloads from older local servers', async () => {
     window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
     const fetchMock = mockApi({
       backgroundSessions: [
         {
@@ -1787,6 +1788,9 @@ describe('App', () => {
           name: 'partial payload task',
           recordedStatus: 'running',
         },
+      ],
+      backgroundLogEntries: [
+        { id: 'partial-bg:stdout:1', lineNumber: 1, text: 'legacy log line' },
       ],
       backgroundStatusCounts: {
         running: 1,
@@ -1803,6 +1807,8 @@ describe('App', () => {
 
     expect(await screen.findByText('partial payload task')).toBeInTheDocument();
     expect(screen.getAllByText('Running').length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: 'Open details for partial payload task' }));
+    expect(await screen.findByText('legacy log line')).toBeInTheDocument();
   });
 
   test('reloads background sessions from the global refresh button', async () => {
@@ -1855,6 +1861,56 @@ describe('App', () => {
     expect(screen.queryByText('initial-background-task')).not.toBeInTheDocument();
   });
 
+  test('clears stale background sessions and detail state when refresh fails', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
+    const initialSession = backgroundSessionFixture({
+      id: 'bg-refresh-error',
+      shortId: 'bg-rerr',
+      name: 'stale-background-task',
+      stdoutLogAvailable: false,
+      stderrLogAvailable: false,
+    });
+    const defaultApi = mockApi();
+    let backgroundRequestCount = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/background-sessions') {
+        backgroundRequestCount += 1;
+        if (backgroundRequestCount === 1) {
+          return Promise.resolve(jsonResponse({
+            sessions: [initialSession],
+            statusCounts: {
+              running: 1,
+              unknown: 0,
+              exited: 0,
+              failed: 0,
+              stale: 0,
+              killed: 0,
+            },
+            diagnostics: [],
+          }));
+        }
+        return Promise.resolve(jsonResponse({ error: 'Injected background sessions 500' }, 500));
+      }
+      return defaultApi(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await screen.findByText('stale-background-task');
+    await user.click(screen.getByRole('button', { name: 'Open details for stale-background-task' }));
+    expect(await screen.findByRole('dialog', { name: /stale-background-task details/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /refresh project list/i }));
+
+    await waitFor(() => expect(backgroundRequestCount).toBe(2));
+    expect(await screen.findByText('Injected background sessions 500')).toBeInTheDocument();
+    expect(screen.getByText('0 sessions')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /stale-background-task details/i })).not.toBeInTheDocument();
+  });
+
   test('opens the detail panel via keyboard activation', async () => {
     window.history.pushState(null, '', '/background-sessions');
     const user = userEvent.setup();
@@ -1898,16 +1954,16 @@ describe('App', () => {
     await screen.findByRole('heading', { name: 'Background Sessions' });
 
     // Enter activation
-    let row = screen.getByLabelText('Open details for kb-task');
-    row.focus();
+    let rowButton = screen.getByRole('button', { name: 'Open details for kb-task' });
+    rowButton.focus();
     await user.keyboard('{Enter}');
     let dialog = await screen.findByRole('dialog', { name: /kb-task details/i });
     expect(dialog).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Close dialog' }));
 
     // Space activation (separate branch with preventDefault to avoid page scroll)
-    row = screen.getByLabelText('Open details for kb-task');
-    row.focus();
+    rowButton = screen.getByRole('button', { name: 'Open details for kb-task' });
+    rowButton.focus();
     await user.keyboard(' ');
     dialog = await screen.findByRole('dialog', { name: /kb-task details/i });
     expect(dialog).toBeInTheDocument();
@@ -2249,6 +2305,72 @@ describe('App', () => {
     await waitFor(() => expect(window.location.pathname).toBe('/sessions'));
     expect(await screen.findByText('Project B stale session')).toBeInTheDocument();
   });
+
+  test('clears project-scoped diagnostics when opening a cross-project background transcript', async () => {
+    window.history.pushState(null, '', '/plans-tasks');
+    const user = userEvent.setup();
+    const staleDiagnostic = {
+      level: 'error',
+      message: 'Stale plan diagnostic from project A',
+      path: '/tmp/.openclaude/tasks/session-1/stale.json',
+    };
+    const projectTwo = projectFixture({
+      id: 'project-2',
+      name: 'project-b',
+      path: '/tmp/project-b',
+      active: false,
+      branch: 'feature',
+    });
+    const defaultApi = mockApi({
+      projects: [projectFixture(), projectTwo],
+      tasksResponse: {
+        ...tasksFixture(),
+        diagnostics: [staleDiagnostic],
+      },
+      backgroundSessions: [
+        backgroundSessionFixture({
+          id: 'bg-linked-project-2',
+          shortId: 'bg-proj2',
+          name: 'project-b-linked-task',
+          project: { projectId: 'project-2', projectName: 'project-b' },
+          sessionId: 'session-2',
+          sessionLink: { projectId: 'project-2', sessionId: 'session-2' },
+        }),
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/projects/project-2/overview') {
+        return Promise.resolve(jsonResponse(projectTwoOverviewFixture()));
+      }
+      if (requestUrl.pathname === '/api/projects/project-2/sessions') {
+        return Promise.resolve(jsonResponse({ sessions: [projectTwoSessionFixture()] }));
+      }
+      return defaultApi(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByText('1 diagnostic while reading plans and tasks')).toBeInTheDocument();
+    await user.click(screen.getAllByRole('link', { name: /^Background$/i })[0]!);
+    await screen.findByRole('heading', { name: 'Background Sessions' });
+    await user.click(screen.getByText('project-b-linked-task'));
+    await user.click(await screen.findByRole('button', { name: 'Open session transcript' }));
+    await waitFor(() => expect(window.location.pathname).toBe('/sessions'));
+
+    await user.click(screen.getAllByRole('link', { name: /Diagnostics/i })[0]!);
+    expect(await screen.findByRole('heading', { name: 'Diagnostics' })).toBeInTheDocument();
+    expect(screen.queryByText('Stale plan diagnostic from project A')).not.toBeInTheDocument();
+  });
 });
 
 function storageStub(kind: 'local' | 'session'): Storage {
@@ -2547,17 +2669,23 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (path.startsWith('/api/background-sessions/') && path.endsWith('/logs')) {
       const sessionId = path.split('/')[3] ?? 'bg-1';
-      if (options.backgroundLogsStatus) {
+      if (options.backgroundLogsStatus !== undefined) {
         return jsonResponse({ error: `Injected background logs ${options.backgroundLogsStatus}` }, options.backgroundLogsStatus);
       }
+      const requestedCount = Number(requestUrl.searchParams.get('count') ?? 100);
+      const shouldTail = requestUrl.searchParams.get('tail') === 'true';
+      const totalLines = options.backgroundLogEntries?.length ?? 0;
+      const start = shouldTail
+        ? Math.max(0, totalLines - requestedCount)
+        : Number(requestUrl.searchParams.get('start') ?? 0);
       return jsonResponse(
         options.backgroundLogsResponse ?? {
           sessionId,
           stream: requestUrl.searchParams.get('stream') === 'stderr' ? 'stderr' : 'stdout',
           entries: options.backgroundLogEntries ?? [],
-          start: 0,
-          count: 100,
-          totalLines: options.backgroundLogEntries?.length ?? 0,
+          start,
+          count: requestedCount,
+          totalLines,
           truncated: false,
           diagnostics: [],
         },

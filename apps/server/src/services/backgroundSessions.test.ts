@@ -122,17 +122,36 @@ describe('listBackgroundSessions', () => {
     expect(byId.get('nonterm-unknown')?.terminal).toBe(false);
   });
 
-  test('skips records with an unrecognized status and reports a diagnostic', async () => {
+  test('normalizes records with an unrecognized status and reports a diagnostic', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-bg-'));
     const paths = createOpenClaudePaths({ home, env: {} });
     await writeSession(paths, 'bad-status', validSessionFixture({ id: 'bad-status', status: 'zombie' }));
 
     const result = await listBackgroundSessions(paths);
 
-    expect(result.sessions).toEqual([]);
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]).toMatchObject({
+      id: 'bad-status',
+      recordedStatus: 'unknown',
+      terminal: false,
+    });
     expect(result.diagnostics).toEqual([
-      expect.objectContaining({ level: 'warn' }),
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('normalized to unknown') }),
     ]);
+  });
+
+  test('skips metadata files with overlong ids', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-bg-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const overlongId = 'a'.repeat(129);
+    await writeSession(paths, overlongId, validSessionFixture({ id: overlongId }));
+
+    const result = await listBackgroundSessions(paths);
+
+    expect(result.sessions).toEqual([]);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('unsafe id') }),
+    );
   });
 
   test('skips malformed JSON files and reports a diagnostic', async () => {
@@ -223,6 +242,27 @@ describe('listBackgroundSessions', () => {
       );
     } finally {
       await chmod(metaPath, 0o600).catch(() => undefined);
+    }
+  });
+
+  test('does not add a non-regular diagnostic when metadata stat is unavailable', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-bg-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await writeSession(paths, 'blocked', validSessionFixture({ id: 'blocked' }));
+    await chmod(sessionsDir(paths), 0o400);
+
+    try {
+      const result = await listBackgroundSessions(paths);
+
+      expect(result.sessions).toEqual([]);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({ level: 'warn', message: expect.stringContaining('could not be read') }),
+      );
+      expect(result.diagnostics).not.toContainEqual(
+        expect.objectContaining({ message: expect.stringContaining('not a regular file') }),
+      );
+    } finally {
+      await chmod(sessionsDir(paths), 0o700).catch(() => undefined);
     }
   });
 
@@ -323,6 +363,27 @@ describe('listBackgroundSessions', () => {
     expect(summary?.stderrLogAvailable).toBe(false);
   });
 
+  test('refuses to enumerate symlinked background session directories', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-bg-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const externalSessions = join(home, 'external-sessions');
+    await mkdir(externalSessions, { recursive: true });
+    await writeFile(
+      join(externalSessions, 'leaked.json'),
+      JSON.stringify(validSessionFixture({ id: 'leaked' })),
+      'utf8',
+    );
+    await mkdir(bgRoot(paths), { recursive: true });
+    await symlink(externalSessions, sessionsDir(paths));
+
+    const result = await listBackgroundSessions(paths);
+
+    expect(result.sessions).toEqual([]);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('symlink') }),
+    );
+  });
+
   test('warns when the embedded log path points outside the logs root', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-bg-'));
     const paths = createOpenClaudePaths({ home, env: {} });
@@ -398,6 +459,9 @@ describe('readBackgroundSessionLogs', () => {
     await expect(readBackgroundSessionLogs(paths, '../etc/passwd', {})).rejects.toThrow(
       'Invalid background session id.',
     );
+    await expect(readBackgroundSessionLogs(paths, 'a'.repeat(129), {})).rejects.toThrow(
+      'Invalid background session id.',
+    );
   });
 
   test('refuses to read symlinked log files', async () => {
@@ -413,6 +477,24 @@ describe('readBackgroundSessionLogs', () => {
     expect(result.diagnostics).toEqual([
       expect.objectContaining({ level: 'warn', message: expect.stringContaining('symlink') }),
     ]);
+  });
+
+  test('refuses to read through a symlinked logs directory', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-bg-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    const externalLogs = join(home, 'external-logs');
+    await mkdir(bgRoot(paths), { recursive: true });
+    await mkdir(externalLogs, { recursive: true });
+    await writeFile(join(externalLogs, 'sess.out.log'), 'top secret\n', 'utf8');
+    await symlink(externalLogs, logsDir(paths));
+
+    const result = await readBackgroundSessionLogs(paths, 'sess', {});
+
+    expect(result.entries).toEqual([]);
+    expect(result.totalLines).toBe(0);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('symlink') }),
+    );
   });
 
   test('truncates oversized log files', async () => {
