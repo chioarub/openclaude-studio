@@ -778,6 +778,110 @@ describe('HTTP server', () => {
     expect(response.json()).toMatchObject({ code: 'NOT_FOUND' });
   });
 
+  test('serves a valid replay timeline through the read-only endpoint', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-replay-'));
+    const projectPath = join(home, 'my-project');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(projectPath, { recursive: true });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [],
+        projects: { [projectPath]: { lastGracefulShutdown: '2026-06-01T00:00:00.000Z' } },
+      }),
+      'utf8',
+    );
+    const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(join(projectDir, 'session-1.jsonl'), '{}\n', 'utf8');
+    await writeFile(
+      join(projectDir, 'session-1.replay.json'),
+      JSON.stringify({
+        sessionId: 'session-1',
+        version: 1,
+        createdAt: '2026-06-01T00:00:00.000Z',
+        summary: {
+          totalSteps: 1,
+          toolBreakdown: { Read: 1 },
+          filesModified: [],
+          durationMs: 100,
+          startTimestamp: '2026-06-01T00:00:00.000Z',
+          endTimestamp: '2026-06-01T00:00:00.100Z',
+          userRequests: 1,
+        },
+        steps: [
+          {
+            type: 'tool',
+            stepNumber: 1,
+            toolName: 'Read',
+            toolUseId: 'tool-1',
+            inputSummary: 'Read README.md',
+            resultStatus: 'success',
+            durationMs: 100,
+            timestamp: '2026-06-01T00:00:00.000Z',
+          },
+        ],
+      }),
+      'utf8',
+    );
+    const server = await testServer(home);
+    const headers = tokenHeaders();
+
+    const projects = await server.inject({ method: 'GET', url: '/api/projects', headers });
+    const projectId = projects.json().projects[0].id;
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/sessions/session-1/replay`,
+      headers,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body).toMatchObject({
+      status: 'available',
+      supported: true,
+      available: true,
+      sessionId: 'session-1',
+      version: 1,
+    });
+    expect(body.steps).toHaveLength(1);
+  });
+
+  test('returns unavailable status when no replay sidecar exists', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-replay-none-'));
+    const projectPath = join(home, 'my-project');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(projectPath, { recursive: true });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [],
+        projects: { [projectPath]: { lastGracefulShutdown: '2026-06-01T00:00:00.000Z' } },
+      }),
+      'utf8',
+    );
+    const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(join(projectDir, 'session-1.jsonl'), '{}\n', 'utf8');
+    const server = await testServer(home);
+    const headers = tokenHeaders();
+
+    const projects = await server.inject({ method: 'GET', url: '/api/projects', headers });
+    const projectId = projects.json().projects[0].id;
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/sessions/session-1/replay`,
+      headers,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: 'unavailable',
+      available: false,
+      sessionId: 'session-1',
+    });
+  });
+
   test('surfaces a config-dir conflict warning through /api/projects diagnostics', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-conflict-'));
     const preferred = await mkdtemp(join(tmpdir(), 'ocs-preferred-'));
