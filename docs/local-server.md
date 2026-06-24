@@ -76,7 +76,7 @@ The local server exposes read-only provider inspection through:
 - `GET /api/provider/active` — returns the active provider summary used by the overview.
 - `GET /api/provider/profiles` — returns saved provider profile summaries, startup launch profile summary, diagnostics, and curated safe templates.
 
-Read scope is limited to the resolved OpenClaude configuration root already used by Studio, plus the startup profile file when present:
+Read scope is limited to the resolved OpenClaude configuration root already used by Studio, plus the startup profile file when present. Studio checks modern global config files first; `.claude.json` is only a legacy fallback under `OPENCLAUDE_CONFIG_DIR` when the modern files are missing.
 
 ```text
 <resolved OpenClaude config root>/.config.json
@@ -89,7 +89,7 @@ The startup profile reader parses only documented `profile`, `env`, and `created
 
 Provider recognition is best effort and derived from OpenClaude route identifiers and controlled host matches. Studio does not copy dynamic model catalogs or make network calls to discover or validate models. Unknown future providers degrade to a custom OpenAI-compatible classification.
 
-When re-syncing provider recognition, compare Studio's static registry and startup `env` allowlists against current OpenClaude route descriptors and `providerProfile` `PROFILE_ENV_KEYS`. Keep the registry static and reviewed rather than importing OpenClaude at runtime.
+The provider registry is intentionally static and reviewed, so Studio can classify known routes without importing OpenClaude at runtime.
 
 Credential diagnostics are intentionally value-free. The API can report:
 
