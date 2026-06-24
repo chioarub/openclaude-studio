@@ -1602,6 +1602,64 @@ describe('App', () => {
     expect(within(dialog).getByText('Connection refused')).toBeInTheDocument();
   });
 
+  test('shows conflict state when multiple replay files collide', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      sessionReplayResponse: {
+        status: 'conflict',
+        supported: true,
+        available: true,
+        sessionId: 'session-1',
+        diagnostics: [{ level: 'warn', message: 'Multiple conflicting replay files found.' }],
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText(/Multiple conflicting replay files were found/i)).toBeInTheDocument();
+  });
+
+  test('normalizes a legacy partial replay payload without crashing', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      sessionReplayResponse: {
+        status: 'available',
+        supported: true,
+        available: true,
+        sessionId: 'session-1',
+        version: 1,
+        createdAt: null,
+        // summary missing toolBreakdown and filesModified; steps missing
+        summary: {
+          totalSteps: 1,
+          durationMs: 100,
+          startTimestamp: '2026-06-01T00:00:00.000Z',
+          endTimestamp: '2026-06-01T00:00:00.100Z',
+          userRequests: 1,
+        },
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    // Should not crash — renders the timeline panel with defaults
+    expect(await within(dialog).findByText('Replay Timeline')).toBeInTheDocument();
+  });
+
   test('debounces additional log window requests as the log view scrolls', async () => {
     const fetchMock = mockApi({ logTotalLines: 1200 });
     vi.stubGlobal('fetch', fetchMock);

@@ -55,9 +55,12 @@ export async function readSessionReplay(
   const candidates: { path: string; stats: { mtimeMs: number; size: number } }[] = [];
   for (const root of candidateRoots) {
     const replayPath = join(root, `${sessionId}.replay.json`);
-    const stats = await safeRegularFile(replayPath);
-    if (stats) {
-      candidates.push({ path: replayPath, stats });
+    const fileState = await classifyReplayFile(replayPath);
+    if (fileState.kind === 'symlink') {
+      return malformed(sessionId, null, 'Replay file is a symlink and cannot be read.');
+    }
+    if (fileState.kind === 'regular') {
+      candidates.push({ path: replayPath, stats: fileState.stats });
     }
   }
 
@@ -74,10 +77,6 @@ export async function readSessionReplay(
     return conflict(sessionId, candidates.map((c) => c.path));
   }
   const read = await readBoundedTextFile(replayPath, { maxBytes: MAX_REPLAY_BYTES });
-
-  if (read.diagnostics.some((d) => d.message.includes('Symlink'))) {
-    return malformed(sessionId, null, 'Replay file is a symlink and cannot be read.');
-  }
 
   if (!read.exists) {
     return unavailable(sessionId, 'Replay file does not exist.');
@@ -110,18 +109,24 @@ function validateSessionId(sessionId: string): void {
   }
 }
 
-async function safeRegularFile(
-  path: string,
-): Promise<{ mtimeMs: number; size: number } | null> {
+type ReplayFileState =
+  | { kind: 'regular'; stats: { mtimeMs: number; size: number } }
+  | { kind: 'symlink' }
+  | { kind: 'absent' };
+
+async function classifyReplayFile(path: string): Promise<ReplayFileState> {
   try {
     const stats = await lstat(path);
-    if (stats.isSymbolicLink() || !stats.isFile()) {
-      return null;
+    if (stats.isSymbolicLink()) {
+      return { kind: 'symlink' };
     }
-    return { mtimeMs: stats.mtimeMs, size: stats.size };
+    if (!stats.isFile()) {
+      return { kind: 'absent' };
+    }
+    return { kind: 'regular', stats: { mtimeMs: stats.mtimeMs, size: stats.size } };
   } catch (error) {
     if (isNodeError(error, 'ENOENT')) {
-      return null;
+      return { kind: 'absent' };
     }
     throw error;
   }
@@ -282,8 +287,9 @@ function parseToolBreakdown(
     if (entries.length >= MAX_TOOL_BREAKDOWN_KEYS) {
       break;
     }
-    if (typeof count === 'number' && Number.isFinite(count)) {
-      entries.push({ tool: redactTextSecrets(tool), count });
+    const normalized = parseNonNegativeInt(count);
+    if (normalized !== null) {
+      entries.push({ tool: redactTextSecrets(tool), count: normalized });
     }
   }
   return entries;

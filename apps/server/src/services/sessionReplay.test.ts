@@ -192,19 +192,17 @@ describe('readSessionReplay', () => {
     }
   });
 
-  test('returns malformed for invalid timestamps', async () => {
+  test('normalizes invalid timestamps to null while keeping the replay available', async () => {
     const { projectPath, projectDir, paths, cleanup } = await setup();
     try {
       const data = validReplay('session-1');
       (data.summary as Record<string, unknown>).startTimestamp = 'not-a-date';
       await writeReplay(projectDir, 'session-1', data);
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
-      if (result.status !== 'available') {
-        // invalid startTimestamp alone returns null, not malformed — verify graceful
-        expect(['malformed', 'available']).toContain(result.status);
-        return;
-      }
+      expect(result.status).toBe('available');
+      if (result.status !== 'available') return;
       expect(result.summary.startTimestamp).toBeNull();
+      expect(result.summary.endTimestamp).toBe('2026-06-01T00:00:05.000Z');
     } finally {
       await cleanup();
     }
@@ -253,8 +251,8 @@ describe('readSessionReplay', () => {
       await writeFile(join(projectDir, 'session-1.jsonl'), '{}\n', 'utf8');
       await symlink(target, join(projectDir, 'session-1.replay.json'));
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
-      // Symlink is not followed — treated as unavailable or malformed
-      expect(['unavailable', 'malformed']).toContain(result.status);
+      // Symlink is explicitly rejected as malformed, not silently unavailable
+      expect(result.status).toBe('malformed');
     } finally {
       await cleanup();
     }

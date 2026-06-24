@@ -236,7 +236,7 @@ export function SessionDetailsModal({
     api
       .sessionReplay(projectId, sessionId)
       .then((data: SessionReplayResponse | null) => {
-        if (!ignore) setReplay(data);
+        if (!ignore) setReplay(normalizeReplayResponse(data));
       })
       .catch((err: unknown) => {
         if (!ignore) {
@@ -3127,6 +3127,45 @@ function formatDuration(ms: number): string {
   const minutes = Math.floor(ms / 60000);
   const seconds = Math.round((ms % 60000) / 1000);
   return `${minutes}m ${seconds}s`;
+}
+
+function normalizeReplayResponse(
+  data: SessionReplayResponse | null,
+): SessionReplayResponse | null {
+  if (data === null) return null;
+  if (data.status !== 'available') return data;
+  const summary = data.summary ?? undefined;
+  if (!summary) {
+    return {
+      ...data,
+      status: 'malformed',
+      version: data.version ?? null,
+      diagnostics: [
+        { level: 'warn', message: 'Replay summary is missing from the server response.' },
+      ],
+    };
+  }
+  return {
+    ...data,
+    summary: {
+      totalSteps: typeof summary.totalSteps === 'number' ? summary.totalSteps : 0,
+      toolBreakdown: Array.isArray(summary.toolBreakdown)
+        ? summary.toolBreakdown.filter(
+            (e): e is { tool: string; count: number } =>
+              e != null && typeof e.tool === 'string' && typeof e.count === 'number',
+          )
+        : [],
+      filesModified: Array.isArray(summary.filesModified) ? summary.filesModified : [],
+      filesModifiedTruncated: summary.filesModifiedTruncated ?? false,
+      durationMs: typeof summary.durationMs === 'number' ? summary.durationMs : 0,
+      startTimestamp: summary.startTimestamp ?? null,
+      endTimestamp: summary.endTimestamp ?? null,
+      userRequests: typeof summary.userRequests === 'number' ? summary.userRequests : 0,
+      retryAttempts: summary.retryAttempts ?? null,
+      repeatedAttempts: summary.repeatedAttempts ?? null,
+    },
+    steps: Array.isArray(data.steps) ? data.steps : [],
+  };
 }
 
 function formatStepSummary(step: SessionReplayStep): string {
