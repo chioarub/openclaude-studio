@@ -415,6 +415,79 @@ export type TaskDetailsResponse = {
   diagnostics: Diagnostic[];
 };
 
+export type BackgroundSessionStatus =
+  | 'running'
+  | 'unknown'
+  | 'exited'
+  | 'failed'
+  | 'stale'
+  | 'killed';
+
+export type BackgroundSessionProcessPresence = 'unknown';
+
+export type BackgroundSessionProjectLink = {
+  projectId: string;
+  projectName: string;
+};
+
+export type BackgroundSessionSummary = {
+  id: string;
+  shortId: string;
+  name: string | null;
+  pid: number | null;
+  cwd: string | null;
+  recordedStatus: BackgroundSessionStatus;
+  terminal: boolean;
+  processPresence: BackgroundSessionProcessPresence;
+  provider: string | null;
+  model: string | null;
+  sessionId: string | null;
+  startedAt: string | null;
+  updatedAt: string | null;
+  durationMs: number | null;
+  commandSummary: BackgroundSessionCommandSummary;
+  project: BackgroundSessionProjectLink | null;
+  sessionLink: BackgroundSessionSessionLink | null;
+  stdoutLogAvailable: boolean;
+  stderrLogAvailable: boolean;
+};
+
+export type BackgroundSessionCommandSummary = {
+  binary: string | null;
+  flagCount: number;
+  truncated: boolean;
+};
+
+export type BackgroundSessionSessionLink = {
+  projectId: string;
+  sessionId: string;
+};
+
+export type BackgroundSessionsResponse = {
+  sessions: BackgroundSessionSummary[];
+  statusCounts: Record<BackgroundSessionStatus, number>;
+  diagnostics: Diagnostic[];
+};
+
+export type BackgroundSessionLogStream = 'stdout' | 'stderr';
+
+export type BackgroundSessionLogEntry = {
+  id: string;
+  lineNumber: number;
+  text: string;
+};
+
+export type BackgroundSessionLogsResponse = {
+  sessionId: string;
+  stream: BackgroundSessionLogStream;
+  entries: BackgroundSessionLogEntry[];
+  start: number;
+  count: number;
+  totalLines: number;
+  truncated: boolean;
+  diagnostics: Diagnostic[];
+};
+
 export type ApiErrorResponse = {
   error: string;
   code: string;

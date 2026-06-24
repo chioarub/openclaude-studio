@@ -9,7 +9,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 
 import { cn } from './lib/cn.js';
 import {
@@ -40,6 +40,7 @@ import {
   ShieldCheck,
   Sun,
   Terminal,
+  TerminalSquare,
   X,
   XCircle,
   type LucideIcon,
@@ -65,7 +66,16 @@ import type {
 import { ApiRequestError, createApiClient, normalizeBaseUrl, type ApiClient } from './api';
 import { SessionDetailsModal } from './components/SessionDetailsModal';
 import { PlansTasksPage } from './components/PlansTasksPage';
+import { BackgroundSessionsPage } from './components/BackgroundSessionsPage';
 import { LoadingOverlay, LoadingSpinner } from './components/LoadingState';
+import {
+  Badge,
+  EmptyState,
+  PageHeader,
+  PageStack,
+  QuickStat,
+  SectionHeading,
+} from './components/shared';
 
 const serverUrlStorageKey = 'openclaude-studio:server-url';
 const legacyConnectionStorageKey = 'openclaude-studio.connection';
@@ -152,6 +162,13 @@ const appRoutes: AppRoute[] = [
     icon: Server,
   },
   {
+    name: 'Background',
+    shortName: 'BG Sessions',
+    path: '/background-sessions',
+    group: 'maintenance',
+    icon: TerminalSquare,
+  },
+  {
     name: 'Logs',
     path: '/logs',
     group: 'maintenance',
@@ -228,12 +245,14 @@ export default function App() {
 }
 
 function StudioApp() {
+  const navigate = useNavigate();
   const [baseUrl, setBaseUrl] = useState(() => normalizeBaseUrl(loadServerUrl()));
   const [selectedProjectId, setSelectedProjectId] = useState(() => loadActiveProjectId());
   const [selectedLogFile, setSelectedLogFile] = useState<string | undefined>();
   const [logQuery, setLogQuery] = useState('');
   const [logLevel, setLogLevel] = useState<LogLevelFilter>('all');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [backgroundSessionsRefreshToken, setBackgroundSessionsRefreshToken] = useState(0);
   const [status, setStatus] = useState<LoadState>('idle');
   const [loadingLabel, setLoadingLabel] = useState('Loading workspace');
   const [logRangeLoading, setLogRangeLoading] = useState(false);
@@ -255,8 +274,30 @@ function StudioApp() {
     setPlansTasksDiagnostics(nextDiagnostics);
   }, []);
 
+  // When opening a linked background session that belongs to a different
+  // project, the project change would normally trigger the
+  // useEffect([selectedProjectId]) below and clear selectedSessionId before
+  // the details modal can open. Track the pending session so the clear is
+  // suppressed once, then applied on subsequent manual project changes.
+  const pendingLinkedSessionRef = useRef<string | null>(null);
+
+  function handleOpenBackgroundSession(projectId: string, sessionId: string) {
+    pendingLinkedSessionRef.current = projectId === selectedProjectId ? null : sessionId;
+    setSelectedProjectId(projectId);
+    setSelectedSessionId(sessionId);
+    void loadWorkspace({ projectId });
+    void navigate('/sessions');
+  }
+
   useEffect(() => {
-    setSelectedSessionId(null);
+    const preserveSelectedSession = pendingLinkedSessionRef.current !== null;
+    if (preserveSelectedSession) {
+      // This project change was triggered by the link handler; preserve the
+      // intended session selection instead of clearing it.
+      pendingLinkedSessionRef.current = null;
+    } else {
+      setSelectedSessionId(null);
+    }
     setPlansTasksDiagnostics([]);
   }, [selectedProjectId]);
 
@@ -396,13 +437,18 @@ function StudioApp() {
     }
   }
 
+  function refreshWorkspace() {
+    setBackgroundSessionsRefreshToken((value) => value + 1);
+    void refreshHealth();
+    void loadWorkspace();
+  }
+
   function updateServerUrl(nextBaseUrl: string) {
     const normalizedBaseUrl = normalizeBaseUrl(nextBaseUrl);
     saveServerUrl(normalizedBaseUrl);
 
     if (normalizedBaseUrl === baseUrl) {
-      void refreshHealth();
-      void loadWorkspace();
+      refreshWorkspace();
       return;
     }
 
@@ -445,8 +491,7 @@ function StudioApp() {
             void loadWorkspace({ projectId });
           }}
           onRefresh={() => {
-            void refreshHealth();
-            void loadWorkspace();
+            refreshWorkspace();
           }}
         />
         <main className="mx-auto w-full max-w-[1420px] px-4 py-5 md:px-6 lg:px-8">
@@ -502,6 +547,16 @@ function StudioApp() {
                   isWorkspaceLoading={status === 'loading'}
                   overview={snapshot.overview}
                   workspaceLoadingLabel={loadingLabel}
+                />
+              }
+            />
+            <Route
+              path="/background-sessions"
+              element={
+                <BackgroundSessionsPage
+                  api={api}
+                  onOpenSession={handleOpenBackgroundSession}
+                  refreshToken={backgroundSessionsRefreshToken}
                 />
               }
             />
@@ -3297,47 +3352,6 @@ function SessionsTable({
   );
 }
 
-function PageHeader({
-  aside,
-  icon: Icon,
-  status,
-  title,
-}: {
-  aside?: ReactNode;
-  icon: LucideIcon;
-  status: string;
-  title: string;
-}) {
-  return (
-    <header className="page-header">
-      <div className="page-header-title">
-        <div className="icon-frame">
-          <Icon className="h-6 w-6" />
-        </div>
-        <div className="min-w-0">
-          <h1 className="font-display text-[34px] leading-none text-ink md:text-[40px]">{title}</h1>
-          <div className="mt-2 flex min-w-0 items-center gap-2">
-            <span className="status-dot" />
-            <span className="truncate text-xs font-medium uppercase leading-none tracking-widest text-muted-soft">
-              {status}
-            </span>
-          </div>
-        </div>
-      </div>
-      {aside ? <div className="page-header-aside">{aside}</div> : null}
-    </header>
-  );
-}
-
-function QuickStat({ label, value }: { label: string; value: number | string }) {
-  return (
-    <div className="quick-stat">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
 function Metric({ icon, label, value }: { icon: ReactNode; label: string; value: string | number }) {
   return (
     <div className="metric">
@@ -3346,15 +3360,6 @@ function Metric({ icon, label, value }: { icon: ReactNode; label: string; value:
         <div className="text-xs font-medium text-muted">{label}</div>
         <div className="mt-1 truncate text-xl font-semibold">{value}</div>
       </div>
-    </div>
-  );
-}
-
-function SectionHeading({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
-  return (
-    <div className="section-heading">
-      <Icon className="h-4 w-4" aria-hidden="true" />
-      {label}
     </div>
   );
 }
@@ -3368,18 +3373,6 @@ function Info({ label, value }: { label: string; value: string }) {
       </div>
     </div>
   );
-}
-
-function Badge({ label, tone }: { label: string; tone: 'danger' | 'muted' | 'success' | 'warning' }) {
-  return <span className={`badge badge-${tone}`}>{label}</span>;
-}
-
-function EmptyState({ label }: { label: string }) {
-  return <div className="empty-state">{label}</div>;
-}
-
-function PageStack({ children }: { children: ReactNode }) {
-  return <div className="space-y-5">{children}</div>;
 }
 
 function StatusBanner({

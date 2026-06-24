@@ -23,6 +23,7 @@ Local API on 127.0.0.1:43110
 ~/.openclaude/tasks/
 ~/.openclaude/file-history/
 ~/.openclaude/debug/
+~/.openclaude/bg-sessions/
 ```
 
 ## Server Responsibilities
@@ -35,6 +36,7 @@ The server is intentionally narrow:
 - Read project-scoped plans and tasks, plus session file-history context.
 - Read provider configuration with secret fields redacted, profile validation, and safe templates.
 - Read debug logs through bounded, indexed windows.
+- Read background session metadata and bounded, redacted stdout/stderr logs.
 - Scope logs and diagnostics to the selected project where possible.
 - Return typed JSON responses.
 
@@ -50,6 +52,7 @@ The web app is a read-only dashboard:
 - Plans & Tasks route with linked session context
 - Provider summary and read-only provider profile management
 - System logs with filtering, search, virtualization, and copy-to-clipboard
+- Background session monitoring with status counters, filters, project linking, and bounded log inspection
 - Diagnostics
 - Light and dark themes
 

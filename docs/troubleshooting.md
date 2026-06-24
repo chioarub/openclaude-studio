@@ -84,6 +84,15 @@ Redaction is best effort and defense in depth. It is not a guarantee that every 
 
 Review logs, screenshots, recordings, and diagnostics before sharing them in public issues or pull requests.
 
+## Background Sessions show as empty
+
+Background sessions are read from `<resolved OpenClaude config root>/bg-sessions/`. If no sessions appear:
+
+- Start a background session with `openclaude --bg` (requires an OpenClaude version that supports detached background sessions).
+- Confirm the resolved config root matches where OpenClaude writes background data. Studio reads the same root OpenClaude uses; see the `OPENCLAUDE_CONFIG_DIR` documentation.
+- Older OpenClaude versions without background sessions show an empty, non-error state.
+- If the Background Sessions page shows "requires a newer local server", update the `openclaude-studio` package.
+
 ## Browser cannot connect to the localhost API
 
 Check these items:

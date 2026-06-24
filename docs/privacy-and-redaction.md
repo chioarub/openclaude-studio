@@ -12,6 +12,7 @@ The local API may read:
 - `~/.openclaude/tasks/`
 - `~/.openclaude/file-history/`
 - `~/.openclaude/debug/`
+- `~/.openclaude/bg-sessions/`
 
 The app is read-only in the current MVP line. It should not write OpenClaude config, sessions, logs, provider profiles, project files, tasks, plans, or file-history data.
 
@@ -29,6 +30,8 @@ The server redacts likely secrets before returning data to the browser. Current 
 - Common API key formats in logs and messages
 
 Session Change Review can display code or configuration text from current project files and OpenClaude file-history backups. Those reads are bounded, symlink-safe, and redacted before diff generation, but redaction remains best effort. Review screenshots, copied diffs, and recordings before sharing them.
+
+Background session stdout and stderr logs can contain prompts, model output, file paths, and credentials. Studio redacts these with the same patterns used for debug logs (API keys, bearer tokens, URL credentials, environment-style assignments) before returning them to the browser, but redaction is best effort. Background logs are derived from validated session ids and a trusted logs root; Studio never trusts the log paths embedded in background metadata as read authorization. Treat every background log line as potentially sensitive.
 
 When `OPENCLAUDE_CONFIG_DIR` and `CLAUDE_CONFIG_DIR` are both set and disagree, Studio emits a warning diagnostic through `/api/projects`. That specific message intentionally contains only the variable names and the resolution outcome — it never includes the configured path values, the home directory, or any local file contents. Other diagnostics in the same response (e.g. "File does not exist") may include paths by established convention; the conflict warning is deliberately more conservative because the conflict itself is the sensitive signal.
 

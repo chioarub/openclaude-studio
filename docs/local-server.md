@@ -69,6 +69,28 @@ OPENCLAUDE_STUDIO_ALLOWED_ORIGINS=https://studio.example.com npx openclaude-stud
 
 Keep the server bound to loopback unless you have a trusted network and an explicit access-control model. The server reads local OpenClaude files and should not be exposed to public networks.
 
+## Background Sessions
+
+The local server exposes read-only monitoring of OpenClaude's detached background sessions (started with `openclaude --bg`).
+
+Read scope is limited to:
+
+```text
+<resolved OpenClaude config root>/bg-sessions/sessions/*.json
+<resolved OpenClaude config root>/bg-sessions/logs/<id>.out.log
+<resolved OpenClaude config root>/bg-sessions/logs/<id>.err.log
+```
+
+Studio derives log paths from validated session ids and the trusted logs root. It does not trust `stdoutLogPath` or `stderrLogPath` values embedded in metadata as read authorization.
+When a log file exceeds the byte read cap, Studio returns the retained tail window only; `totalLines`, `start`, and per-entry `lineNumber` values are relative to that retained byte window because the server does not read discarded bytes to count their lines.
+
+Endpoints:
+
+- `GET /api/background-sessions` — lists safe session summaries with status counters.
+- `GET /api/background-sessions/:sessionId/logs?stream=stdout|stderr&start=...&count=...&tail=true` — returns a bounded, redacted window of stdout or stderr.
+
+Studio reports `recordedStatus` from the metadata file. It does not probe processes or claim a session is live; `processPresence` is always `unknown` in this version. Studio never manages, kills, or spawns processes — there are no write or control endpoints.
+
 ## Troubleshooting
 
 See [Troubleshooting](troubleshooting.md) for connection failures, custom ports, token mode, missing projects, and safe bug-reporting guidance.

@@ -1,4 +1,7 @@
 import type {
+  BackgroundSessionLogStream,
+  BackgroundSessionLogsResponse,
+  BackgroundSessionsResponse,
   HealthResponse,
   LogsSearchResponse,
   LogsWindowResponse,
@@ -78,6 +81,19 @@ export function createApiClient(settings: ConnectionSettings) {
         tail?: boolean;
       } = {},
     ) => request<LogsSearchResponse>(`/api/logs/search${queryString(input)}`),
+    backgroundSessions: () => request<BackgroundSessionsResponse>('/api/background-sessions'),
+    backgroundSessionLogs: (
+      sessionId: string,
+      input: {
+        stream?: BackgroundSessionLogStream;
+        start?: number;
+        count?: number;
+        tail?: boolean;
+      } = {},
+    ) =>
+      request<BackgroundSessionLogsResponse>(
+        `/api/background-sessions/${encodeURIComponent(sessionId)}/logs${queryString(input)}`,
+      ),
     plans: (projectId: string) =>
       request<PlansResponse>(`/api/projects/${encodeURIComponent(projectId)}/plans`),
     planDetails: (projectId: string, planId: string) =>

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import type { ProjectSummary } from '@openclaude-studio/shared';
+import type { BackgroundSessionSummary, ProjectSummary } from '@openclaude-studio/shared';
 
 import App from './App';
 
@@ -1733,6 +1733,644 @@ describe('App', () => {
     expect(screen.queryByText('OpenAI')).not.toBeInTheDocument();
     expect(screen.queryByText('Project B stale session')).not.toBeInTheDocument();
   });
+
+  test('renders the background sessions page with sessions and status counters', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const fetchMock = mockApi({
+      backgroundSessions: [
+        {
+          id: 'bg-running-001',
+          shortId: 'bg-runni',
+          name: 'long-task',
+          pid: 4242,
+          cwd: '/tmp/project',
+          recordedStatus: 'running',
+          terminal: false,
+          processPresence: 'unknown',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          sessionId: 'sess-1',
+          startedAt: '2026-06-01T10:00:00.000Z',
+          updatedAt: '2026-06-01T10:05:00.000Z',
+          durationMs: 300000,
+          commandSummary: { binary: 'openclaude', flagCount: 2, truncated: false },
+          project: null,
+          sessionLink: null,
+          stdoutLogAvailable: true,
+          stderrLogAvailable: false,
+        },
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Background Sessions' })).toBeInTheDocument();
+    expect(await screen.findByText('long-task')).toBeInTheDocument();
+    expect(screen.getAllByText('Running').length).toBeGreaterThan(0);
+  });
+
+  test('renders partial background session payloads from older local servers', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
+    const fetchMock = mockApi({
+      backgroundSessions: [
+        {
+          id: 'partial-bg',
+          name: 'partial payload task',
+          recordedStatus: 'running',
+        },
+      ],
+      backgroundLogEntries: [
+        { id: 'partial-bg:stdout:1', lineNumber: 1, text: 'legacy log line' },
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByText('partial payload task')).toBeInTheDocument();
+    expect(screen.getAllByText('Running').length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: 'Open details for partial payload task' }));
+    expect(await screen.findByText('legacy log line')).toBeInTheDocument();
+  });
+
+  test('reloads background sessions from the global refresh button', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
+    const initialSession = backgroundSessionFixture({
+      id: 'bg-refresh-001',
+      shortId: 'bg-ref1',
+      name: 'initial-background-task',
+      recordedStatus: 'running',
+    });
+    const refreshedSession = backgroundSessionFixture({
+      id: 'bg-refresh-002',
+      shortId: 'bg-ref2',
+      name: 'refreshed-background-task',
+      recordedStatus: 'failed',
+    });
+    const defaultApi = mockApi();
+    let backgroundRequestCount = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/background-sessions') {
+        backgroundRequestCount += 1;
+        const session = backgroundRequestCount === 1 ? initialSession : refreshedSession;
+        return Promise.resolve(jsonResponse({
+          sessions: [session],
+          statusCounts: {
+            running: session.recordedStatus === 'running' ? 1 : 0,
+            unknown: 0,
+            exited: 0,
+            failed: session.recordedStatus === 'failed' ? 1 : 0,
+            stale: 0,
+            killed: 0,
+          },
+          diagnostics: [],
+        }));
+      }
+      return defaultApi(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByText('initial-background-task')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /refresh project list/i }));
+
+    await waitFor(() => expect(backgroundRequestCount).toBe(2));
+    expect(await screen.findByText('refreshed-background-task')).toBeInTheDocument();
+    expect(screen.queryByText('initial-background-task')).not.toBeInTheDocument();
+  });
+
+  test('clears stale background sessions and detail state when refresh fails', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
+    const initialSession = backgroundSessionFixture({
+      id: 'bg-refresh-error',
+      shortId: 'bg-rerr',
+      name: 'stale-background-task',
+      stdoutLogAvailable: false,
+      stderrLogAvailable: false,
+    });
+    const defaultApi = mockApi();
+    let backgroundRequestCount = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/background-sessions') {
+        backgroundRequestCount += 1;
+        if (backgroundRequestCount === 1) {
+          return Promise.resolve(jsonResponse({
+            sessions: [initialSession],
+            statusCounts: {
+              running: 1,
+              unknown: 0,
+              exited: 0,
+              failed: 0,
+              stale: 0,
+              killed: 0,
+            },
+            diagnostics: [],
+          }));
+        }
+        return Promise.resolve(jsonResponse({ error: 'Injected background sessions 500' }, 500));
+      }
+      return defaultApi(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await screen.findByText('stale-background-task');
+    await user.click(screen.getByRole('button', { name: 'Open details for stale-background-task' }));
+    expect(await screen.findByRole('dialog', { name: /stale-background-task details/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /refresh project list/i }));
+
+    await waitFor(() => expect(backgroundRequestCount).toBe(2));
+    expect(await screen.findByText('Injected background sessions 500')).toBeInTheDocument();
+    expect(screen.getByText('0 sessions')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /stale-background-task details/i })).not.toBeInTheDocument();
+  });
+
+  test('opens the detail panel via keyboard activation', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
+    const fetchMock = mockApi({
+      backgroundSessions: [
+        {
+          id: 'bg-kb-001',
+          shortId: 'bg-kb',
+          name: 'kb-task',
+          pid: 1,
+          cwd: '/tmp',
+          recordedStatus: 'running',
+          terminal: false,
+          processPresence: 'unknown',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          sessionId: null,
+          startedAt: '2026-06-01T10:00:00.000Z',
+          updatedAt: '2026-06-01T10:05:00.000Z',
+          durationMs: 300000,
+          commandSummary: { binary: 'openclaude', flagCount: 1, truncated: false },
+          project: null,
+          sessionLink: null,
+          stdoutLogAvailable: false,
+          stderrLogAvailable: false,
+        },
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Background Sessions' });
+
+    // Enter activation
+    let rowButton = screen.getByRole('button', { name: 'Open details for kb-task' });
+    rowButton.focus();
+    await user.keyboard('{Enter}');
+    let dialog = await screen.findByRole('dialog', { name: /kb-task details/i });
+    expect(dialog).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Close dialog' }));
+
+    // Space activation (separate branch with preventDefault to avoid page scroll)
+    rowButton = screen.getByRole('button', { name: 'Open details for kb-task' });
+    rowButton.focus();
+    await user.keyboard(' ');
+    dialog = await screen.findByRole('dialog', { name: /kb-task details/i });
+    expect(dialog).toBeInTheDocument();
+  });
+
+  test('shows an empty state when no background sessions exist', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const fetchMock = mockApi();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByText('No background sessions found')).toBeInTheDocument();
+  });
+
+  test('shows a degraded state when the local server is older', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const fetchMock = mockApi({ backgroundSessionsStatus: 404 });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    expect(
+      await screen.findByText('Background session monitoring requires a newer local server.'),
+    ).toBeInTheDocument();
+  });
+
+  test('opens a detail panel with bounded redacted logs on row click', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
+    const fetchMock = mockApi({
+      backgroundSessions: [
+        {
+          id: 'bg-logs-001',
+          shortId: 'bg-logs',
+          name: 'with-logs',
+          pid: 1,
+          cwd: '/tmp',
+          recordedStatus: 'running',
+          terminal: false,
+          processPresence: 'unknown',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          sessionId: null,
+          startedAt: '2026-06-01T10:00:00.000Z',
+          updatedAt: '2026-06-01T10:05:00.000Z',
+          durationMs: 300000,
+          commandSummary: { binary: 'openclaude', flagCount: 1, truncated: false },
+          project: null,
+          sessionLink: null,
+          stdoutLogAvailable: true,
+          stderrLogAvailable: false,
+        },
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+      backgroundLogEntries: [
+        { id: 'bg-logs-001:stdout:1', lineNumber: 1, text: 'OPENAI_API_KEY=<redacted> leak' },
+      ],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Background Sessions' });
+    await user.click(screen.getByText('with-logs'));
+
+    expect(await screen.findByRole('dialog', { name: /with-logs details/i })).toBeInTheDocument();
+    expect(screen.getByText('OPENAI_API_KEY=<redacted> leak')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy log line' })).toHaveClass('focus-visible:opacity-100');
+  });
+
+  test('shows a log loading error in the background session detail panel', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
+    const fetchMock = mockApi({
+      backgroundSessions: [
+        backgroundSessionFixture({
+          id: 'bg-log-error-001',
+          shortId: 'bg-loge',
+          name: 'with-log-error',
+          stdoutLogAvailable: true,
+        }),
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+      backgroundLogsStatus: 500,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Background Sessions' });
+    await user.click(screen.getByText('with-log-error'));
+
+    const dialog = await screen.findByRole('dialog', { name: /with-log-error details/i });
+    expect(await within(dialog).findByText('Injected background logs 500')).toBeInTheDocument();
+  });
+
+  test('uses fallback keys for partial background log entries', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fetchMock = mockApi({
+      backgroundSessions: [
+        backgroundSessionFixture({
+          id: 'bg-partial-logs',
+          shortId: 'bg-plog',
+          name: 'partial-log-entries',
+          stdoutLogAvailable: true,
+        }),
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+      backgroundLogEntries: [
+        { lineNumber: 7, text: 'duplicate missing id' },
+        { lineNumber: 7, text: 'duplicate missing id' },
+      ],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Background Sessions' });
+    await user.click(screen.getByText('partial-log-entries'));
+    await waitFor(() => expect(screen.getAllByText('duplicate missing id')).toHaveLength(2));
+
+    expect(
+      consoleError.mock.calls.some((call) =>
+        call.some((argument) => String(argument).includes('Encountered two children with the same key')),
+      ),
+    ).toBe(false);
+  });
+
+  test('styles background diagnostic errors with the error tone', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const fetchMock = mockApi({
+      backgroundDiagnostics: [
+        { level: 'error', message: 'Background diagnostics failed' },
+      ],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Background Sessions' });
+    const diagnostic = screen.getByText('Background diagnostics failed').closest('li');
+    expect(diagnostic).toHaveClass('text-error');
+  });
+
+  test('opens the linked session transcript and surfaces the details modal', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
+    const fetchMock = mockApi({
+      backgroundSessions: [
+        {
+          id: 'bg-linked-001',
+          shortId: 'bg-link',
+          name: 'linked-task',
+          pid: 1,
+          cwd: '/tmp',
+          recordedStatus: 'running',
+          terminal: false,
+          processPresence: 'unknown',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          sessionId: 'session-1',
+          startedAt: '2026-06-01T10:00:00.000Z',
+          updatedAt: '2026-06-01T10:05:00.000Z',
+          durationMs: 300000,
+          commandSummary: { binary: 'openclaude', flagCount: 1, truncated: false },
+          project: { projectId: 'project-1', projectName: 'project-a' },
+          sessionLink: { projectId: 'project-1', sessionId: 'session-1' },
+          stdoutLogAvailable: true,
+          stderrLogAvailable: false,
+        },
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+      sessionDetails: legacySessionDetailsFixture(),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Background Sessions' });
+    await user.click(screen.getByText('linked-task'));
+    expect(await screen.findByRole('dialog', { name: /linked-task details/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Open session transcript' }));
+
+    // The handler selects proj-A + session-1 and routes to /sessions, which
+    // surfaces the existing session-details modal with the linked transcript.
+    await waitFor(() => expect(window.location.pathname).toBe('/sessions'));
+    const transcriptDialog = await screen.findByRole('dialog', { name: /session details/i });
+    expect(transcriptDialog).toBeInTheDocument();
+  });
+
+  test('does not preserve a same-project linked session across later manual project changes', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
+    const projectTwo = projectFixture({
+      id: 'project-2',
+      name: 'project-b',
+      path: '/tmp/project-b',
+      active: false,
+      branch: 'feature',
+    });
+    const defaultApi = mockApi({
+      projects: [projectFixture(), projectTwo],
+      backgroundSessions: [
+        backgroundSessionFixture({
+          id: 'bg-linked-same-project',
+          shortId: 'bg-same',
+          name: 'same-project-linked-task',
+          project: { projectId: 'project-1', projectName: 'project-a' },
+          sessionId: 'session-1',
+          sessionLink: { projectId: 'project-1', sessionId: 'session-1' },
+        }),
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+      sessionDetails: legacySessionDetailsFixture(),
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/projects/project-2/overview') {
+        return Promise.resolve(jsonResponse(projectTwoOverviewFixture()));
+      }
+      if (requestUrl.pathname === '/api/projects/project-2/sessions') {
+        return Promise.resolve(jsonResponse({ sessions: [projectTwoSessionFixture()] }));
+      }
+      return defaultApi(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Background Sessions' });
+    await user.click(screen.getByText('same-project-linked-task'));
+    await user.click(await screen.findByRole('button', { name: 'Open session transcript' }));
+    await waitFor(() => expect(window.location.pathname).toBe('/sessions'));
+    expect(await screen.findByRole('dialog', { name: /session details/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /project-a main/i }));
+    await user.click(
+      within(screen.getByRole('dialog', { name: /project selector/i })).getByRole('button', {
+        name: /project-b feature/i,
+      }),
+    );
+
+    await waitFor(() => expect(wasFetched(fetchMock, '/api/projects/project-2/overview')).toBe(true));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /session details/i })).not.toBeInTheDocument());
+  });
+
+  test('loads the target project workspace when opening a cross-project background transcript', async () => {
+    window.history.pushState(null, '', '/background-sessions');
+    const user = userEvent.setup();
+    const projectTwo = projectFixture({
+      id: 'project-2',
+      name: 'project-b',
+      path: '/tmp/project-b',
+      active: false,
+      branch: 'feature',
+    });
+    const defaultApi = mockApi({
+      projects: [projectFixture(), projectTwo],
+      backgroundSessions: [
+        backgroundSessionFixture({
+          id: 'bg-linked-project-2',
+          shortId: 'bg-proj2',
+          name: 'project-b-linked-task',
+          project: { projectId: 'project-2', projectName: 'project-b' },
+          sessionId: 'session-2',
+          sessionLink: { projectId: 'project-2', sessionId: 'session-2' },
+        }),
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/projects/project-2/overview') {
+        return Promise.resolve(jsonResponse(projectTwoOverviewFixture()));
+      }
+      if (requestUrl.pathname === '/api/projects/project-2/sessions') {
+        return Promise.resolve(jsonResponse({ sessions: [projectTwoSessionFixture()] }));
+      }
+      return defaultApi(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Background Sessions' });
+    await user.click(screen.getByText('project-b-linked-task'));
+    expect(await screen.findByRole('dialog', { name: /project-b-linked-task details/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Open session transcript' }));
+
+    await waitFor(() => expect(wasFetched(fetchMock, '/api/projects/project-2/overview')).toBe(true));
+    await waitFor(() => expect(wasFetched(fetchMock, '/api/projects/project-2/sessions')).toBe(true));
+    await waitFor(() => expect(window.location.pathname).toBe('/sessions'));
+    expect(await screen.findByText('Project B stale session')).toBeInTheDocument();
+  });
+
+  test('clears project-scoped diagnostics when opening a cross-project background transcript', async () => {
+    window.history.pushState(null, '', '/plans-tasks');
+    const user = userEvent.setup();
+    const staleDiagnostic = {
+      level: 'error',
+      message: 'Stale plan diagnostic from project A',
+      path: '/tmp/.openclaude/tasks/session-1/stale.json',
+    };
+    const projectTwo = projectFixture({
+      id: 'project-2',
+      name: 'project-b',
+      path: '/tmp/project-b',
+      active: false,
+      branch: 'feature',
+    });
+    const defaultApi = mockApi({
+      projects: [projectFixture(), projectTwo],
+      tasksResponse: {
+        ...tasksFixture(),
+        diagnostics: [staleDiagnostic],
+      },
+      backgroundSessions: [
+        backgroundSessionFixture({
+          id: 'bg-linked-project-2',
+          shortId: 'bg-proj2',
+          name: 'project-b-linked-task',
+          project: { projectId: 'project-2', projectName: 'project-b' },
+          sessionId: 'session-2',
+          sessionLink: { projectId: 'project-2', sessionId: 'session-2' },
+        }),
+      ],
+      backgroundStatusCounts: {
+        running: 1,
+        unknown: 0,
+        exited: 0,
+        failed: 0,
+        stale: 0,
+        killed: 0,
+      },
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input), 'http://127.0.0.1:43110');
+      if (requestUrl.pathname === '/api/projects/project-2/overview') {
+        return Promise.resolve(jsonResponse(projectTwoOverviewFixture()));
+      }
+      if (requestUrl.pathname === '/api/projects/project-2/sessions') {
+        return Promise.resolve(jsonResponse({ sessions: [projectTwoSessionFixture()] }));
+      }
+      return defaultApi(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByText('1 diagnostic while reading plans and tasks')).toBeInTheDocument();
+    await user.click(screen.getAllByRole('link', { name: /^Background$/i })[0]!);
+    await screen.findByRole('heading', { name: 'Background Sessions' });
+    await user.click(screen.getByText('project-b-linked-task'));
+    await user.click(await screen.findByRole('button', { name: 'Open session transcript' }));
+    await waitFor(() => expect(window.location.pathname).toBe('/sessions'));
+
+    await user.click(screen.getAllByRole('link', { name: /Diagnostics/i })[0]!);
+    expect(await screen.findByRole('heading', { name: 'Diagnostics' })).toBeInTheDocument();
+    expect(screen.queryByText('Stale plan diagnostic from project A')).not.toBeInTheDocument();
+  });
 });
 
 function storageStub(kind: 'local' | 'session'): Storage {
@@ -1761,6 +2399,13 @@ function storageStub(kind: 'local' | 'session'): Storage {
 
 type MockApiOptions = {
   baseUrl?: string;
+  backgroundSessions?: unknown[];
+  backgroundStatusCounts?: unknown;
+  backgroundDiagnostics?: unknown[];
+  backgroundLogEntries?: unknown[];
+  backgroundLogsResponse?: unknown;
+  backgroundLogsStatus?: number;
+  backgroundSessionsStatus?: number;
   failPlanDetails?: boolean;
   failPlansListOnce?: boolean;
   failTaskDetails?: boolean;
@@ -2004,8 +2649,76 @@ function mockApi(options: MockApiOptions = {}) {
       });
     }
 
+    if (path === '/api/background-sessions') {
+      if (options.backgroundSessionsStatus) {
+        return jsonResponse({ error: 'Not found' }, options.backgroundSessionsStatus);
+      }
+      return jsonResponse({
+        sessions: options.backgroundSessions ?? [],
+        statusCounts: options.backgroundStatusCounts ?? {
+          running: 0,
+          unknown: 0,
+          exited: 0,
+          failed: 0,
+          stale: 0,
+          killed: 0,
+        },
+        diagnostics: options.backgroundDiagnostics ?? [],
+      });
+    }
+
+    if (path.startsWith('/api/background-sessions/') && path.endsWith('/logs')) {
+      const sessionId = path.split('/')[3] ?? 'bg-1';
+      if (options.backgroundLogsStatus !== undefined) {
+        return jsonResponse({ error: `Injected background logs ${options.backgroundLogsStatus}` }, options.backgroundLogsStatus);
+      }
+      const requestedCount = Number(requestUrl.searchParams.get('count') ?? 100);
+      const shouldTail = requestUrl.searchParams.get('tail') === 'true';
+      const totalLines = options.backgroundLogEntries?.length ?? 0;
+      const start = shouldTail
+        ? Math.max(0, totalLines - requestedCount)
+        : Number(requestUrl.searchParams.get('start') ?? 0);
+      return jsonResponse(
+        options.backgroundLogsResponse ?? {
+          sessionId,
+          stream: requestUrl.searchParams.get('stream') === 'stderr' ? 'stderr' : 'stdout',
+          entries: options.backgroundLogEntries ?? [],
+          start,
+          count: requestedCount,
+          totalLines,
+          truncated: false,
+          diagnostics: [],
+        },
+      );
+    }
+
     return jsonResponse({ error: 'Not found' }, 404);
   });
+}
+
+function backgroundSessionFixture(overrides: Partial<BackgroundSessionSummary> = {}): BackgroundSessionSummary {
+  return {
+    id: 'bg-1',
+    shortId: 'bg-1',
+    name: 'background-task',
+    pid: 1,
+    cwd: '/tmp/project-a',
+    recordedStatus: 'running',
+    terminal: false,
+    processPresence: 'unknown',
+    provider: 'anthropic',
+    model: 'claude-sonnet-4',
+    sessionId: null,
+    startedAt: '2026-06-01T10:00:00.000Z',
+    updatedAt: '2026-06-01T10:05:00.000Z',
+    durationMs: 300000,
+    commandSummary: { binary: 'openclaude', flagCount: 1, truncated: false },
+    project: null,
+    sessionLink: null,
+    stdoutLogAvailable: true,
+    stderrLogAvailable: false,
+    ...overrides,
+  };
 }
 
 function projectFixture(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
