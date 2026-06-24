@@ -1646,6 +1646,7 @@ describe('App', () => {
         },
         steps: [
           null,
+          { type: 'unknown-future-type', stepNumber: 99 },
           {
             type: 'tool',
             stepNumber: 1,

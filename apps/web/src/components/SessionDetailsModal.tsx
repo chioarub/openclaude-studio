@@ -3170,12 +3170,15 @@ function normalizeReplayResponse(
   };
 }
 
+const REPLAY_STEP_TYPES = new Set(['tool', 'user', 'retry', 'error']);
+
 function isSessionReplayStep(value: unknown): value is SessionReplayStep {
+  if (typeof value !== 'object' || value === null) return false;
+  const step = value as { type?: unknown; stepNumber?: unknown };
   return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as { type?: unknown }).type === 'string' &&
-    typeof (value as { stepNumber?: unknown }).stepNumber === 'number'
+    typeof step.type === 'string' &&
+    REPLAY_STEP_TYPES.has(step.type) &&
+    typeof step.stepNumber === 'number'
   );
 }
 
