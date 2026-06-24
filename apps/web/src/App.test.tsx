@@ -1635,14 +1635,35 @@ describe('App', () => {
         sessionId: 'session-1',
         version: 1,
         createdAt: null,
-        // summary missing toolBreakdown and filesModified; steps missing
+        // summary missing toolBreakdown; filesModified contains non-string; steps has null element
         summary: {
           totalSteps: 1,
           durationMs: 100,
           startTimestamp: '2026-06-01T00:00:00.000Z',
           endTimestamp: '2026-06-01T00:00:00.100Z',
           userRequests: 1,
+          filesModified: [42, 'valid.ts', null],
         },
+        steps: [
+          null,
+          {
+            type: 'tool',
+            stepNumber: 1,
+            toolName: 'Read',
+            toolUseId: 'tool-1',
+            inputSummary: 'Read file',
+            inputSummaryTruncated: false,
+            resultStatus: 'success',
+            resultPreview: null,
+            resultPreviewTruncated: false,
+            durationMs: 10,
+            timestamp: '2026-06-01T00:00:00.000Z',
+            filesModified: [],
+            filesModifiedTruncated: false,
+            repeatedAttemptNumber: null,
+            isRepeatedAttempt: false,
+          },
+        ],
       },
     }));
     const user = userEvent.setup();

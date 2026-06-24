@@ -3155,7 +3155,9 @@ function normalizeReplayResponse(
               e != null && typeof e.tool === 'string' && typeof e.count === 'number',
           )
         : [],
-      filesModified: Array.isArray(summary.filesModified) ? summary.filesModified : [],
+      filesModified: Array.isArray(summary.filesModified)
+        ? summary.filesModified.filter((file): file is string => typeof file === 'string')
+        : [],
       filesModifiedTruncated: summary.filesModifiedTruncated ?? false,
       durationMs: typeof summary.durationMs === 'number' ? summary.durationMs : 0,
       startTimestamp: summary.startTimestamp ?? null,
@@ -3164,8 +3166,17 @@ function normalizeReplayResponse(
       retryAttempts: summary.retryAttempts ?? null,
       repeatedAttempts: summary.repeatedAttempts ?? null,
     },
-    steps: Array.isArray(data.steps) ? data.steps : [],
+    steps: Array.isArray(data.steps) ? data.steps.filter(isSessionReplayStep) : [],
   };
+}
+
+function isSessionReplayStep(value: unknown): value is SessionReplayStep {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { type?: unknown }).type === 'string' &&
+    typeof (value as { stepNumber?: unknown }).stepNumber === 'number'
+  );
 }
 
 function formatStepSummary(step: SessionReplayStep): string {
