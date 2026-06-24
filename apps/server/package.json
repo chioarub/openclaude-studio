@@ -1,6 +1,6 @@
 {
   "name": "openclaude-studio",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Read-only local API bridge for the OpenClaude Studio dashboard.",
   "type": "module",
   "license": "MIT",
