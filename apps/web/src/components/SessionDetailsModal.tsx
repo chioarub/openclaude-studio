@@ -30,6 +30,8 @@ import type {
   SessionChangeFileReview,
   SessionChangeReviewResponse,
   SessionDetailsResponse,
+  SessionReplayResponse,
+  SessionReplayStep,
 } from '@openclaude-studio/shared';
 
 import { ApiRequestError, type createApiClient } from '../api.js';
@@ -70,7 +72,7 @@ type PartialSessionDetails = Partial<SessionDetailsResponse['session']> & {
   tokens?: Partial<SessionDetailsResponse['session']['tokens']>;
 };
 type TimelineTool = NonNullable<ConversationTimelineEvent['tool']>;
-type SessionDetailsTab = 'conversation' | 'changes';
+type SessionDetailsTab = 'conversation' | 'changes' | 'replay';
 type SessionDetailsTabIds = Record<SessionDetailsTab, { panelId: string; tabId: string }>;
 type PartialSessionChangeReview = Partial<SessionChangeReviewResponse> & {
   totals?: Partial<SessionChangeReviewResponse['totals']>;
@@ -110,6 +112,9 @@ export function SessionDetailsModal({
   const [changeReviewError, setChangeReviewError] = useState<string | null>(null);
   const [changeReviewLoading, setChangeReviewLoading] = useState(false);
   const [changeReviewReloadKey, setChangeReviewReloadKey] = useState(0);
+  const [replay, setReplay] = useState<SessionReplayResponse | null | undefined>(undefined);
+  const [replayError, setReplayError] = useState<string | null>(null);
+  const [replayLoading, setReplayLoading] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [copied, setCopied] = useState(false);
   const mountedRef = useRef(true);
@@ -123,6 +128,10 @@ export function SessionDetailsModal({
     changes: {
       tabId: `${tabBaseId}-changes-tab`,
       panelId: `${tabBaseId}-changes-panel`,
+    },
+    replay: {
+      tabId: `${tabBaseId}-replay-tab`,
+      panelId: `${tabBaseId}-replay-panel`,
     },
   }), [tabBaseId]);
 
@@ -144,6 +153,9 @@ export function SessionDetailsModal({
       setChangeReview(null);
       setChangeReviewError(null);
       setChangeReviewLoading(false);
+      setReplay(undefined);
+      setReplayError(null);
+      setReplayLoading(false);
       return () => {
         ignore = true;
       };
@@ -155,6 +167,9 @@ export function SessionDetailsModal({
     setChangeReviewError(null);
     setChangeReviewLoading(false);
     setChangeReviewReloadKey(0);
+    setReplay(undefined);
+    setReplayError(null);
+    setReplayLoading(false);
     setShowAll(false);
     api
       .sessionDetails(projectId, sessionId)
@@ -203,6 +218,40 @@ export function SessionDetailsModal({
       ignore = true;
     };
   }, [activeTab, sessionId, projectId, isOpen, api, changeReviewReloadKey]);
+
+  useEffect(() => {
+    let ignore = false;
+    if (!sessionId || !projectId || !isOpen || activeTab !== 'replay') {
+      return () => {
+        ignore = true;
+      };
+    }
+    if (replay !== undefined) {
+      return () => {
+        ignore = true;
+      };
+    }
+    setReplayLoading(true);
+    setReplayError(null);
+    api
+      .sessionReplay(projectId, sessionId)
+      .then((data: SessionReplayResponse | null) => {
+        if (!ignore) setReplay(data);
+      })
+      .catch((err: unknown) => {
+        if (!ignore) {
+          setReplay(null);
+          setReplayError(err instanceof Error ? err.message : 'Unable to load session replay.');
+        }
+      })
+      .finally(() => {
+        if (!ignore) setReplayLoading(false);
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [activeTab, sessionId, projectId, isOpen, api, replay]);
 
   const timeline = useMemo(
     () => (details?.timeline ?? []).filter(isRenderableTimelineEvent),
@@ -523,6 +572,23 @@ export function SessionDetailsModal({
               onRetry={handleRetryChangeReview}
             />
           </div>
+          <div
+            id={tabIds.replay.panelId}
+            role="tabpanel"
+            aria-labelledby={tabIds.replay.tabId}
+            tabIndex={0}
+            hidden={activeTab !== 'replay'}
+            className={cn(
+              'flex-1 min-h-0 overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/15',
+              activeTab === 'replay' ? 'flex' : 'hidden',
+            )}
+          >
+            <SessionReplayPanel
+              replay={replay}
+              loading={replayLoading}
+              error={replayError}
+            />
+          </div>
         </div>
       ) : error ? (
         <div className="h-full min-h-64 flex flex-col items-center justify-center text-error gap-4 p-6">
@@ -804,6 +870,7 @@ function SessionDetailsTabList({
   const tabs: Array<{ id: SessionDetailsTab; label: string; count?: number; icon: ReactNode }> = [
     { id: 'conversation', label: 'Conversation', icon: <MessageSquare className="h-3.5 w-3.5" /> },
     { id: 'changes', label: 'Review Changes', count: changedFileCount, icon: <FileDiff className="h-3.5 w-3.5" /> },
+    { id: 'replay', label: 'Replay', icon: <History className="h-3.5 w-3.5" /> },
   ];
   const focusTab = (tabId: string) => {
     const focus = () => document.getElementById(tabId)?.focus();
@@ -2626,4 +2693,459 @@ function parseTimestamp(value: string | null): number {
   if (!value) return 0;
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+type ReplayStepFilter = 'all' | 'tool' | 'user' | 'retry' | 'error';
+
+function SessionReplayPanel({
+  replay,
+  loading,
+  error,
+}: {
+  replay: SessionReplayResponse | null | undefined;
+  loading: boolean;
+  error: string | null;
+}) {
+  const [stepFilter, setStepFilter] = useState<ReplayStepFilter>('all');
+  const [toolFilter, setToolFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [copiedStep, setCopiedStep] = useState<number | null>(null);
+
+  if (loading) {
+    return (
+      <div className="loading-boundary h-full min-h-64 w-full">
+        <div aria-hidden="true" className="section-loading-placeholder modal-loading-placeholder" />
+        <LoadingOverlay label="Loading session replay" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="h-full min-h-64 flex flex-col items-center justify-center text-error gap-4 p-6">
+        <p className="text-sm font-medium">{error}</p>
+      </div>
+    );
+  }
+
+  if (replay === undefined) {
+    return null;
+  }
+
+  if (replay === null) {
+    return (
+      <div className="h-full min-h-64 flex flex-col items-center justify-center text-muted gap-4 p-6">
+        <History className="w-8 h-8 opacity-40" />
+        <p className="text-sm">Replay is not available on this local server version.</p>
+      </div>
+    );
+  }
+
+  const diagnosticNote = replay.diagnostics?.[0]?.message;
+
+  if (replay.status === 'unavailable') {
+    return (
+      <div className="h-full min-h-64 flex flex-col items-center justify-center text-muted gap-4 p-6">
+        <History className="w-8 h-8 opacity-40" />
+        <p className="text-sm">No replay data available for this session.</p>
+        <p className="text-xs text-muted-soft">
+          Replay sidecars are produced by newer OpenClaude versions.
+        </p>
+      </div>
+    );
+  }
+
+  if (replay.status === 'unsupported_version') {
+    return (
+      <div className="h-full min-h-64 flex flex-col items-center justify-center text-muted gap-4 p-6">
+        <History className="w-8 h-8 opacity-40" />
+        <p className="text-sm">
+          Replay schema version {replay.version ?? 'unknown'} is not supported by this server.
+        </p>
+        <p className="text-xs text-muted-soft">Update the local server to read this replay format.</p>
+      </div>
+    );
+  }
+
+  if (replay.status === 'malformed') {
+    return (
+      <div className="h-full min-h-64 flex flex-col items-center justify-center text-warning gap-4 p-6">
+        <AlertTriangle className="w-8 h-8 opacity-40" />
+        <p className="text-sm">Replay data is malformed and cannot be displayed.</p>
+        {diagnosticNote && <p className="text-xs text-muted-soft">{diagnosticNote}</p>}
+      </div>
+    );
+  }
+
+  if (replay.status === 'conflict') {
+    return (
+      <div className="h-full min-h-64 flex flex-col items-center justify-center text-warning gap-4 p-6">
+        <AlertTriangle className="w-8 h-8 opacity-40" />
+        <p className="text-sm">Multiple conflicting replay files were found.</p>
+        {diagnosticNote && <p className="text-xs text-muted-soft">{diagnosticNote}</p>}
+      </div>
+    );
+  }
+
+  const { summary, steps } = replay;
+
+  const availableTools = [...new Set(
+    steps
+      .filter((s): s is Extract<SessionReplayStep, { type: 'tool' }> => s.type === 'tool')
+      .map((s) => s.toolName),
+  )].sort();
+
+  const filteredSteps = steps.filter((step) => {
+    if (stepFilter !== 'all' && step.type !== stepFilter) return false;
+    if (step.type === 'tool') {
+      if (toolFilter !== 'all' && step.toolName !== toolFilter) return false;
+      if (statusFilter !== 'all' && step.resultStatus !== statusFilter) return false;
+    }
+    return true;
+  });
+
+  const handleCopyStep = async (step: SessionReplayStep) => {
+    const text = formatStepSummary(step);
+    try {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedStep(step.stepNumber);
+      setTimeout(() => setCopiedStep(null), 2000);
+    } catch {
+      // Clipboard not available
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-4 w-full overflow-y-auto p-1">
+      <div className="flex items-center justify-between shrink-0">
+        <h3 className="text-xs font-medium tracking-[0.15em] text-muted-soft uppercase flex items-center gap-2">
+          <History className="w-4 h-4" /> Replay Timeline
+        </h3>
+        <span className="text-[11px] text-muted-soft">
+          Replay is a redacted execution summary.
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 shrink-0">
+        <ReplayMetric label="Steps" value={String(summary.totalSteps)} />
+        <ReplayMetric label="Duration" value={formatDuration(summary.durationMs)} />
+        <ReplayMetric
+          label="User Requests"
+          value={String(summary.userRequests)}
+        />
+        <ReplayMetric
+          label="Retries"
+          value={summary.retryAttempts !== null ? String(summary.retryAttempts) : '—'}
+        />
+        <ReplayMetric
+          label="Repeated"
+          value={summary.repeatedAttempts !== null ? String(summary.repeatedAttempts) : '—'}
+        />
+        <ReplayMetric
+          label="Files Modified"
+          value={String(summary.filesModified.length)}
+        />
+      </div>
+
+      {summary.toolBreakdown.length > 0 && (
+        <div className="flex flex-wrap gap-2 shrink-0">
+          {summary.toolBreakdown.map((entry) => (
+            <span
+              key={entry.tool}
+              className="text-xs px-2 py-1 rounded-full bg-surface-soft border border-hairline-soft text-muted"
+            >
+              {entry.tool}: {entry.count}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-3 shrink-0 border-b border-hairline-soft pb-3">
+        <select
+          className="text-xs bg-surface-soft border border-hairline-soft rounded-md px-2 py-1 text-foreground"
+          value={stepFilter}
+          onChange={(e) => setStepFilter(e.target.value as ReplayStepFilter)}
+          aria-label="Filter by step type"
+        >
+          <option value="all">All types</option>
+          <option value="tool">Tool</option>
+          <option value="user">User</option>
+          <option value="retry">Retry</option>
+          <option value="error">Error</option>
+        </select>
+        {availableTools.length > 0 && (
+          <select
+            className="text-xs bg-surface-soft border border-hairline-soft rounded-md px-2 py-1 text-foreground"
+            value={toolFilter}
+            onChange={(e) => setToolFilter(e.target.value)}
+            aria-label="Filter by tool name"
+          >
+            <option value="all">All tools</option>
+            {availableTools.map((tool) => (
+              <option key={tool} value={tool}>{tool}</option>
+            ))}
+          </select>
+        )}
+        <select
+          className="text-xs bg-surface-soft border border-hairline-soft rounded-md px-2 py-1 text-foreground"
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          aria-label="Filter by result status"
+        >
+          <option value="all">All statuses</option>
+          <option value="success">Success</option>
+          <option value="error">Error</option>
+          <option value="cancelled">Cancelled</option>
+          <option value="permission_denied">Permission denied</option>
+        </select>
+      </div>
+
+      {replay.stepsTruncated && (
+        <p className="text-xs text-warning shrink-0">
+          Timeline truncated — showing the first {steps.length} steps.
+        </p>
+      )}
+
+      {filteredSteps.length === 0 ? (
+        <div className="flex items-center justify-center text-muted text-sm py-8">
+          No steps match the current filters.
+        </div>
+      ) : (
+        <ol className="flex flex-col gap-2">
+          {filteredSteps.map((step) => (
+            <li key={`${step.type}-${step.stepNumber}`}>
+              <ReplayStepCard
+                step={step}
+                copied={copiedStep === step.stepNumber}
+                onCopy={() => handleCopyStep(step)}
+              />
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function ReplayMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-1 p-3 rounded-lg border border-hairline-soft bg-surface-soft">
+      <span className="text-[10px] uppercase tracking-wider text-muted-soft">{label}</span>
+      <span className="text-sm font-medium text-foreground">{value}</span>
+    </div>
+  );
+}
+
+function ReplayStepCard({
+  step,
+  copied,
+  onCopy,
+}: {
+  step: SessionReplayStep;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  const timestamp = step.timestamp ? new Date(parseTimestamp(step.timestamp)) : null;
+
+  return (
+    <div className="flex flex-col gap-2 p-3 rounded-lg border border-hairline-soft bg-surface">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-mono text-muted">#{step.stepNumber}</span>
+          <StepTypeBadge type={step.type} />
+          {step.type === 'tool' && (
+            <>
+              <span className="text-xs font-medium text-foreground">{step.toolName}</span>
+              <ResultStatusBadge status={step.resultStatus} />
+              {step.isRepeatedAttempt && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/20">
+                  Repeat #{step.repeatedAttemptNumber ?? '?'}
+                </span>
+              )}
+            </>
+          )}
+          {step.type === 'retry' && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/20">
+              {step.retryType}
+              {step.attempt !== null && step.maxRetries !== null
+                ? ` ${step.attempt}/${step.maxRetries}`
+                : step.attempt !== null
+                  ? ` ${step.attempt}`
+                  : ''}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {timestamp && (
+            <span className="text-[11px] text-muted-soft">
+              {timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </span>
+          )}
+          {step.type === 'tool' && step.durationMs > 0 && (
+            <span className="text-[11px] text-muted-soft">{formatDuration(step.durationMs)}</span>
+          )}
+          <button
+            type="button"
+            onClick={onCopy}
+            className="text-muted hover:text-foreground transition-colors p-1"
+            aria-label="Copy step summary"
+            title={copied ? 'Copied' : 'Copy step summary'}
+          >
+            {copied ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
+          </button>
+        </div>
+      </div>
+      <StepContent step={step} />
+    </div>
+  );
+}
+
+function StepTypeBadge({ type }: { type: SessionReplayStep['type'] }) {
+  const config: Record<SessionReplayStep['type'], { label: string; className: string }> = {
+    tool: { label: 'Tool', className: 'bg-primary/10 text-primary border-primary/20' },
+    user: { label: 'User', className: 'bg-info/10 text-info border-info/20' },
+    retry: { label: 'Retry', className: 'bg-warning/10 text-warning border-warning/20' },
+    error: { label: 'Error', className: 'bg-error/10 text-error border-error/20' },
+  };
+  const entry = config[type];
+  const label = entry?.label ?? type;
+  const className = entry?.className ?? 'bg-muted/10 text-muted border-muted/20';
+  return (
+    <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full border font-medium', className)}>
+      {label}
+    </span>
+  );
+}
+
+function ResultStatusBadge({ status }: { status: string }) {
+  const config: Record<string, string> = {
+    success: 'bg-success/10 text-success border-success/20',
+    error: 'bg-error/10 text-error border-error/20',
+    cancelled: 'bg-muted/10 text-muted border-muted/20',
+    permission_denied: 'bg-warning/10 text-warning border-warning/20',
+    unknown: 'bg-muted/10 text-muted border-muted/20',
+  };
+  const className = config[status] ?? config.unknown;
+  return (
+    <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full border', className)}>
+      {status.replace('_', ' ')}
+    </span>
+  );
+}
+
+function StepContent({ step }: { step: SessionReplayStep }) {
+  if (step.type === 'tool') {
+    return (
+      <div className="flex flex-col gap-1.5 text-xs">
+        {step.inputSummary && (
+          <p className="text-foreground">
+            {step.inputSummary}
+            {step.inputSummaryTruncated && <span className="text-muted-soft"> (truncated)</span>}
+          </p>
+        )}
+        {step.resultPreview && (
+          <p className="text-muted-soft font-mono text-[11px] bg-code-panel text-code-panel-text px-2 py-1 rounded border border-code-panel-border">
+            {step.resultPreview}
+            {step.resultPreviewTruncated && <span className="opacity-60"> (truncated)</span>}
+          </p>
+        )}
+        {step.filesModified.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {step.filesModified.map((file, index) => (
+              <span
+                key={`${file}-${index}`}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-surface-soft border border-hairline-soft text-muted font-mono"
+              >
+                {file}
+              </span>
+            ))}
+            {step.filesModifiedTruncated && (
+              <span className="text-[10px] text-muted-soft">(more)</span>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (step.type === 'user') {
+    return (
+      <p className="text-xs text-foreground">
+        {step.content}
+        {step.contentTruncated && <span className="text-muted-soft"> (truncated)</span>}
+      </p>
+    );
+  }
+  if (step.type === 'retry') {
+    return (
+      <div className="flex flex-col gap-1.5 text-xs">
+        <p className="text-foreground">
+          {step.reason}
+          {step.reasonTruncated && <span className="text-muted-soft"> (truncated)</span>}
+        </p>
+        {step.retryDelayMs !== null && (
+          <p className="text-muted-soft">Delay: {formatDuration(step.retryDelayMs)}</p>
+        )}
+        {step.commands.length > 0 && (
+          <div className="flex flex-col gap-1">
+            {step.commands.map((cmd, index) => (
+              <span
+                key={`${cmd}-${index}`}
+                className="font-mono text-[11px] bg-code-panel text-code-panel-text px-2 py-1 rounded border border-code-panel-border"
+              >
+                {cmd}
+              </span>
+            ))}
+            {step.commandsTruncated && (
+              <span className="text-[10px] text-muted-soft">(more commands)</span>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+  // error
+  return (
+    <p className="text-xs text-error">
+      {step.error}
+      {step.errorTruncated && <span className="text-muted-soft"> (truncated)</span>}
+    </p>
+  );
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(ms / 60000);
+  const seconds = Math.round((ms % 60000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}
+
+function formatStepSummary(step: SessionReplayStep): string {
+  const parts: string[] = [`[${step.type}] step #${step.stepNumber}`];
+  if (step.type === 'tool') {
+    parts.push(`tool: ${step.toolName}`);
+    if (step.inputSummary) parts.push(`input: ${step.inputSummary}`);
+    parts.push(`result: ${step.resultStatus}`);
+    if (step.resultPreview) parts.push(`preview: ${step.resultPreview}`);
+    if (step.durationMs > 0) parts.push(`duration: ${formatDuration(step.durationMs)}`);
+  } else if (step.type === 'user') {
+    parts.push(`content: ${step.content}`);
+  } else if (step.type === 'retry') {
+    parts.push(`type: ${step.retryType}`);
+    parts.push(`reason: ${step.reason}`);
+    if (step.retryDelayMs !== null) parts.push(`delay: ${formatDuration(step.retryDelayMs)}`);
+  } else if (step.type === 'error') {
+    parts.push(`error: ${step.error}`);
+  }
+  if (step.timestamp) parts.push(`at: ${step.timestamp}`);
+  return parts.join('\n');
 }

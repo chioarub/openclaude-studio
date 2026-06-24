@@ -12,6 +12,7 @@ import type {
   ProjectsResponse,
   SessionChangeReviewResponse,
   SessionDetailsResponse,
+  SessionReplayResponse,
   SessionSummary,
   TaskDetailsResponse,
   TasksResponse,
@@ -68,6 +69,16 @@ export function createApiClient(settings: ConnectionSettings) {
       request<SessionDetailsResponse>(`/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`),
     sessionChanges: (projectId: string, sessionId: string) =>
       request<SessionChangeReviewResponse>(`/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}/changes`),
+    sessionReplay: async (projectId: string, sessionId: string): Promise<SessionReplayResponse | null> => {
+      try {
+        return await request<SessionReplayResponse>(`/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}/replay`);
+      } catch (error) {
+        if (error instanceof ApiRequestError && error.status === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
     logWindow: (input: { fileName?: string; projectId?: string; start?: number; count?: number; tail?: boolean } = {}) =>
       request<LogsWindowResponse>(`/api/logs/window${queryString(input)}`),
     logSearch: (
