@@ -2041,8 +2041,6 @@ function ProviderProfileCard({
 
       <div className="mt-4 flex flex-wrap gap-2">
         <Badge label={providerCredentialLabel(profile.credential)} tone={providerCredentialTone(profile.credential)} />
-        <Badge label={profile.apiKeySet ? 'credential saved' : 'no saved credential'} tone={profile.apiKeySet ? 'success' : 'muted'} />
-        <Badge label={profile.authHeaderValueSet ? 'auth value saved' : 'no auth value'} tone={profile.authHeaderValueSet ? 'success' : 'muted'} />
         {profile.credential.credentialSources.map((source) => (
           <span
             className="rounded-md border border-hairline-soft bg-surface-soft px-2 py-1 text-xs text-muted"

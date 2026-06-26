@@ -502,6 +502,78 @@ describe('Provider profile management data', () => {
     expect(JSON.stringify(result)).not.toContain('Bearer env-header-private');
   });
 
+  test('does not apply inherited OpenAI credentials to no-auth local providers', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [
+          {
+            id: 'ollama-profile',
+            name: 'Ollama',
+            provider: 'ollama',
+            baseUrl: 'http://localhost:11434/v1',
+            model: 'llama3.1:8b',
+          },
+          {
+            id: 'lmstudio-profile',
+            name: 'LM Studio',
+            provider: 'lmstudio',
+            baseUrl: 'http://localhost:1234/v1',
+            model: 'local-model',
+          },
+          {
+            id: 'atomic-profile',
+            name: 'Atomic Chat',
+            provider: 'atomic-chat',
+            baseUrl: 'http://127.0.0.1:1337/v1',
+            model: 'atomic-model',
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const result = await readProviderProfiles(paths, {
+      OPENAI_API_KEY: 'sk-env-local-single',
+      OPENAI_API_KEYS: 'sk-env-local-a,sk-env-local-b',
+      OPENAI_AUTH_HEADER: 'X-Provider-Key',
+      OPENAI_AUTH_HEADER_VALUE: 'Bearer env-local-header',
+    });
+
+    expect(result.profiles.map((profile) => profile.recognizedProvider.id)).toEqual([
+      'ollama',
+      'lmstudio',
+      'atomic-chat',
+    ]);
+    expect(result.profiles.map((profile) => profile.credential)).toEqual([
+      {
+        credentialMode: 'none',
+        credentialCount: 0,
+        credentialConfigured: false,
+        credentialInvalid: false,
+        credentialSources: [],
+      },
+      {
+        credentialMode: 'none',
+        credentialCount: 0,
+        credentialConfigured: false,
+        credentialInvalid: false,
+        credentialSources: [],
+      },
+      {
+        credentialMode: 'none',
+        credentialCount: 0,
+        credentialConfigured: false,
+        credentialInvalid: false,
+        credentialSources: [],
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain('sk-env-local');
+    expect(JSON.stringify(result)).not.toContain('env-local-header');
+  });
+
   test('reports invalid saved credentials without falling back to lower-precedence environment credentials', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
     const paths = createOpenClaudePaths({ home, env: {} });
@@ -866,19 +938,21 @@ describe('Provider profile management data', () => {
       diagnostics: [expect.objectContaining({ level: 'warn', message: 'Symlinked files are not read.' })],
     });
 
-    const unreadableHome = await mkdtemp(join(tmpdir(), 'ocs-providers-unreadable-'));
-    const unreadablePaths = createOpenClaudePaths({ home: unreadableHome, env: {} });
-    await mkdir(unreadablePaths.openClaudeHome, { recursive: true });
-    await writeFile(unreadablePaths.openClaudeConfig, JSON.stringify({ providerProfiles: [] }), 'utf8');
-    const unreadableProfilePath = join(unreadablePaths.openClaudeHome, '.openclaude-profile.json');
-    await writeFile(unreadableProfilePath, JSON.stringify({ profile: 'openai', env: {}, createdAt: '2026-06-24T12:00:00.000Z' }), 'utf8');
-    await chmod(unreadableProfilePath, 0);
-    const unreadable = await readProviderProfiles(unreadablePaths);
-    expect(unreadable.startupProfile).toMatchObject({
-      exists: true,
-      profile: null,
-      diagnostics: [expect.objectContaining({ level: 'warn', message: 'Unable to read startup profile: Permission denied.' })],
-    });
+    if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+      const unreadableHome = await mkdtemp(join(tmpdir(), 'ocs-providers-unreadable-'));
+      const unreadablePaths = createOpenClaudePaths({ home: unreadableHome, env: {} });
+      await mkdir(unreadablePaths.openClaudeHome, { recursive: true });
+      await writeFile(unreadablePaths.openClaudeConfig, JSON.stringify({ providerProfiles: [] }), 'utf8');
+      const unreadableProfilePath = join(unreadablePaths.openClaudeHome, '.openclaude-profile.json');
+      await writeFile(unreadableProfilePath, JSON.stringify({ profile: 'openai', env: {}, createdAt: '2026-06-24T12:00:00.000Z' }), 'utf8');
+      await chmod(unreadableProfilePath, 0);
+      const unreadable = await readProviderProfiles(unreadablePaths);
+      expect(unreadable.startupProfile).toMatchObject({
+        exists: true,
+        profile: null,
+        diagnostics: [expect.objectContaining({ level: 'warn', message: 'Unable to read startup profile: Permission denied.' })],
+      });
+    }
 
     const oversizedHome = await mkdtemp(join(tmpdir(), 'ocs-providers-oversized-'));
     const oversizedPaths = createOpenClaudePaths({ home: oversizedHome, env: {} });

@@ -629,6 +629,8 @@ describe('App', () => {
     expect(within(providerCard!).getByText('static discovery')).toBeInTheDocument();
     expect(within(providerCard!).getByText('credential pool (2)')).toBeInTheDocument();
     expect(within(providerCard!).getByText('saved profile apiKey')).toBeInTheDocument();
+    expect(within(providerCard!).queryByText('credential saved')).not.toBeInTheDocument();
+    expect(within(providerCard!).queryByText('no auth value')).not.toBeInTheDocument();
 
     const startupSection = screen.getByText('Startup Launch Profile').closest('section');
     expect(startupSection).not.toBeNull();
