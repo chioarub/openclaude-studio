@@ -5,33 +5,73 @@ early_access: false
 reviews:
   profile: assertive
   tools:
+    # The repo has no ESLint config or ESLint dependency; `npm run lint` uses
+    # TypeScript checks. Keep ESLint disabled unless a real ESLint setup lands.
     eslint:
       enabled: false
+    github-checks:
+      enabled: true
+      timeout_ms: 900000
+    actionlint:
+      enabled: true
+    zizmor:
+      enabled: true
+    yamllint:
+      enabled: true
+    # Markdown docs in this repo are not authored against markdownlint defaults.
+    # Enable this after adding a repo-specific markdownlint config.
+    markdownlint:
+      enabled: false
+    # No shell scripts are currently tracked; GitHub Actions shell blocks are
+    # covered by actionlint/zizmor.
+    shellcheck:
+      enabled: false
+    gitleaks:
+      enabled: true
+    trufflehog:
+      enabled: true
+    osvScanner:
+      enabled: true
+    oxc:
+      enabled: true
+    reactDoctor:
+      enabled: true
+    # Semgrep gives enough SAST coverage here; avoid duplicate findings from
+    # the compatible OpenGrep ruleset unless a concrete gap appears.
+    opengrep:
+      enabled: false
+    semgrep:
+      enabled: true
   request_changes_workflow: false
   high_level_summary: true
   high_level_summary_in_walkthrough: false
+  high_level_summary_placeholder: "@coderabbitai summary"
   high_level_summary_instructions: |
     Write a concise, professional PR summary for maintainers and contributors.
-    Start with the purpose and user-visible or operational impact.
-    Call out compatibility, privacy, security, release, deployment, and migration implications when relevant.
-    Mention validation evidence only when it is present in the PR description or checks; do not invent test results.
-    Keep the summary concrete, public-repository appropriate, and short enough to scan quickly.
+
+    Use this structure:
+    1. **Purpose / impact**: Explain what the PR changes and why it matters.
+    2. **Main changes**: Summarize the concrete implementation changes.
+    3. **Risk / compatibility**: Call out API compatibility, local-data safety, privacy, security, release, deployment, and migration implications when relevant.
+    4. **Validation**: Mention tests, checks, or manual validation only when present in the PR description, commits, or CI output. Do not invent validation.
+
+    Keep it public-repository appropriate, specific, and short enough to scan quickly.
   changed_files_summary: true
   review_status: true
   review_details: false
-  commit_status: false
+  commit_status: true
   fail_commit_status: false
   collapse_walkthrough: true
   sequence_diagrams: true
   estimate_code_review_effort: true
   in_progress_fortune: false
   poem: false
-  enable_prompt_for_ai_agents: false
+  enable_prompt_for_ai_agents: true
 
   auto_review:
     enabled: true
     auto_incremental_review: true
-    auto_pause_after_reviewed_commits: 5
+    auto_pause_after_reviewed_commits: 0
     drafts: false
     ignore_title_keywords:
       - WIP
@@ -45,7 +85,6 @@ reviews:
     - "!**/playwright-report/**"
     - "!**/test-results/**"
     - "!**/*.tgz"
-    - "!package-lock.json"
 
   finishing_touches:
     docstrings:
@@ -58,26 +97,41 @@ reviews:
   path_instructions:
     - path: "apps/web/src/**"
       instructions: |
-        Review React and TypeScript changes for runtime safety against partial or older local API responses. Flag assumptions that optional arrays, nested objects, or newly added response fields always exist unless the code normalizes them or tests legacy payloads. Also check accessibility, loading and error states, light and dark theme behavior, and route-specific rendering.
+        Review React and TypeScript changes for runtime safety against partial, missing, or older local API responses. Flag assumptions that optional arrays, nested objects, or newly added response fields always exist unless the code normalizes them or tests legacy payloads. Check loading, error, degraded, and empty states; accessibility, keyboard navigation, and focus management; light and dark theme behavior; route-specific rendering; and stale closure or state update issues.
     - path: "apps/server/src/**"
       instructions: |
-        Review the local API server for backward-compatible contracts, safe filesystem access, symlink and path traversal resistance, CORS/private-network behavior, log redaction, and accidental exposure of secrets or local-only paths.
+        Review the local API server for backward-compatible contracts, bounded and scoped filesystem access, symlink and path traversal resistance, CORS/private-network behavior, loopback defaults, token handling, log redaction, and accidental exposure of secrets or local-only paths.
     - path: "packages/shared/src/**"
       instructions: |
-        Review shared API type changes as cross-package contracts. Flag breaking response-shape changes unless they include the server implementation, frontend compatibility handling, tests, and documentation or changelog updates.
+        Review shared API type changes as cross-package contracts. Flag renamed or removed fields, unsafe enum changes, and optionality changes that can break older server/frontend combinations unless they include the server implementation, frontend compatibility handling, tests, and documentation or changelog updates.
     - path: ".github/workflows/**"
       instructions: |
         Review workflow changes for tag/version safety, npm trusted publishing, Cloudflare Pages deployment behavior, least-privilege permissions, concurrency, and artifact handling. Flag release changes that are not idempotent.
+    - path: "scripts/**"
+      instructions: |
+        Review repository scripts for clean-checkout behavior, release/package safety, idempotency, temporary file cleanup, cross-platform Node.js compatibility, and avoiding committed generated artifacts or local-machine assumptions.
     - path: "**/*.md"
       instructions: |
-        Review public-facing documentation for accurate setup, release, deployment, and usage instructions. Flag stale commands, stale versions, private notes, local machine paths, personal data, or wording that should not appear in a public repository.
+        Review public-facing documentation for accurate setup, release, deployment, and usage instructions. Flag stale commands, stale versions, private workflow notes, local machine paths, personal data, secrets, unpublished process notes, AI-agent scratchpad wording, or wording that should not appear in a public repository.
     - path: "**/package.json"
       instructions: |
         Review package metadata, scripts, dependency changes, and workspace configuration for public npm readiness. Flag package/version mismatches, unsafe publish settings, dependency changes without validation, and scripts that do not work from a clean checkout.
+    - path: "package-lock.json"
+      instructions: |
+        Review only for dependency consistency, package/version drift, unexpected dependency tree changes, lockfile integrity, and release readiness. Avoid noisy comments about normal lockfile churn.
+    - path: "**/*.test.ts"
+      instructions: |
+        Review tests for meaningful coverage beyond happy paths. Check legacy payloads, missing optional fields, error states, edge cases, and regression coverage for the behavior changed by the PR.
+    - path: "**/*.test.tsx"
+      instructions: |
+        Review tests for meaningful coverage beyond happy paths. Check legacy payloads, missing optional fields, loading/error/empty UI states, accessibility-relevant behavior, and regression coverage for the behavior changed by the PR.
+    - path: "tests/e2e/**"
+      instructions: |
+        Review Playwright coverage for realistic user flows, stable role/label selectors, visible assertions with `expect`, proper async waiting, test isolation, and avoidance of arbitrary timeouts or fixture state that can leak between tests.
 
   pre_merge_checks:
     docstrings:
-      mode: off
+      mode: "off"
     title:
       mode: warning
       requirements: "Use a concise, professional title that describes the user-visible or operational change."
@@ -106,3 +160,28 @@ reviews:
         mode: warning
         instructions: |
           Pass if committed files are suitable for a public repository. Fail on private workflow names, local machine paths, personal data, secret values, unpublished process notes, or non-public implementation wording.
+      - name: Diff discipline
+        mode: warning
+        instructions: |
+          Pass if the PR is focused and the diff matches the stated purpose.
+
+          Fail if it includes unrelated refactors, broad formatting churn, generated artifacts, hidden agent state, tool scratch files, or opportunistic rewrites that are not required for the PR.
+
+chat:
+  art: false
+  auto_reply: true
+  allow_non_org_members: true
+
+knowledge_base:
+  opt_out: false
+  web_search:
+    enabled: true
+  code_guidelines:
+    enabled: true
+  learnings:
+    scope: local
+    approval_delay: 1
+  issues:
+    scope: local
+  pull_requests:
+    scope: local

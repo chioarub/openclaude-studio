@@ -112,6 +112,22 @@ npm pack --dry-run -w openclaude-studio
 npm run smoke:package
 ```
 
+Local CodeRabbit CLI review, when installed and authenticated, can be used for pre-PR feedback:
+
+```bash
+cr auth status
+cr review --agent --type uncommitted --base main --config .coderabbit.yaml
+cr review --agent --type committed --base main --config .coderabbit.yaml
+```
+
+If the installed binary is named `coderabbit`, use:
+
+```bash
+coderabbit review --agent --type uncommitted --base main --config .coderabbit.yaml
+```
+
+Treat local CLI review as pre-PR feedback. Pull request review has repository and PR collaboration context that local review does not.
+
 ## Validation expectations
 
 Run the smallest useful checks while iterating, then run the broader checks needed for the final change.

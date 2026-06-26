@@ -1,11 +1,16 @@
 ## Summary
 
+@coderabbitai summary
+
 ## Why
 
 ## Screenshots / recordings
 
 ## Validation
 
+- [ ] Tests added/updated where needed
+- [ ] Relevant automated checks run
+- [ ] Manual validation described, if applicable
 - [ ] `npm run lint`
 - [ ] `npm test`
 - [ ] `npm run build`
