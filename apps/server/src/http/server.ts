@@ -139,7 +139,7 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
 
   app.get('/api/provider/active', async () => readActiveProvider(paths));
 
-  app.get('/api/provider/profiles', async () => readProviderProfiles(paths));
+  app.get('/api/provider/profiles', async () => readProviderProfiles(paths, env));
 
   app.get<{ Params: ProjectParams }>('/api/projects/:projectId/sessions', async (request) => {
     const project = await resolveProject(paths, request.params.projectId);

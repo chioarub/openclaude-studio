@@ -209,7 +209,8 @@ test('loads project overview, sessions, provider, and logs', async ({ page }) =>
   await page.getByRole('link', { name: /^Providers$/ }).click();
   await expect(page.getByText('Provider Profiles', { exact: true })).toBeVisible();
   await expect(page.getByText('Safe Templates')).toHaveCount(0);
-  await expect(page.getByText('credential saved')).toBeVisible();
+  const providerCard = page.locator('article').filter({ hasText: 'Anthropic' });
+  await expect(providerCard.getByText('credential configured')).toBeVisible();
   await expect(page.getByRole('textbox', { name: /openclaude command for anthropic/i })).toHaveValue(
     'openclaude --provider anthropic --model claude-sonnet',
   );

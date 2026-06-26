@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import type { BackgroundSessionSummary, ProjectSummary } from '@openclaude-studio/shared';
+import type { BackgroundSessionSummary, ProjectSummary, ProviderProfilesResponse } from '@openclaude-studio/shared';
 
-import App from './App';
+import App, { normalizeProviderProfilesResponse } from './App';
 
 const serverUrlStorageKey = 'openclaude-studio:server-url';
 const legacyConnectionStorageKey = 'openclaude-studio.connection';
@@ -555,6 +555,93 @@ describe('App', () => {
     );
   });
 
+  test('renders recognized provider metadata, credential pools, and startup launch profile separately', async () => {
+    const providerProfiles = providerProfilesFixture();
+    providerProfiles.profiles[0] = {
+      ...providerProfiles.profiles[0]!,
+      baseUrl: 'https://api.fireworks.ai/inference/v1',
+      recognizedProvider: {
+        id: 'fireworks',
+        label: 'Fireworks AI',
+        category: 'hosted',
+        defaultBaseUrl: 'https://api.fireworks.ai/inference/v1',
+        authKind: 'api-key',
+        credentialEnvVars: ['FIREWORKS_API_KEY', 'OPENAI_API_KEYS', 'OPENAI_API_KEY', 'OPENAI_AUTH_HEADER_VALUE'],
+        transport: 'openai-compatible',
+        discoveryMode: 'static',
+        safeTemplateAvailable: false,
+        inspectionOnly: false,
+      },
+      credential: {
+        credentialMode: 'pool',
+        credentialCount: 2,
+        credentialConfigured: true,
+        credentialInvalid: false,
+        credentialSources: ['saved profile apiKey'],
+      },
+    };
+    providerProfiles.startupProfile = {
+      path: '/tmp/.openclaude/.openclaude-profile.json',
+      exists: true,
+      profile: 'openai',
+      createdAt: '2026-06-24T12:00:00.000Z',
+      configuredNonSecretFields: ['OPENAI_BASE_URL', 'OPENAI_MODEL'],
+      credentials: [
+        { name: 'OPENAI_API_KEYS', configured: true },
+        { name: 'OPENAI_AUTH_HEADER_VALUE', configured: true },
+      ],
+      credential: {
+        credentialMode: 'pool',
+        credentialCount: 2,
+        credentialConfigured: true,
+        credentialInvalid: false,
+        credentialSources: ['startup profile env: OPENAI_API_KEYS'],
+      },
+      recognizedProvider: {
+        id: 'openai',
+        label: 'OpenAI',
+        category: 'hosted',
+        defaultBaseUrl: 'https://api.openai.com/v1',
+        authKind: 'api-key',
+        credentialEnvVars: ['OPENAI_API_KEYS', 'OPENAI_API_KEY', 'OPENAI_AUTH_HEADER_VALUE'],
+        transport: 'openai-compatible',
+        discoveryMode: 'static',
+        safeTemplateAvailable: true,
+        inspectionOnly: false,
+      },
+      diagnostics: [],
+      rawEnv: {
+        OPENAI_API_KEY: 'sk-startup-private-canary',
+      },
+    } as typeof providerProfiles.startupProfile & { rawEnv: { OPENAI_API_KEY: string } };
+    vi.stubGlobal('fetch', mockApi({ providerProfilesResponse: providerProfiles }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
+
+    const providerCard = (await screen.findByText('OpenAI Team')).closest('article');
+    expect(providerCard).not.toBeNull();
+    expect(within(providerCard!).getByText('Fireworks AI')).toBeInTheDocument();
+    expect(within(providerCard!).getByText('hosted / openai-compatible')).toBeInTheDocument();
+    expect(within(providerCard!).getByText('static discovery')).toBeInTheDocument();
+    expect(within(providerCard!).getByText('credential pool (2)')).toBeInTheDocument();
+    expect(within(providerCard!).getByText('saved profile apiKey')).toBeInTheDocument();
+    expect(within(providerCard!).queryByText('credential saved')).not.toBeInTheDocument();
+    expect(within(providerCard!).queryByText('no auth value')).not.toBeInTheDocument();
+
+    const startupSection = screen.getByText('Startup Launch Profile').closest('section');
+    expect(startupSection).not.toBeNull();
+    expect(within(startupSection!).getByText('OpenAI')).toBeInTheDocument();
+    expect(within(startupSection!).getByText('OPENAI_BASE_URL')).toBeInTheDocument();
+    expect(within(startupSection!).getByText('OPENAI_MODEL')).toBeInTheDocument();
+    expect(within(startupSection!).getByText('OPENAI_API_KEYS configured')).toBeInTheDocument();
+    expect(within(startupSection!).getByText('OPENAI_AUTH_HEADER_VALUE configured')).toBeInTheDocument();
+    expect(startupSection!.textContent).not.toContain('sk-startup-private-canary');
+  });
+
   test('shows an accessible provider profile loading indicator while provider profiles are pending', async () => {
     const slowProfiles = deferred<Response>();
     const fetchMock = mockApi({ providerProfilesPromiseOnce: slowProfiles.promise });
@@ -688,6 +775,93 @@ describe('App', () => {
     expect(screen.getByText('No provider profiles configured')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /add provider profile/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Provider profile management requires a newer local server')).not.toBeInTheDocument();
+    expect(screen.queryByText('Startup Launch Profile')).not.toBeInTheDocument();
+  });
+
+  test('normalizes older provider profiles missing recognition and credential fields', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      providerProfilesResponse: {
+        path: '/tmp/.openclaude.json',
+        exists: true,
+        activeProviderProfileId: 'legacy',
+        sensitiveFieldsRedacted: true,
+        profiles: [
+          {
+            id: 'legacy',
+            name: 'Legacy Provider',
+            provider: 'future-provider',
+            model: 'future-model',
+            baseUrl: 'https://future.example/v1',
+            active: true,
+            apiKeySet: false,
+            authHeaderValueSet: false,
+            apiFormat: null,
+            authHeader: null,
+            authScheme: null,
+            customHeaders: [],
+            templateId: 'custom-openai',
+            templateLabel: 'Custom OpenAI-compatible',
+            validation: { status: 'valid', issues: [] },
+          },
+          {
+            id: 'legacy-saved',
+            name: 'Legacy Saved Provider',
+            provider: 'openai',
+            model: 'gpt-example',
+            baseUrl: 'https://api.openai.com/v1',
+            active: false,
+            apiKeySet: true,
+            authHeaderValueSet: false,
+            apiFormat: null,
+            authHeader: null,
+            authScheme: null,
+            customHeaders: [],
+            templateId: 'openai',
+            templateLabel: 'OpenAI',
+            validation: { status: 'valid', issues: [] },
+          },
+        ],
+        templates: [],
+        summary: { total: 2, active: 1, valid: 2, warnings: 0, errors: 0, templates: 0 },
+        diagnostics: [],
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
+
+    const providerCard = (await screen.findByText('Legacy Provider')).closest('article');
+    expect(providerCard).not.toBeNull();
+    expect(within(providerCard!).getByText('Custom OpenAI-compatible')).toBeInTheDocument();
+    expect(within(providerCard!).getByText('credential state unavailable')).toBeInTheDocument();
+
+    const savedProviderCard = (await screen.findByText('Legacy Saved Provider')).closest('article');
+    expect(savedProviderCard).not.toBeNull();
+    expect(within(savedProviderCard!).getByText('credential configured')).toBeInTheDocument();
+  });
+
+  test('normalizes missing startup profile summary as unconfigured without a profile name', () => {
+    const response = normalizeProviderProfilesResponse({
+      path: '/tmp/.openclaude.json',
+      exists: true,
+      activeProviderProfileId: null,
+      sensitiveFieldsRedacted: true,
+      profiles: [],
+      templates: [],
+      startupProfile: {
+        path: '/tmp/.openclaude/.openclaude-profile.json',
+        exists: true,
+        profile: null,
+        diagnostics: [],
+      },
+      summary: { total: 0, active: 0, valid: 0, warnings: 0, errors: 0, recognized: 0, templates: 0 },
+      diagnostics: [],
+    });
+
+    expect(response.summary.startupProfileConfigured).toBe(false);
   });
 
   test('renders non-object provider profile payloads without crashing', async () => {
@@ -787,6 +961,38 @@ describe('App', () => {
     expect(within(dialog).getByLabelText(/generated openclaude command/i)).toHaveValue(
       'OPENAI_BASE_URL=https://future.example/v1 openclaude --provider openai --model future-model',
     );
+  });
+
+  test('preserves unknown future recognized providers from newer local servers', async () => {
+    const providerProfiles = providerProfilesFixture();
+    providerProfiles.profiles[0] = {
+      ...providerProfiles.profiles[0]!,
+      recognizedProvider: {
+        id: 'future-provider',
+        label: 'Future Provider',
+        category: 'hosted',
+        defaultBaseUrl: 'https://future.example/v1',
+        authKind: 'api-key',
+        credentialEnvVars: ['FUTURE_API_KEY'],
+        transport: 'openai-compatible',
+        discoveryMode: 'dynamic',
+        safeTemplateAvailable: false,
+        inspectionOnly: true,
+      },
+    };
+    vi.stubGlobal('fetch', mockApi({ providerProfilesResponse: providerProfiles }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Providers$/i })[0]!);
+
+    const providerCard = (await screen.findByText('OpenAI Team')).closest('article');
+    expect(providerCard).not.toBeNull();
+    expect(within(providerCard!).getByText('Future Provider')).toBeInTheDocument();
+    expect(within(providerCard!).getByText('inspection only')).toBeInTheDocument();
+    expect(within(providerCard!).getByText('dynamic discovery')).toBeInTheDocument();
   });
 
   test('keeps the add provider dialog open when Escape closes the template selector', async () => {
@@ -3218,7 +3424,7 @@ function tokenOnlyUsageSeriesFixture() {
   return usageSeriesFixture().map((point) => ({ ...point, costUsd: 0 }));
 }
 
-function providerProfilesFixture() {
+function providerProfilesFixture(): ProviderProfilesResponse {
   return {
     path: '/tmp/.openclaude.json',
     exists: true,
@@ -3230,9 +3436,39 @@ function providerProfilesFixture() {
       valid: 1,
       warnings: 1,
       errors: 0,
+      recognized: 2,
+      startupProfileConfigured: false,
       templates: 3,
     },
     diagnostics: [],
+    startupProfile: {
+      path: '/tmp/.openclaude/.openclaude-profile.json',
+      exists: false,
+      profile: null,
+      createdAt: null,
+      configuredNonSecretFields: [],
+      credentials: [],
+      credential: {
+        credentialMode: 'none',
+        credentialCount: 0,
+        credentialConfigured: false,
+        credentialInvalid: false,
+        credentialSources: [],
+      },
+      recognizedProvider: {
+        id: 'custom',
+        label: 'Custom OpenAI-compatible',
+        category: 'custom',
+        defaultBaseUrl: null,
+        authKind: 'unknown',
+        credentialEnvVars: [],
+        transport: 'openai-compatible',
+        discoveryMode: 'unknown',
+        safeTemplateAvailable: false,
+        inspectionOnly: false,
+      },
+      diagnostics: [],
+    },
     profiles: [
       {
         id: 'provider-1',
@@ -3247,6 +3483,25 @@ function providerProfilesFixture() {
         authHeader: null,
         authScheme: null,
         customHeaders: [],
+        recognizedProvider: {
+          id: 'openai',
+          label: 'OpenAI',
+          category: 'hosted',
+          defaultBaseUrl: 'https://api.openai.com/v1',
+          authKind: 'api-key',
+          credentialEnvVars: ['OPENAI_API_KEYS', 'OPENAI_API_KEY'],
+          transport: 'openai-compatible',
+          discoveryMode: 'static',
+          safeTemplateAvailable: true,
+          inspectionOnly: false,
+        },
+        credential: {
+          credentialMode: 'single',
+          credentialCount: 1,
+          credentialConfigured: true,
+          credentialInvalid: false,
+          credentialSources: ['saved profile apiKey'],
+        },
         templateId: 'openai',
         templateLabel: 'OpenAI GPT',
         validation: { status: 'valid', issues: [] },
@@ -3264,6 +3519,25 @@ function providerProfilesFixture() {
         authHeader: null,
         authScheme: null,
         customHeaders: [{ name: 'X-Workspace', valueSet: true, sensitive: false }],
+        recognizedProvider: {
+          id: 'ollama',
+          label: 'Ollama',
+          category: 'local',
+          defaultBaseUrl: 'http://127.0.0.1:11434/v1',
+          authKind: 'none',
+          credentialEnvVars: [],
+          transport: 'local',
+          discoveryMode: 'local',
+          safeTemplateAvailable: true,
+          inspectionOnly: false,
+        },
+        credential: {
+          credentialMode: 'none',
+          credentialCount: 0,
+          credentialConfigured: false,
+          credentialInvalid: false,
+          credentialSources: [],
+        },
         templateId: 'custom-openai',
         templateLabel: 'Custom OpenAI-compatible',
         validation: {

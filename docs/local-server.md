@@ -20,7 +20,7 @@ Startup output includes the local API URL, hosted dashboard URL, read-only mode,
 
 Opening `http://127.0.0.1:43110/` in a browser shows a small read-only landing page with dashboard and health-check links. It does not read local OpenClaude data.
 
-Provider profile endpoints are read-only. They expose redacted profile summaries, validation diagnostics, and safe copyable templates, but they do not create, update, delete, activate, or test provider profiles.
+Provider profile endpoints are read-only. They expose redacted profile summaries, provider recognition, credential-state metadata, validation diagnostics, startup launch profile diagnostics, and safe copyable templates, but they do not create, update, delete, activate, test provider profiles, or call provider APIs.
 
 ## CLI Options
 
@@ -68,6 +68,38 @@ OPENCLAUDE_STUDIO_ALLOWED_ORIGINS=https://studio.example.com npx openclaude-stud
 ## Safety Notes
 
 Keep the server bound to loopback unless you have a trusted network and an explicit access-control model. The server reads local OpenClaude files and should not be exposed to public networks.
+
+## Provider Inspection
+
+The local server exposes read-only provider inspection through:
+
+- `GET /api/provider/active` — returns the active provider summary used by the overview.
+- `GET /api/provider/profiles` — returns saved provider profile summaries, startup launch profile summary, diagnostics, and curated safe templates.
+
+Read scope is limited to the resolved OpenClaude configuration root already used by Studio, plus the startup profile file when present. Studio checks modern global config files first; `.claude.json` is only a legacy fallback under `OPENCLAUDE_CONFIG_DIR` when the modern files are missing.
+
+```text
+<resolved OpenClaude config root>/.config.json
+<resolved OpenClaude config root>/.openclaude.json
+<resolved OpenClaude config root>/.claude.json
+<resolved OpenClaude config root>/.openclaude-profile.json
+```
+
+The startup profile reader parses only documented `profile`, `env`, and `createdAt` fields from `.openclaude-profile.json`. Known credential fields are summarized as value-free booleans/counts, known-safe non-secret field names may be listed, and unknown `env` names are omitted. Unknown non-empty profile names degrade to custom recognition. The read is bounded and symlink-safe. Missing, malformed, oversized, or symlinked startup profile files are reported as typed diagnostics.
+
+Provider recognition is best effort and derived from OpenClaude route identifiers and controlled host matches. Studio does not copy dynamic model catalogs or make network calls to discover or validate models. Unknown future providers degrade to a custom OpenAI-compatible classification.
+
+The provider registry is intentionally static and reviewed, so Studio can classify known routes without importing OpenClaude at runtime.
+
+Credential diagnostics are intentionally value-free. The API can report:
+
+- `credentialMode`: `none`, `single`, `pool`, or `unknown`
+- `credentialCount`: parsed non-empty credential count, or `null` when unknown
+- `credentialConfigured`: boolean
+- `credentialInvalid`: boolean for documented placeholder or malformed persisted values
+- `credentialSources`: labels such as saved profile fields, inherited Studio server environment, or startup profile env keys
+
+Credential values, masked values, hashes, prefixes, lengths, and pool order are never returned. Studio does not read arbitrary `.env` files, shell history, Codex auth files, keychains, browser storage, or provider-specific credential stores. Environment-based diagnostics describe only the environment inherited by the Studio server process and may differ from another running OpenClaude process.
 
 ## Background Sessions
 
