@@ -45,6 +45,24 @@ CodeRabbit runs on pull requests and uses the repository configuration in `.code
 
 The CodeRabbit configuration is intentionally strict about API compatibility, local data safety, release readiness, test coverage, and public repository hygiene. New checks should start in `warning` mode until they have produced useful signal across multiple pull requests.
 
+### Local CodeRabbit Review
+
+If the CodeRabbit CLI is installed, local review can provide pre-PR feedback on the current branch or working tree:
+
+```bash
+cr auth status
+cr review --agent --type uncommitted --base main --config .coderabbit.yaml
+cr review --agent --type committed --base main --config .coderabbit.yaml
+```
+
+If your installation uses the `coderabbit` binary instead of `cr`, use:
+
+```bash
+coderabbit review --agent --type uncommitted --base main --config .coderabbit.yaml
+```
+
+Local CLI review is useful before opening or updating a PR. Pull request review still has repository and PR collaboration context that local review does not.
+
 ## Code Style
 
 Use the existing TypeScript, React, and Fastify patterns in the repository. Prefer small services with focused tests over broad cross-cutting changes.
