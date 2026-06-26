@@ -76,11 +76,11 @@ export function redactTextSecrets(content: string): string {
       `$1$2${redactedValue}$2`,
     )
     .replace(
-      /\b((?:(?:(?:OPENAI|ANTHROPIC|GEMINI|MISTRAL|MIMO|CODEX|XAI|GITHUB)[A-Z0-9_]*KEY)|[A-Za-z0-9_-]*(?:api[_-]?key|token|secret|password|credential)[A-Za-z0-9_-]*)\s*=\s*)(["'])([^\r\n]*?)\2/gi,
+      /\b((?:(?:(?:OPENAI|ANTHROPIC|GEMINI|MISTRAL|MIMO|CODEX|XAI|GITHUB)[A-Z0-9_]{0,128}KEY)|[A-Za-z0-9_-]{0,128}(?:api[_-]?key|token|secret|password|credential)[A-Za-z0-9_-]{0,128})\s*=\s*)(["'])([^\r\n]*?)\2/gi,
       `$1$2${redactedValue}$2`,
     )
     .replace(
-      /\b((?:(?:(?:OPENAI|ANTHROPIC|GEMINI|MISTRAL|MIMO|CODEX|XAI|GITHUB)[A-Z0-9_]*KEY)|[A-Za-z0-9_-]*(?:api[_-]?key|token|secret|password|credential)[A-Za-z0-9_-]*)\s*=\s*)([^\s"'&#]+)/gi,
+      /\b((?:(?:(?:OPENAI|ANTHROPIC|GEMINI|MISTRAL|MIMO|CODEX|XAI|GITHUB)[A-Z0-9_]{0,128}KEY)|[A-Za-z0-9_-]{0,128}(?:api[_-]?key|token|secret|password|credential)[A-Za-z0-9_-]{0,128})\s*=\s*)([^\s"'&#]+)/gi,
       `$1${redactedValue}`,
     )
     .replace(/\b(bearer\s+)([A-Za-z0-9._~+/=-]{8,})\b/gi, `$1${redactedValue}`)

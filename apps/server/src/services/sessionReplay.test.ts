@@ -307,6 +307,49 @@ describe('readSessionReplay', () => {
     }
   });
 
+  test('returns malformed for invalid tool step file arrays', async () => {
+    const { projectPath, projectDir, paths, cleanup } = await setup();
+    try {
+      const data = validReplay('session-1');
+      const steps = data.steps as Record<string, unknown>[];
+      steps[1] = {
+        ...steps[1],
+        filesModified: ['src/api.ts', 42],
+      };
+      await writeReplay(projectDir, projectPath, 'session-1', data);
+      const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
+      expect(result.status).toBe('malformed');
+      expect(result.diagnostics[0]?.message).toContain('steps');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('returns malformed for invalid retry command arrays', async () => {
+    const { projectPath, projectDir, paths, cleanup } = await setup();
+    try {
+      const data = validReplay('session-1');
+      (data.summary as Record<string, unknown>).totalSteps = 1;
+      (data.summary as Record<string, unknown>).toolBreakdown = {};
+      data.steps = [
+        {
+          type: 'retry',
+          stepNumber: 1,
+          retryType: 'api',
+          reason: 'Retry the command',
+          commands: ['npm test', 42],
+          timestamp: '2026-06-01T00:00:00.000Z',
+        },
+      ];
+      await writeReplay(projectDir, projectPath, 'session-1', data);
+      const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
+      expect(result.status).toBe('malformed');
+      expect(result.diagnostics[0]?.message).toContain('steps');
+    } finally {
+      await cleanup();
+    }
+  });
+
   test('returns malformed for fractional summary counters', async () => {
     const { projectPath, projectDir, paths, cleanup } = await setup();
     try {
@@ -488,6 +531,9 @@ describe('readSessionReplay', () => {
         '/home/user/.openclaude/session.json',
         '../outside.ts',
         'C:\\Users\\me\\secret.ts',
+        'C:relative-secret.ts',
+        '~/secret.ts',
+        '~\\secret.ts',
         'src/token=secret-value.ts',
         `src/${'a'.repeat(260)}/../secret.ts`,
       ];
@@ -505,6 +551,8 @@ describe('readSessionReplay', () => {
             'src/ok.ts',
             '/private/path.ts',
             '..\\outside.ts',
+            'C:relative-private.ts',
+            '~/private.ts',
             'src/password=private.ts',
             `src/${'b'.repeat(260)}/../secret.ts`,
           ],

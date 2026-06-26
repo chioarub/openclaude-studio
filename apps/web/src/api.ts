@@ -30,6 +30,7 @@ export class ApiRequestError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    public readonly code?: string,
   ) {
     super(message);
   }
@@ -47,11 +48,15 @@ export function createApiClient(settings: ConnectionSettings) {
     const payload = (await response.json().catch(() => null)) as unknown;
 
     if (!response.ok) {
+      const code =
+        payload && typeof payload === 'object' && 'code' in payload && typeof payload.code === 'string'
+          ? payload.code
+          : undefined;
       const message =
         payload && typeof payload === 'object' && 'error' in payload
           ? String(payload.error)
           : `Request failed with ${response.status}`;
-      throw new ApiRequestError(message, response.status);
+      throw new ApiRequestError(message, response.status, code);
     }
 
     return payload as T;
@@ -73,7 +78,7 @@ export function createApiClient(settings: ConnectionSettings) {
       try {
         return await request<SessionReplayResponse>(`/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}/replay`);
       } catch (error) {
-        if (error instanceof ApiRequestError && error.status === 404) {
+        if (error instanceof ApiRequestError && error.status === 404 && error.code !== 'NOT_FOUND') {
           return null;
         }
         throw error;

@@ -2817,8 +2817,9 @@ function SessionReplayPanel({
 
   const filteredSteps = steps.filter((step) => {
     if (stepFilter !== 'all' && step.type !== stepFilter) return false;
-    if (toolFilter !== 'all' && (step.type !== 'tool' || step.toolName !== toolFilter)) return false;
-    if (statusFilter !== 'all' && (step.type !== 'tool' || step.resultStatus !== statusFilter)) return false;
+    const includeToolFilters = stepFilter === 'all' || stepFilter === 'tool';
+    if (includeToolFilters && toolFilter !== 'all' && (step.type !== 'tool' || step.toolName !== toolFilter)) return false;
+    if (includeToolFilters && statusFilter !== 'all' && (step.type !== 'tool' || step.resultStatus !== statusFilter)) return false;
     return true;
   });
 
@@ -3169,7 +3170,45 @@ function normalizeReplayResponse(data: unknown): SessionReplayResponse | null {
   ) {
     return malformedReplayResponse(replaySessionId(data), 'Replay response status is not recognized.');
   }
-  if (data.status !== 'available') return data as SessionReplayResponse;
+  if (data.status !== 'available') {
+    const diagnostics = replayDiagnostics(data.diagnostics);
+    if (data.status === 'unavailable') {
+      return {
+        status: 'unavailable',
+        supported: true,
+        available: false,
+        sessionId: replaySessionId(data),
+        diagnostics,
+      };
+    }
+    if (data.status === 'unsupported_version') {
+      return {
+        status: 'unsupported_version',
+        supported: false,
+        available: true,
+        sessionId: replaySessionId(data),
+        version: finiteNumberOrNull(data.version),
+        diagnostics,
+      };
+    }
+    if (data.status === 'malformed') {
+      return {
+        status: 'malformed',
+        supported: true,
+        available: true,
+        sessionId: replaySessionId(data),
+        version: finiteNumberOrNull(data.version),
+        diagnostics,
+      };
+    }
+    return {
+      status: 'conflict',
+      supported: true,
+      available: true,
+      sessionId: replaySessionId(data),
+      diagnostics,
+    };
+  }
   const availableReplay = data as Partial<Extract<SessionReplayResponse, { status: 'available' }>>;
   if (typeof availableReplay.version !== 'number') {
     return malformedReplayResponse(replaySessionId(data), 'Replay version is missing from the server response.');
@@ -3216,6 +3255,10 @@ function normalizeReplayResponse(data: unknown): SessionReplayResponse | null {
     stepsTruncated: availableReplay.stepsTruncated === true,
     diagnostics: Array.isArray(availableReplay.diagnostics) ? availableReplay.diagnostics : [],
   };
+}
+
+function replayDiagnostics(value: unknown): Diagnostic[] {
+  return arrayOrEmpty<unknown>(value).map(normalizeDiagnostic);
 }
 
 function replaySessionId(data: Record<string, unknown>): string {

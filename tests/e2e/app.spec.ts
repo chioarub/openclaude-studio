@@ -259,7 +259,7 @@ test('loads project overview, sessions, provider, and logs', async ({ page }) =>
   await expect(detailsDialog.getByText('Edit src/api.ts')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(detailsDialog).toBeHidden();
-  await page.locator('tr[aria-label="Open details for Inspect missing replay"]').click();
+  await page.getByRole('row', { name: /Open details for Inspect missing replay/i }).click();
   await expect(detailsDialog).toBeVisible();
   await detailsDialog.getByRole('tab', { name: /Replay/i }).click();
   await expect(detailsDialog.getByText('No replay data available for this session.')).toBeVisible();

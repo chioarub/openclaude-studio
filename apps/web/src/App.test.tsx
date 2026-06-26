@@ -1703,6 +1703,29 @@ describe('App', () => {
     expect(within(dialog).queryByText(/Replay sidecars are produced/i)).not.toBeInTheDocument();
   });
 
+  test('normalizes partial unavailable replay responses', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      sessionReplayResponse: {
+        status: 'unavailable',
+        sessionId: 'session-1',
+        diagnostics: 'not-an-array',
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText('No replay data available for this session.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Replay sidecars are produced by newer OpenClaude versions.')).toBeInTheDocument();
+  });
+
   test('shows unsupported version state', async () => {
     vi.stubGlobal('fetch', mockApi({ sessionReplayResponse: { status: 'unsupported_version', supported: false, available: true, sessionId: 'session-1', version: 99, diagnostics: [] } }));
     const user = userEvent.setup();
@@ -1768,6 +1791,26 @@ describe('App', () => {
     expect(await within(dialog).findByText(/not available on this local server version/i)).toBeInTheDocument();
   });
 
+  test('shows a replay loading error for missing-session 404 responses', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      sessionReplayStatus: 404,
+      sessionReplayErrorResponse: { error: 'Session not found', code: 'NOT_FOUND' },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText('Session not found')).toBeInTheDocument();
+    expect(within(dialog).queryByText(/not available on this local server version/i)).not.toBeInTheDocument();
+  });
+
   test('shows a replay loading error for non-404 replay failures', async () => {
     vi.stubGlobal('fetch', mockApi({ sessionReplayStatus: 500 }));
     const user = userEvent.setup();
@@ -1803,6 +1846,31 @@ describe('App', () => {
 
     expect(within(dialog).getByText('Create the API')).toBeInTheDocument();
     expect(within(dialog).queryByText('Write src/api.ts')).not.toBeInTheDocument();
+  });
+
+  test('ignores stale tool filters when switching to non-tool replay step types', async () => {
+    vi.stubGlobal('fetch', mockApi());
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+    await within(dialog).findByText('Create the API');
+
+    await user.selectOptions(within(dialog).getByLabelText('Filter by result status'), 'success');
+    expect(within(dialog).getByText('Write src/api.ts')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Create the API')).not.toBeInTheDocument();
+
+    await user.selectOptions(within(dialog).getByLabelText('Filter by step type'), 'user');
+
+    expect(within(dialog).getByText('Create the API')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Write src/api.ts')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/No steps match/i)).not.toBeInTheDocument();
   });
 
   test('omits malformed replay timestamps', async () => {
@@ -2992,6 +3060,7 @@ type MockApiOptions = {
   sessionChangesStatus?: number;
   sessionChangesResponse?: unknown;
   sessionReplayStatus?: number;
+  sessionReplayErrorResponse?: unknown;
   sessionReplayResponse?: unknown;
   sessionDetailsPromiseOnce?: Promise<Response>;
   sessionDetails?: unknown;
@@ -3128,7 +3197,10 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (path === '/api/projects/project-1/sessions/session-1/replay') {
       if (options.sessionReplayStatus) {
-        return jsonResponse({ error: `Injected replay ${options.sessionReplayStatus}` }, options.sessionReplayStatus);
+        return jsonResponse(
+          options.sessionReplayErrorResponse ?? { error: `Injected replay ${options.sessionReplayStatus}` },
+          options.sessionReplayStatus,
+        );
       }
       if (options.sessionReplayResponse !== undefined) {
         return jsonResponse(options.sessionReplayResponse);

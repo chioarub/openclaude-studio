@@ -411,6 +411,9 @@ function parseToolStep(
     MAX_FILE_PATH_LENGTH,
     diagnostics,
   );
+  if (!filesModifiedResult) {
+    return null;
+  }
 
   const durationMs = parseNonNegativeInt(raw.durationMs) ?? 0;
   const toolUseId = typeof raw.toolUseId === 'string' ? raw.toolUseId : null;
@@ -472,6 +475,9 @@ function parseRetryStep(
       : 'unknown';
 
   const commandsResult = parseStringArray(raw.commands, MAX_COMMANDS, MAX_COMMAND_LENGTH);
+  if (!commandsResult) {
+    return null;
+  }
 
   return {
     type: 'retry',
@@ -660,7 +666,14 @@ function normalizeReplayFilePath(
 }
 
 function isSafeReplayFilePath(value: string): boolean {
-  if (!value || value.startsWith('/') || /^[A-Za-z]:\//.test(value) || value.includes('\0')) {
+  if (
+    !value ||
+    value === '~' ||
+    value.startsWith('/') ||
+    value.startsWith('~/') ||
+    /^[A-Za-z]:/.test(value) ||
+    value.includes('\0')
+  ) {
     return false;
   }
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
