@@ -449,6 +449,60 @@ describe('HTTP server', () => {
     expect(mutation.statusCode).toBe(404);
   });
 
+  test('uses the configured server env for provider profile diagnostics', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-http-provider-env-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        activeProviderProfileId: 'provider-1',
+        providerProfiles: [
+          {
+            id: 'provider-1',
+            name: 'OpenAI',
+            provider: 'openai',
+            model: 'gpt-example',
+            baseUrl: 'https://api.openai.com/v1',
+          },
+        ],
+      }),
+      'utf8',
+    );
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-ambient-private';
+    try {
+      const server = await buildServer({ env: {}, home, version: '0.0.1-test' });
+      servers.push(server);
+
+      const response = await server.inject({ method: 'GET', url: '/api/provider/profiles' });
+
+      expect(response.statusCode).toBe(200);
+      const payload = response.json() as {
+        profiles: Array<{
+          credential?: { credentialConfigured?: boolean; credentialSources?: string[] };
+          validation?: { status?: string; issues?: Array<{ message?: string }> };
+        }>;
+      };
+      expect(payload.profiles[0]?.credential).toMatchObject({
+        credentialConfigured: false,
+        credentialSources: [],
+      });
+      expect(payload.profiles[0]?.validation).toMatchObject({
+        status: 'warning',
+        issues: expect.arrayContaining([
+          expect.objectContaining({ message: 'No saved credential is visible in this profile.' }),
+        ]),
+      });
+      expect(JSON.stringify(payload)).not.toContain('sk-ambient-private');
+    } finally {
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+    }
+  });
+
   test('returns session details for an existing session', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-http-'));
     const projectPath = join(home, 'project-a');

@@ -570,6 +570,11 @@ describe('Provider profile management data', () => {
         credentialSources: [],
       },
     ]);
+    expect(result.profiles.map((profile) => profile.validation)).toEqual([
+      { status: 'valid', issues: [] },
+      { status: 'valid', issues: [] },
+      { status: 'valid', issues: [] },
+    ]);
     expect(JSON.stringify(result)).not.toContain('sk-env-local');
     expect(JSON.stringify(result)).not.toContain('env-local-header');
   });

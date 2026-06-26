@@ -12,6 +12,7 @@ import type {
   ProviderProfilesResponse,
   ProviderTemplateId,
   SafeProviderProfile,
+  StudioProviderRecognition,
   StartupProviderProfileSummary,
 } from '@openclaude-studio/shared';
 
@@ -313,7 +314,7 @@ function toSafeProviderProfile(
   const apiFormat = trimmedString(profile.apiFormat);
   const authHeader = trimmedString(profile.authHeader);
   const authScheme = trimmedString(profile.authScheme);
-  const validation = validateProfile(profile, index, context, credential);
+  const validation = validateProfile(profile, index, context, credential, recognizedProvider);
 
   return {
     id,
@@ -476,6 +477,7 @@ function validateProfile(
   index: number,
   context: ProfileContext,
   credential: ProviderCredentialState,
+  recognizedProvider: StudioProviderRecognition,
 ): ProviderProfileValidation {
   const issues: ProviderProfileValidationIssue[] = [];
   const id = profileId(profile, index);
@@ -486,9 +488,6 @@ function validateProfile(
   const apiFormat = trimmedString(profile.apiFormat);
   const authHeader = trimmedString(profile.authHeader);
   const authScheme = trimmedString(profile.authScheme);
-  const templateId = inferProviderTemplateId({ provider, baseUrl });
-  const template = templates.find((item) => item.id === templateId);
-
   if (context.duplicateIds.has(id)) {
     issues.push({
       severity: 'error',
@@ -564,7 +563,7 @@ function validateProfile(
     });
   }
   if (
-    template?.requiresSecret &&
+    recognizedProviderRequiresSecret(recognizedProvider) &&
     !hasNonEmptyString(profile.apiKey) &&
     !hasNonEmptyString(profile.authHeaderValue) &&
     !credential.credentialConfigured
@@ -584,6 +583,10 @@ function validateProfile(
         : 'valid',
     issues,
   };
+}
+
+function recognizedProviderRequiresSecret(recognizedProvider: StudioProviderRecognition): boolean {
+  return recognizedProvider.authKind === 'api-key' || recognizedProvider.authKind === 'token';
 }
 
 function validateBaseUrl(baseUrl: string, issues: ProviderProfileValidationIssue[]): void {
