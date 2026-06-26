@@ -1661,6 +1661,33 @@ describe('App', () => {
     expect(within(dialog).getByText('error')).toBeInTheDocument();
   });
 
+  test('shows a replay loading state while replay data is pending', async () => {
+    const slowReplay = deferred<Response>();
+    const fetchMock = mockApi({ sessionReplayPromiseOnce: slowReplay.promise });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText('Loading session replay')).toBeInTheDocument();
+    expect(fetchCountByPath(fetchMock, '/api/projects/project-1/sessions/session-1/replay')).toBe(1);
+
+    await act(async () => {
+      slowReplay.resolve(jsonResponse(defaultReplayFixture()));
+      await slowReplay.promise;
+    });
+
+    expect(await within(dialog).findByText('Replay Timeline')).toBeInTheDocument();
+    expect(within(dialog).getByText('Write src/api.ts')).toBeInTheDocument();
+  });
+
   test('shows unavailable state when no replay data exists', async () => {
     vi.stubGlobal('fetch', mockApi({ sessionReplayResponse: { status: 'unavailable', supported: true, available: false, sessionId: 'session-1', diagnostics: [] } }));
     const user = userEvent.setup();
@@ -3061,6 +3088,7 @@ type MockApiOptions = {
   sessionChangesResponse?: unknown;
   sessionReplayStatus?: number;
   sessionReplayErrorResponse?: unknown;
+  sessionReplayPromiseOnce?: Promise<Response>;
   sessionReplayResponse?: unknown;
   sessionDetailsPromiseOnce?: Promise<Response>;
   sessionDetails?: unknown;
@@ -3080,6 +3108,7 @@ function mockApi(options: MockApiOptions = {}) {
   let usedProviderProfilesPromise = false;
   let usedSessionChangesPromise = false;
   let usedSessionDetailsPromise = false;
+  let usedSessionReplayPromise = false;
   let usedSessionsPromise = false;
   let usedTasksPromise = false;
 
@@ -3196,6 +3225,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (path === '/api/projects/project-1/sessions/session-1/replay') {
+      if (options.sessionReplayPromiseOnce && !usedSessionReplayPromise) {
+        usedSessionReplayPromise = true;
+        return options.sessionReplayPromiseOnce;
+      }
       if (options.sessionReplayStatus) {
         return jsonResponse(
           options.sessionReplayErrorResponse ?? { error: `Injected replay ${options.sessionReplayStatus}` },

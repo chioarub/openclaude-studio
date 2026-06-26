@@ -2896,7 +2896,7 @@ function SessionReplayPanel({
 
       <div className="flex flex-wrap items-center gap-3 shrink-0 border-b border-hairline-soft pb-3">
         <select
-          className="text-xs bg-surface-soft border border-hairline-soft rounded-md px-2 py-1 text-foreground"
+          className="text-xs bg-surface-soft border border-hairline-soft rounded-md px-2 py-1 text-ink"
           value={stepFilter}
           onChange={(e) => setStepFilter(e.target.value as ReplayStepFilter)}
           aria-label="Filter by step type"
@@ -2909,7 +2909,7 @@ function SessionReplayPanel({
         </select>
         {availableTools.length > 0 && (
           <select
-            className="text-xs bg-surface-soft border border-hairline-soft rounded-md px-2 py-1 text-foreground"
+            className="text-xs bg-surface-soft border border-hairline-soft rounded-md px-2 py-1 text-ink"
             value={toolFilter}
             onChange={(e) => setToolFilter(e.target.value)}
             aria-label="Filter by tool name"
@@ -2921,7 +2921,7 @@ function SessionReplayPanel({
           </select>
         )}
         <select
-          className="text-xs bg-surface-soft border border-hairline-soft rounded-md px-2 py-1 text-foreground"
+          className="text-xs bg-surface-soft border border-hairline-soft rounded-md px-2 py-1 text-ink"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
           aria-label="Filter by result status"
@@ -2965,7 +2965,7 @@ function ReplayMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-col gap-1 p-3 rounded-lg border border-hairline-soft bg-surface-soft">
       <span className="text-[10px] uppercase tracking-wider text-muted-soft">{label}</span>
-      <span className="text-sm font-medium text-foreground">{value}</span>
+      <span className="text-sm font-medium text-ink">{value}</span>
     </div>
   );
 }
@@ -2983,14 +2983,14 @@ function ReplayStepCard({
   const timestamp = Number.isNaN(timestampMs) ? null : new Date(timestampMs);
 
   return (
-    <div className="flex flex-col gap-2 p-3 rounded-lg border border-hairline-soft bg-surface">
+    <div className="flex flex-col gap-2 p-3 rounded-lg border border-hairline-soft bg-canvas">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs font-mono text-muted">#{step.stepNumber}</span>
           <StepTypeBadge type={step.type} />
           {step.type === 'tool' && (
             <>
-              <span className="text-xs font-medium text-foreground">{step.toolName}</span>
+              <span className="text-xs font-medium text-ink">{step.toolName}</span>
               <ResultStatusBadge status={step.resultStatus} />
               {step.isRepeatedAttempt && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/20">
@@ -3022,7 +3022,7 @@ function ReplayStepCard({
           <button
             type="button"
             onClick={onCopy}
-            className="text-muted hover:text-foreground transition-colors p-1"
+            className="text-muted hover:text-ink transition-colors p-1"
             aria-label="Copy step summary"
             title={copied ? 'Copied' : 'Copy step summary'}
           >
@@ -3073,7 +3073,7 @@ function StepContent({ step }: { step: SessionReplayStep }) {
     return (
       <div className="flex flex-col gap-1.5 text-xs">
         {step.inputSummary && (
-          <p className="text-foreground">
+          <p className="text-ink">
             {step.inputSummary}
             {step.inputSummaryTruncated && <span className="text-muted-soft"> (truncated)</span>}
           </p>
@@ -3104,7 +3104,7 @@ function StepContent({ step }: { step: SessionReplayStep }) {
   }
   if (step.type === 'user') {
     return (
-      <p className="text-xs text-foreground">
+      <p className="text-xs text-ink">
         {step.content}
         {step.contentTruncated && <span className="text-muted-soft"> (truncated)</span>}
       </p>
@@ -3113,7 +3113,7 @@ function StepContent({ step }: { step: SessionReplayStep }) {
   if (step.type === 'retry') {
     return (
       <div className="flex flex-col gap-1.5 text-xs">
-        <p className="text-foreground">
+        <p className="text-ink">
           {step.reason}
           {step.reasonTruncated && <span className="text-muted-soft"> (truncated)</span>}
         </p>
