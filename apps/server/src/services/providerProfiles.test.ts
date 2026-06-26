@@ -579,6 +579,41 @@ describe('Provider profile management data', () => {
     expect(JSON.stringify(result)).not.toContain('codex-env-private');
   });
 
+  test('keeps Codex auth-header credentials in OAuth recognition mode', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [
+          {
+            id: 'codex-profile',
+            name: 'Codex Header Credential',
+            provider: 'codex',
+            baseUrl: 'https://chatgpt.com/backend-api/codex',
+            model: 'codexplan',
+            authHeaderValue: 'Bearer private-header',
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const result = await readProviderProfiles(paths, {});
+
+    expect(result.profiles[0]).toMatchObject({
+      recognizedProvider: { id: 'codex-oauth' },
+      credential: {
+        credentialMode: 'single',
+        credentialCount: 1,
+        credentialConfigured: true,
+        credentialInvalid: false,
+        credentialSources: ['saved profile authHeaderValue'],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('private-header');
+  });
+
   test('exposes startup profile metadata from the config root without returning env values', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
     const paths = createOpenClaudePaths({ home, env: {} });

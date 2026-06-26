@@ -293,14 +293,13 @@ function toSafeProviderProfile(
   const provider = trimmedString(profile.provider) ?? 'unknown';
   const model = trimmedString(profile.model) ?? 'default';
   const baseUrlRaw = trimmedString(profile.baseUrl);
-  const apiKeySet =
+  const apiKeySetForRecognition =
     hasNonEmptyString(profile.apiKey) ||
-    hasNonEmptyString(profile.authHeaderValue) ||
     hasNonEmptyString(env.CODEX_API_KEY);
   const recognizedProvider = recognizeStudioProvider({
     provider,
     baseUrl: baseUrlRaw,
-    apiKeySet,
+    apiKeySet: apiKeySetForRecognition,
   });
   const credential = summarizeProviderCredentialState({
     savedApiKey: profile.apiKey,
