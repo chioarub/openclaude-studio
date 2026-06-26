@@ -258,6 +258,31 @@ describe('readSessionReplay', () => {
     }
   });
 
+  test.runIf(process.platform !== 'win32' && process.getuid?.() !== 0)(
+    'returns unavailable diagnostics when a replay sidecar cannot be read',
+    async () => {
+      const { projectPath, projectDir, paths, cleanup } = await setup();
+      const replayPath = join(projectDir, 'session-1.replay.json');
+      try {
+        await writeTranscript(projectDir, projectPath, 'session-1');
+        await writeFile(replayPath, JSON.stringify(validReplay('session-1')), 'utf8');
+        await chmod(replayPath, 0);
+
+        const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
+
+        expect(result.status).toBe('unavailable');
+        expect(result.diagnostics).toContainEqual(expect.objectContaining({
+          level: 'warn',
+          message: 'Replay file could not be read.',
+        }));
+        expect(result.diagnostics[0]).not.toHaveProperty('path');
+      } finally {
+        await chmod(replayPath, 0o600).catch(() => undefined);
+        await cleanup();
+      }
+    },
+  );
+
   test('returns malformed when sessionId inside file does not match', async () => {
     const { projectPath, projectDir, paths, cleanup } = await setup();
     try {

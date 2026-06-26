@@ -94,7 +94,17 @@ export async function readSessionReplay(
   if (!replayPath) {
     return conflict(sessionId, candidates.map((c) => c.path));
   }
-  const read = await readBoundedTextFile(replayPath, { maxBytes: MAX_REPLAY_BYTES });
+  let read: Awaited<ReturnType<typeof readBoundedTextFile>>;
+  try {
+    read = await readBoundedTextFile(replayPath, { maxBytes: MAX_REPLAY_BYTES });
+  } catch (error) {
+    if (isNodeError(error, 'EACCES') || isNodeError(error, 'EPERM')) {
+      return unavailableWithDiagnostics(sessionId, [
+        { level: 'warn', message: 'Replay file could not be read.' },
+      ]);
+    }
+    throw error;
+  }
 
   if (!read.exists) {
     return unavailable(sessionId, 'Replay file does not exist.');
