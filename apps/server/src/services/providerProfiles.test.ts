@@ -502,6 +502,157 @@ describe('Provider profile management data', () => {
     expect(JSON.stringify(result)).not.toContain('Bearer env-header-private');
   });
 
+  test('recognizes Gemini alternate environment credentials', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(paths.openClaudeHome, { recursive: true });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [
+          {
+            id: 'gemini-profile',
+            name: 'Gemini Team',
+            provider: 'gemini',
+            baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+            model: 'gemini-test-model',
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const googleKey = await readProviderProfiles(paths, {
+      GOOGLE_API_KEY: 'google-gemini-private',
+    });
+    expect(googleKey.profiles[0]).toMatchObject({
+      recognizedProvider: {
+        id: 'gemini',
+        credentialEnvVars: ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GEMINI_ACCESS_TOKEN'],
+      },
+      credential: {
+        credentialMode: 'single',
+        credentialCount: 1,
+        credentialConfigured: true,
+        credentialInvalid: false,
+        credentialSources: ['Studio server env: GOOGLE_API_KEY'],
+      },
+      validation: { status: 'valid', issues: [] },
+    });
+
+    const geminiKey = await readProviderProfiles(paths, {
+      GEMINI_API_KEY: 'gemini-api-private',
+    });
+    expect(geminiKey.profiles[0]).toMatchObject({
+      credential: {
+        credentialMode: 'single',
+        credentialCount: 1,
+        credentialConfigured: true,
+        credentialInvalid: false,
+        credentialSources: ['Studio server env: GEMINI_API_KEY'],
+      },
+      validation: { status: 'valid', issues: [] },
+    });
+
+    const accessToken = await readProviderProfiles(paths, {
+      GEMINI_AUTH_MODE: 'access-token',
+      GEMINI_ACCESS_TOKEN: 'gemini-access-private',
+    });
+    expect(accessToken.profiles[0]).toMatchObject({
+      credential: {
+        credentialMode: 'single',
+        credentialCount: 1,
+        credentialConfigured: true,
+        credentialInvalid: false,
+        credentialSources: ['Studio server env: GEMINI_ACCESS_TOKEN'],
+      },
+      validation: { status: 'valid', issues: [] },
+    });
+
+    const accessTokenWithoutMode = await readProviderProfiles(paths, {
+      GEMINI_ACCESS_TOKEN: 'gemini-access-private',
+    });
+    expect(accessTokenWithoutMode.profiles[0]).toMatchObject({
+      credential: {
+        credentialMode: 'none',
+        credentialCount: 0,
+        credentialConfigured: false,
+        credentialInvalid: false,
+        credentialSources: [],
+      },
+      validation: {
+        status: 'warning',
+        issues: expect.arrayContaining([
+          expect.objectContaining({ field: 'credential', message: 'No saved credential is visible in this profile.' }),
+        ]),
+      },
+    });
+
+    const mixedAccessTokenMode = await readProviderProfiles(paths, {
+      GEMINI_AUTH_MODE: 'access-token',
+      GEMINI_API_KEY: 'gemini-api-private',
+      GOOGLE_API_KEY: 'google-gemini-private',
+      GEMINI_ACCESS_TOKEN: 'gemini-access-private',
+    });
+    expect(mixedAccessTokenMode.profiles[0]).toMatchObject({
+      credential: {
+        credentialMode: 'single',
+        credentialCount: 1,
+        credentialConfigured: true,
+        credentialInvalid: false,
+        credentialSources: ['Studio server env: GEMINI_ACCESS_TOKEN'],
+      },
+      validation: { status: 'valid', issues: [] },
+    });
+
+    await writeFile(
+      join(paths.openClaudeHome, '.openclaude-profile.json'),
+      JSON.stringify({
+        profile: 'gemini',
+        env: {
+          GEMINI_AUTH_MODE: 'access-token',
+          GEMINI_MODEL: 'gemini-test-model',
+          GEMINI_API_KEY: 'startup-gemini-api-private',
+          GOOGLE_API_KEY: 'startup-google-private',
+          GEMINI_ACCESS_TOKEN: 'startup-gemini-private',
+        },
+      }),
+      'utf8',
+    );
+    const startup = await readProviderProfiles(paths);
+    expect(startup.startupProfile).toMatchObject({
+      profile: 'gemini',
+      configuredNonSecretFields: ['GEMINI_AUTH_MODE', 'GEMINI_MODEL'],
+      credentials: [
+        { name: 'GEMINI_ACCESS_TOKEN', configured: true },
+        { name: 'GEMINI_API_KEY', configured: true },
+        { name: 'GOOGLE_API_KEY', configured: true },
+      ],
+      credential: {
+        credentialMode: 'single',
+        credentialCount: 1,
+        credentialConfigured: true,
+        credentialInvalid: false,
+        credentialSources: ['startup profile env: GEMINI_ACCESS_TOKEN'],
+      },
+      recognizedProvider: {
+        id: 'gemini',
+        credentialEnvVars: ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GEMINI_ACCESS_TOKEN'],
+      },
+    });
+
+    expect(JSON.stringify(googleKey)).not.toContain('google-gemini-private');
+    expect(JSON.stringify(geminiKey)).not.toContain('gemini-api-private');
+    expect(JSON.stringify(accessToken)).not.toContain('gemini-access-private');
+    expect(JSON.stringify(accessTokenWithoutMode)).not.toContain('gemini-access-private');
+    expect(JSON.stringify(mixedAccessTokenMode)).not.toContain('gemini-api-private');
+    expect(JSON.stringify(mixedAccessTokenMode)).not.toContain('google-gemini-private');
+    expect(JSON.stringify(mixedAccessTokenMode)).not.toContain('gemini-access-private');
+    expect(JSON.stringify(startup)).not.toContain('startup-gemini-api-private');
+    expect(JSON.stringify(startup)).not.toContain('startup-google-private');
+    expect(JSON.stringify(startup)).not.toContain('startup-gemini-private');
+  });
+
   test('does not apply inherited OpenAI credentials to no-auth local providers', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
     const paths = createOpenClaudePaths({ home, env: {} });

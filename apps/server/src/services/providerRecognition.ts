@@ -31,6 +31,8 @@ type CredentialStateInput = {
 
 const openAiCredentialEnvVars = ['OPENAI_API_KEYS', 'OPENAI_API_KEY', 'OPENAI_AUTH_HEADER_VALUE'] as const;
 const openAiCredentialEnvVarSet = new Set<string>(openAiCredentialEnvVars);
+const geminiCredentialEnvVars = ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GEMINI_ACCESS_TOKEN'] as const;
+const geminiCredentialEnvVarSet = new Set<string>(geminiCredentialEnvVars);
 
 // Keep this static and re-check upstream route descriptors plus providerProfile
 // PROFILE_ENV_KEYS when updating recognition; Studio must not import OpenClaude
@@ -172,7 +174,7 @@ const descriptors: StudioProviderDescriptor[] = [
     category: 'hosted',
     defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     authKind: 'api-key',
-    credentialEnvVars: ['GEMINI_API_KEY'],
+    credentialEnvVars: [...geminiCredentialEnvVars],
     transport: 'gemini-native',
     discoveryMode: 'static',
     safeTemplateAvailable: true,
@@ -786,6 +788,10 @@ function credentialStateFromEnv(
   credentialEnvVars: string[],
   sourceLabel: string,
 ): ProviderCredentialState {
+  if (isGeminiCredentialEnvVars(credentialEnvVars)) {
+    return geminiCredentialStateFromEnv(env, sourceLabel);
+  }
+
   const consumed = new Set<string>();
   for (const envVar of credentialEnvVars) {
     if (consumed.has(envVar)) {
@@ -806,6 +812,34 @@ function credentialStateFromEnv(
       continue;
     }
 
+    const result = credentialStateFromValue(env[envVar], `${sourceLabel}: ${envVar}`);
+    if (result.credentialMode !== 'none' || result.credentialInvalid) {
+      return result;
+    }
+  }
+
+  return emptyCredentialState();
+}
+
+function isGeminiCredentialEnvVars(credentialEnvVars: string[]): boolean {
+  return credentialEnvVars.length === geminiCredentialEnvVars.length &&
+    credentialEnvVars.every((envVar) => geminiCredentialEnvVarSet.has(envVar));
+}
+
+function geminiCredentialStateFromEnv(
+  env: Record<string, string | undefined>,
+  sourceLabel: string,
+): ProviderCredentialState {
+  const authMode = env.GEMINI_AUTH_MODE?.trim().toLowerCase();
+  if (authMode === 'access-token') {
+    const accessToken = credentialStateFromValue(env.GEMINI_ACCESS_TOKEN, `${sourceLabel}: GEMINI_ACCESS_TOKEN`);
+    if (accessToken.credentialMode !== 'none' || accessToken.credentialInvalid) {
+      return accessToken;
+    }
+    return emptyCredentialState();
+  }
+
+  for (const envVar of ['GEMINI_API_KEY', 'GOOGLE_API_KEY'] as const) {
     const result = credentialStateFromValue(env[envVar], `${sourceLabel}: ${envVar}`);
     if (result.credentialMode !== 'none' || result.credentialInvalid) {
       return result;
