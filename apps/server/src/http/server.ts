@@ -172,8 +172,12 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
 
   app.get<{ Params: { projectId: string; sessionId: string } }>(
     '/api/projects/:projectId/sessions/:sessionId/replay',
-    async (request) => {
+    async (request, reply) => {
       const project = await resolveProject(paths, request.params.projectId);
+      const session = await readSessionDetails(paths, project, request.params.sessionId);
+      if (!session) {
+        return reply.code(404).send({ error: 'Session not found', code: 'NOT_FOUND', diagnostics: [] } satisfies ApiErrorResponse);
+      }
       return readSessionReplay(paths.projectsDir, project, request.params.sessionId);
     },
   );

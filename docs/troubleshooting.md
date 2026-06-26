@@ -95,11 +95,11 @@ Background sessions are read from `<resolved OpenClaude config root>/bg-sessions
 
 ## Session Replay tab is missing or shows no data
 
-The Replay tab appears in session details when the local server supports replay and a replay sidecar file exists for that session.
+The Replay tab appears in session details when the local server supports replay. Sessions without a replay sidecar show an empty replay state.
 
-- The Replay tab does not appear at all if the local server is older than `0.5.0` (the endpoint returns 404). Update the `openclaude-studio` package to enable it.
+- The Replay tab does not appear if the local server does not support replay (the endpoint returns 404). Update the `openclaude-studio` package to enable it.
 - The tab shows "No replay data available" when no `<sessionId>.replay.json` file exists. Replay sidecars are produced by newer OpenClaude versions; sessions created by older versions will not have one.
-- The tab shows "unsupported schema version" when the replay file was written by a newer OpenClaude than this server understands. Update `openclaude-studio` to read the newer format.
+- The tab says the replay schema version is not supported when the replay file was written by a newer OpenClaude than this server understands. Update `openclaude-studio` to read the newer format.
 - The tab shows "malformed" when the replay file is corrupt, oversized, or fails validation. This is intentional — Studio does not attempt partial unsafe parses.
 
 ## Browser cannot connect to the localhost API

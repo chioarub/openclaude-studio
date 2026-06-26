@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -176,6 +176,52 @@ describe('readSessionReplay', () => {
     }
   });
 
+  test('does not read a same-session replay sidecar when the transcript belongs to another project', async () => {
+    const { projectPath, projectDir, paths, root, cleanup } = await setup();
+    try {
+      const otherProjectPath = join(root, 'other-project');
+      await writeTranscript(projectDir, otherProjectPath, 'session-1');
+      await writeFile(
+        join(projectDir, 'session-1.replay.json'),
+        JSON.stringify(validReplay('session-1')),
+        'utf8',
+      );
+
+      const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
+
+      expect(result.status).toBe('unavailable');
+      expect(result.diagnostics[0]?.message).toContain('transcript');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('surfaces transcript read diagnostics before reading a replay sidecar', async () => {
+    const { projectPath, projectDir, paths, cleanup } = await setup();
+    const transcriptPath = join(projectDir, 'session-1.jsonl');
+    try {
+      await writeTranscript(projectDir, projectPath, 'session-1');
+      await writeFile(
+        join(projectDir, 'session-1.replay.json'),
+        JSON.stringify(validReplay('session-1')),
+        'utf8',
+      );
+      await chmod(transcriptPath, 0);
+
+      const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
+
+      expect(result.status).toBe('unavailable');
+      expect(result.diagnostics).toContainEqual(expect.objectContaining({
+        level: 'warn',
+        message: 'Transcript file could not be read.',
+      }));
+      expect(result.diagnostics[0]).not.toHaveProperty('path');
+    } finally {
+      await chmod(transcriptPath, 0o600).catch(() => undefined);
+      await cleanup();
+    }
+  });
+
   test('returns unsupported_version for an unknown schema version', async () => {
     const { projectPath, projectDir, paths, cleanup } = await setup();
     try {
@@ -228,6 +274,20 @@ describe('readSessionReplay', () => {
       await writeReplay(projectDir, projectPath, 'session-1', data);
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
       expect(result.status).toBe('malformed');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('returns malformed for fractional summary counters', async () => {
+    const { projectPath, projectDir, paths, cleanup } = await setup();
+    try {
+      const data = validReplay('session-1');
+      (data.summary as Record<string, unknown>).totalSteps = 1.5;
+      await writeReplay(projectDir, projectPath, 'session-1', data);
+      const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
+      expect(result.status).toBe('malformed');
+      expect(result.diagnostics[0]?.message).toContain('totalSteps');
     } finally {
       await cleanup();
     }
@@ -314,14 +374,15 @@ describe('readSessionReplay', () => {
     const { projectPath, paths, projectDir, cleanup } = await setup();
     try {
       await writeReplay(projectDir, projectPath, 'session-1', validReplay('session-1'));
-      // Create an alias directory that matches the project path encoding
-      const aliasDir = join(paths.projectsDir, encodeProjectPath(projectPath) + '-alias');
+      const aliasDir = join(
+        paths.projectsDir,
+        encodeProjectPath(join(projectPath, '.claude', 'worktrees', 'feature-a')),
+      );
       await mkdir(aliasDir, { recursive: true });
-      await writeTranscript(aliasDir, projectPath, 'session-1');
       await writeReplay(aliasDir, projectPath, 'session-1', validReplay('session-1'));
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
-      // May be conflict or available depending on alias detection — verify no crash
-      expect(['conflict', 'available', 'unavailable']).toContain(result.status);
+      expect(result.status).toBe('conflict');
+      expect(result.diagnostics[0]?.message).toContain('Multiple conflicting replay files');
     } finally {
       await cleanup();
     }
@@ -368,6 +429,114 @@ describe('readSessionReplay', () => {
       const errorStep = result.steps[2];
       if (errorStep.type !== 'error') throw new Error('expected error step');
       expect(errorStep.error).not.toContain('abcdef1234567890');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('omits unsafe modified file paths before returning replay data', async () => {
+    const { projectPath, projectDir, paths, cleanup } = await setup();
+    try {
+      const data = validReplay('session-1');
+      (data.summary as Record<string, unknown>).filesModified = [
+        'src/api.ts',
+        '/home/user/.openclaude/session.json',
+        '../outside.ts',
+        'C:\\Users\\me\\secret.ts',
+        'src/token=secret-value.ts',
+        `src/${'a'.repeat(260)}/../secret.ts`,
+      ];
+      data.steps = [
+        {
+          type: 'tool',
+          stepNumber: 1,
+          toolName: 'Write',
+          toolUseId: 'tool-1',
+          inputSummary: 'Write files',
+          resultStatus: 'success',
+          durationMs: 10,
+          timestamp: '2026-06-01T00:00:00.000Z',
+          filesModified: [
+            'src/ok.ts',
+            '/private/path.ts',
+            '..\\outside.ts',
+            'src/password=private.ts',
+            `src/${'b'.repeat(260)}/../secret.ts`,
+          ],
+        },
+      ];
+      await writeReplay(projectDir, projectPath, 'session-1', data);
+      const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
+      expect(result.status).toBe('available');
+      if (result.status !== 'available') return;
+
+      expect(result.summary.filesModified).toEqual(['src/api.ts', 'src/token=<redacted>']);
+      const step = result.steps[0];
+      if (step.type !== 'tool') throw new Error('expected tool step');
+      expect(step.filesModified).toEqual(['src/ok.ts', 'src/password=<redacted>']);
+      expect(result.diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            level: 'warn',
+            message: 'Unsafe replay file path was omitted from the response.',
+          }),
+        ]),
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('redacts replay strings before applying length caps', async () => {
+    const { projectPath, projectDir, paths, cleanup } = await setup();
+    try {
+      const secret = `sk-${'a'.repeat(24)}`;
+      const nearInputLimit = `${'x'.repeat(232)}${secret}`;
+      const nearReasonLimit = `${'y'.repeat(472)}${secret}`;
+      const data = validReplay('session-1');
+      data.steps = [
+        {
+          type: 'tool',
+          stepNumber: 1,
+          toolName: 'Bash',
+          toolUseId: secret,
+          inputSummary: nearInputLimit,
+          resultStatus: 'success',
+          resultPreview: nearInputLimit,
+          durationMs: 10,
+          timestamp: '2026-06-01T00:00:00.000Z',
+        },
+        {
+          type: 'user',
+          stepNumber: 2,
+          content: `${'u'.repeat(992)}${secret}`,
+          timestamp: '2026-06-01T00:00:01.000Z',
+        },
+        {
+          type: 'retry',
+          stepNumber: 3,
+          retryType: 'api',
+          reason: nearReasonLimit,
+          commands: [nearReasonLimit],
+          timestamp: '2026-06-01T00:00:02.000Z',
+        },
+        {
+          type: 'error',
+          stepNumber: 4,
+          error: nearReasonLimit,
+          timestamp: '2026-06-01T00:00:03.000Z',
+        },
+      ];
+      (data.summary as Record<string, unknown>).totalSteps = 4;
+      await writeReplay(projectDir, projectPath, 'session-1', data);
+      const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
+      expect(result.status).toBe('available');
+      if (result.status !== 'available') return;
+
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain(secret.slice(0, 8));
+      expect(serialized).toContain('<redacted>');
+      expect(serialized).not.toContain('<redacte"');
     } finally {
       await cleanup();
     }

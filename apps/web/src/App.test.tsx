@@ -1503,6 +1503,23 @@ describe('App', () => {
     expect(await within(dialog).findByText(/malformed and cannot be displayed/i)).toBeInTheDocument();
   });
 
+  test('normalizes an unknown top-level replay payload without crashing', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionReplayResponse: { status: 'future_replay', sessionId: 'session-1' } }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText(/malformed and cannot be displayed/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Replay response status is not recognized/i)).toBeInTheDocument();
+  });
+
   test('hides replay content on 404 from older server', async () => {
     vi.stubGlobal('fetch', mockApi({ sessionReplayStatus: 404 }));
     const user = userEvent.setup();
@@ -1517,6 +1534,22 @@ describe('App', () => {
     await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
 
     expect(await within(dialog).findByText(/not available on this local server version/i)).toBeInTheDocument();
+  });
+
+  test('shows a replay loading error for non-404 replay failures', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionReplayStatus: 500 }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText(/Injected replay 500/i)).toBeInTheDocument();
   });
 
   test('filters replay steps by type', async () => {
@@ -1538,6 +1571,51 @@ describe('App', () => {
 
     expect(within(dialog).getByText('Create the API')).toBeInTheDocument();
     expect(within(dialog).queryByText('Write src/api.ts')).not.toBeInTheDocument();
+  });
+
+  test('omits malformed replay timestamps', async () => {
+    const replay = defaultReplayFixture() as { steps: Array<Record<string, unknown>> };
+    replay.steps[0] = { ...replay.steps[0], timestamp: 'not-a-date' };
+    vi.stubGlobal('fetch', mockApi({ sessionReplayResponse: replay }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+    await within(dialog).findByText('Create the API');
+
+    const epochTime = new Date(0).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    expect(within(dialog).queryByText(epochTime)).not.toBeInTheDocument();
+  });
+
+  test('filters replay steps by tool result status without keeping non-tool steps', async () => {
+    vi.stubGlobal('fetch', mockApi());
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+    await within(dialog).findByText('Create the API');
+
+    await user.selectOptions(within(dialog).getByLabelText('Filter by result status'), 'success');
+
+    expect(within(dialog).getByText('Write src/api.ts')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Create the API')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Read src/api.ts')).not.toBeInTheDocument();
   });
 
   test('renders retry and error steps', async () => {
@@ -1681,6 +1759,7 @@ describe('App', () => {
 
     // Should not crash — renders the timeline panel with defaults
     expect(await within(dialog).findByText('Replay Timeline')).toBeInTheDocument();
+    expect(within(dialog).getByText('Read file')).toBeInTheDocument();
   });
 
   test('debounces additional log window requests as the log view scrolls', async () => {

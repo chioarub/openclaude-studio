@@ -902,6 +902,82 @@ describe('HTTP server', () => {
     });
   });
 
+  test('returns 404 when replay is requested for a nonexistent session', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-replay-missing-session-'));
+    const projectPath = join(home, 'my-project');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(projectPath, { recursive: true });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [],
+        projects: { [projectPath]: { lastGracefulShutdown: '2026-06-01T00:00:00.000Z' } },
+      }),
+      'utf8',
+    );
+    await mkdir(join(paths.projectsDir, encodeProjectPath(projectPath)), { recursive: true });
+    const server = await testServer(home);
+    const headers = tokenHeaders();
+
+    const projects = await server.inject({ method: 'GET', url: '/api/projects', headers });
+    const projectId = projects.json().projects[0].id;
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/sessions/session-does-not-exist/replay`,
+      headers,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  test('returns malformed replay diagnostics through the read-only endpoint', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-replay-malformed-'));
+    const projectPath = join(home, 'my-project');
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await mkdir(projectPath, { recursive: true });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [],
+        projects: { [projectPath]: { lastGracefulShutdown: '2026-06-01T00:00:00.000Z' } },
+      }),
+      'utf8',
+    );
+    const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'session-1.jsonl'),
+      `${JSON.stringify({
+        type: 'user',
+        sessionId: 'session-1',
+        timestamp: '2026-06-01T00:00:00.000Z',
+        cwd: projectPath,
+        message: { role: 'user', content: 'Read README.md' },
+      })}\n`,
+      'utf8',
+    );
+    await writeFile(join(projectDir, 'session-1.replay.json'), '{not json', 'utf8');
+    const server = await testServer(home);
+    const headers = tokenHeaders();
+
+    const projects = await server.inject({ method: 'GET', url: '/api/projects', headers });
+    const projectId = projects.json().projects[0].id;
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/sessions/session-1/replay`,
+      headers,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: 'malformed',
+      available: true,
+      sessionId: 'session-1',
+      diagnostics: [{ level: 'warn', message: 'Replay file is not valid JSON.' }],
+    });
+  });
+
   test('surfaces a config-dir conflict warning through /api/projects diagnostics', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-conflict-'));
     const preferred = await mkdtemp(join(tmpdir(), 'ocs-preferred-'));

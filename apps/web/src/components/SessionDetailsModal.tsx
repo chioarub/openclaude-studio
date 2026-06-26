@@ -240,7 +240,7 @@ export function SessionDetailsModal({
       })
       .catch((err: unknown) => {
         if (!ignore) {
-          setReplay(null);
+          setReplay(undefined);
           setReplayError(err instanceof Error ? err.message : 'Unable to load session replay.');
         }
       })
@@ -2710,6 +2710,15 @@ function SessionReplayPanel({
   const [toolFilter, setToolFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [copiedStep, setCopiedStep] = useState<number | null>(null);
+  const copiedStepResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copiedStepResetTimerRef.current) {
+        clearTimeout(copiedStepResetTimerRef.current);
+      }
+    };
+  }, []);
 
   if (loading) {
     return (
@@ -2797,10 +2806,8 @@ function SessionReplayPanel({
 
   const filteredSteps = steps.filter((step) => {
     if (stepFilter !== 'all' && step.type !== stepFilter) return false;
-    if (step.type === 'tool') {
-      if (toolFilter !== 'all' && step.toolName !== toolFilter) return false;
-      if (statusFilter !== 'all' && step.resultStatus !== statusFilter) return false;
-    }
+    if (toolFilter !== 'all' && (step.type !== 'tool' || step.toolName !== toolFilter)) return false;
+    if (statusFilter !== 'all' && (step.type !== 'tool' || step.resultStatus !== statusFilter)) return false;
     return true;
   });
 
@@ -2817,8 +2824,14 @@ function SessionReplayPanel({
         document.execCommand('copy');
         document.body.removeChild(textarea);
       }
+      if (copiedStepResetTimerRef.current) {
+        clearTimeout(copiedStepResetTimerRef.current);
+      }
       setCopiedStep(step.stepNumber);
-      setTimeout(() => setCopiedStep(null), 2000);
+      copiedStepResetTimerRef.current = setTimeout(() => {
+        setCopiedStep(null);
+        copiedStepResetTimerRef.current = null;
+      }, 2000);
     } catch {
       // Clipboard not available
     }
@@ -2954,7 +2967,8 @@ function ReplayStepCard({
   copied: boolean;
   onCopy: () => void;
 }) {
-  const timestamp = step.timestamp ? new Date(parseTimestamp(step.timestamp)) : null;
+  const timestampMs = step.timestamp ? Date.parse(step.timestamp) : Number.NaN;
+  const timestamp = Number.isNaN(timestampMs) ? null : new Date(timestampMs);
 
   return (
     <div className="flex flex-col gap-2 p-3 rounded-lg border border-hairline-soft bg-surface">
@@ -3124,29 +3138,46 @@ function StepContent({ step }: { step: SessionReplayStep }) {
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  const minutes = Math.floor(ms / 60000);
-  const seconds = Math.round((ms % 60000) / 1000);
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
   return `${minutes}m ${seconds}s`;
 }
 
-function normalizeReplayResponse(
-  data: SessionReplayResponse | null,
-): SessionReplayResponse | null {
+function normalizeReplayResponse(data: unknown): SessionReplayResponse | null {
   if (data === null) return null;
-  if (data.status !== 'available') return data;
-  const summary = data.summary ?? undefined;
+  if (!isRecord(data)) {
+    return malformedReplayResponse('unknown', 'Replay response is not an object.');
+  }
+  if (
+    data.status !== 'available' &&
+    data.status !== 'unavailable' &&
+    data.status !== 'unsupported_version' &&
+    data.status !== 'malformed' &&
+    data.status !== 'conflict'
+  ) {
+    return malformedReplayResponse(replaySessionId(data), 'Replay response status is not recognized.');
+  }
+  if (data.status !== 'available') return data as SessionReplayResponse;
+  const availableReplay = data as Partial<Extract<SessionReplayResponse, { status: 'available' }>>;
+  if (typeof availableReplay.version !== 'number') {
+    return malformedReplayResponse(replaySessionId(data), 'Replay version is missing from the server response.');
+  }
+  const summary = availableReplay.summary ?? undefined;
   if (!summary) {
-    return {
-      ...data,
-      status: 'malformed',
-      version: data.version ?? null,
-      diagnostics: [
-        { level: 'warn', message: 'Replay summary is missing from the server response.' },
-      ],
-    };
+    return malformedReplayResponse(
+      replaySessionId(data),
+      'Replay summary is missing from the server response.',
+      typeof availableReplay.version === 'number' ? availableReplay.version : null,
+    );
   }
   return {
-    ...data,
+    status: 'available',
+    supported: true,
+    available: true,
+    sessionId: replaySessionId(data),
+    version: availableReplay.version,
+    createdAt: typeof availableReplay.createdAt === 'string' ? availableReplay.createdAt : null,
     summary: {
       totalSteps: typeof summary.totalSteps === 'number' ? summary.totalSteps : 0,
       toolBreakdown: Array.isArray(summary.toolBreakdown)
@@ -3171,6 +3202,27 @@ function normalizeReplayResponse(
           .map(normalizeReplayStep)
           .filter((step): step is SessionReplayStep => step !== null)
       : [],
+    stepsTruncated: availableReplay.stepsTruncated === true,
+    diagnostics: Array.isArray(availableReplay.diagnostics) ? availableReplay.diagnostics : [],
+  };
+}
+
+function replaySessionId(data: Record<string, unknown>): string {
+  return typeof data.sessionId === 'string' ? data.sessionId : 'unknown';
+}
+
+function malformedReplayResponse(
+  sessionId: string,
+  message: string,
+  version: number | null = null,
+): SessionReplayResponse {
+  return {
+    status: 'malformed',
+    supported: true,
+    available: true,
+    sessionId,
+    version,
+    diagnostics: [{ level: 'warn', message }],
   };
 }
 

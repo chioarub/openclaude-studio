@@ -1,7 +1,8 @@
 import { lstat } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import type {
+  Diagnostic,
   SessionReplayErrorStep,
   SessionReplayResponse,
   SessionReplayRetryStep,
@@ -14,7 +15,10 @@ import type {
 import { invalidRequest } from '../http/errors.js';
 import { redactTextSecrets } from './redaction.js';
 import { readBoundedTextFile } from './safeFile.js';
-import { findTranscriptFilesForProject, parseTranscriptFilesForProject } from './sessions.js';
+import {
+  findTranscriptFilesForProject,
+  parseTranscriptFilesForProjectWithDiagnostics,
+} from './sessions.js';
 
 type SessionProject = { path: string };
 
@@ -50,9 +54,16 @@ export async function readSessionReplay(
   validateSessionId(sessionId);
 
   const transcriptFiles = await findTranscriptFilesForProject(projectsDir, project.path);
-  const sessionEntries = (await parseTranscriptFilesForProject(transcriptFiles, project.path))
-    .filter((entry) => entry.sessionId === sessionId);
+  const transcriptResult = await parseTranscriptFilesForProjectWithDiagnostics(
+    transcriptFiles,
+    project.path,
+  );
+  const sessionEntries = transcriptResult.entries.filter((entry) => entry.sessionId === sessionId);
   if (sessionEntries.length === 0) {
+    const diagnostics = diagnosticsForSessionTranscript(transcriptResult.diagnostics, sessionId);
+    if (diagnostics.length > 0) {
+      return unavailableWithDiagnostics(sessionId, diagnostics);
+    }
     return unavailable(sessionId, 'No project-scoped transcript found for this session.');
   }
 
@@ -151,6 +162,19 @@ function uniqueRoots(roots: string[]): string[] {
   return [...new Set(roots)].sort((a, b) => a.localeCompare(b));
 }
 
+function diagnosticsForSessionTranscript(
+  diagnostics: Diagnostic[],
+  sessionId: string,
+): Diagnostic[] {
+  const expectedFile = `${sessionId}.jsonl`;
+  return diagnostics.flatMap((diagnostic) => {
+    if (!diagnostic.path || basename(diagnostic.path) !== expectedFile) {
+      return [];
+    }
+    return [{ level: diagnostic.level, message: diagnostic.message }];
+  });
+}
+
 function parseReplayIndex(sessionId: string, raw: unknown): SessionReplayResponse {
   if (!isObject(raw)) {
     return malformed(sessionId, null, 'Replay root is not an object.');
@@ -196,12 +220,13 @@ function parseReplayIndex(sessionId: string, raw: unknown): SessionReplayRespons
     return malformed(sessionId, version, 'Replay steps is missing or not an array.');
   }
 
-  const summaryResult = parseSummary(summaryRaw);
+  const diagnostics: Diagnostic[] = [];
+  const summaryResult = parseSummary(summaryRaw, diagnostics);
   if ('diagnostic' in summaryResult) {
     return malformed(sessionId, version, summaryResult.diagnostic);
   }
 
-  const stepResults = stepsRaw.map((step, index) => parseStep(step, index));
+  const stepResults = stepsRaw.map((step, index) => parseStep(step, index, diagnostics));
   const failedStepParse = stepResults.find((r) => r === null);
   if (failedStepParse !== undefined && failedStepParse === null) {
     return malformed(sessionId, version, 'One or more replay steps are malformed.');
@@ -221,18 +246,24 @@ function parseReplayIndex(sessionId: string, raw: unknown): SessionReplayRespons
     summary: summaryResult.summary,
     steps: boundedSteps,
     stepsTruncated: truncated,
-    diagnostics: truncated
-      ? [
-          {
-            level: 'warn',
-            message: `Replay truncated to the first ${MAX_STEPS} steps.`,
-          },
-        ]
-      : [],
+    diagnostics: [
+      ...diagnostics,
+      ...(truncated
+        ? [
+            {
+              level: 'warn' as const,
+              message: `Replay truncated to the first ${MAX_STEPS} steps.`,
+            },
+          ]
+        : []),
+    ],
   };
 }
 
-function parseSummary(raw: Record<string, unknown>):
+function parseSummary(
+  raw: Record<string, unknown>,
+  diagnostics: Diagnostic[],
+):
   | { summary: SessionReplaySummary }
   | { diagnostic: string } {
   const totalSteps = parseNonNegativeInt(raw.totalSteps);
@@ -247,10 +278,11 @@ function parseSummary(raw: Record<string, unknown>):
 
   const toolBreakdown = parseToolBreakdown(toolBreakdownRaw);
 
-  const filesModifiedResult = parseStringArray(
+  const filesModifiedResult = parseReplayFilePathArray(
     raw.filesModified,
     MAX_FILES_MODIFIED,
     MAX_FILE_PATH_LENGTH,
+    diagnostics,
   );
   if (!filesModifiedResult) {
     return { diagnostic: 'Replay summary.filesModified is invalid.' };
@@ -273,7 +305,7 @@ function parseSummary(raw: Record<string, unknown>):
     summary: {
       totalSteps,
       toolBreakdown,
-      filesModified: redactEach(filesModifiedResult.items),
+      filesModified: filesModifiedResult.items,
       filesModifiedTruncated: filesModifiedResult.truncated,
       durationMs,
       startTimestamp: parseTimestamp(raw.startTimestamp),
@@ -301,7 +333,11 @@ function parseToolBreakdown(
   return entries;
 }
 
-function parseStep(raw: unknown, index: number): SessionReplayStep | null {
+function parseStep(
+  raw: unknown,
+  index: number,
+  diagnostics: Diagnostic[],
+): SessionReplayStep | null {
   if (!isObject(raw)) {
     return null;
   }
@@ -311,7 +347,7 @@ function parseStep(raw: unknown, index: number): SessionReplayStep | null {
   const type = raw.type;
 
   if (type === 'tool') {
-    return parseToolStep(raw, stepNumber, timestamp);
+    return parseToolStep(raw, stepNumber, timestamp, diagnostics);
   }
   if (type === 'user') {
     return parseUserStep(raw, stepNumber, timestamp);
@@ -329,32 +365,29 @@ function parseToolStep(
   raw: Record<string, unknown>,
   stepNumber: number,
   timestamp: string | null,
+  diagnostics: Diagnostic[],
 ): SessionReplayToolStep | null {
   const toolName = typeof raw.toolName === 'string' ? raw.toolName : null;
   if (!toolName) {
     return null;
   }
 
-  const inputSummary =
-    typeof raw.inputSummary === 'string' ? raw.inputSummary : '';
-  const truncatedInput = inputSummary.length > MAX_INPUT_SUMMARY_LENGTH;
-  const boundedInput = truncatedInput
-    ? inputSummary.slice(0, MAX_INPUT_SUMMARY_LENGTH)
-    : inputSummary;
+  const inputSummary = truncateRedactedString(
+    typeof raw.inputSummary === 'string' ? raw.inputSummary : '',
+    MAX_INPUT_SUMMARY_LENGTH,
+  );
 
   const resultStatus = parseResultStatus(raw.resultStatus);
 
-  const resultPreviewRaw = typeof raw.resultPreview === 'string' ? raw.resultPreview : null;
-  const resultPreviewTruncated =
-    resultPreviewRaw !== null && resultPreviewRaw.length > MAX_RESULT_PREVIEW_LENGTH;
-  const resultPreview = resultPreviewRaw
-    ? resultPreviewRaw.slice(0, MAX_RESULT_PREVIEW_LENGTH)
+  const resultPreview = typeof raw.resultPreview === 'string'
+    ? truncateRedactedString(raw.resultPreview, MAX_RESULT_PREVIEW_LENGTH)
     : null;
 
-  const filesModifiedResult = parseStringArray(
+  const filesModifiedResult = parseReplayFilePathArray(
     raw.filesModified,
     MAX_FILES_MODIFIED,
     MAX_FILE_PATH_LENGTH,
+    diagnostics,
   );
 
   const durationMs = parseNonNegativeInt(raw.durationMs) ?? 0;
@@ -367,14 +400,14 @@ function parseToolStep(
     stepNumber,
     toolName: redactTextSecrets(toolName),
     toolUseId: toolUseId ? redactTextSecrets(toolUseId) : null,
-    inputSummary: redactTextSecrets(boundedInput),
-    inputSummaryTruncated: truncatedInput,
+    inputSummary: inputSummary.value,
+    inputSummaryTruncated: inputSummary.truncated,
     resultStatus,
-    resultPreview: resultPreview ? redactTextSecrets(resultPreview) : null,
-    resultPreviewTruncated,
+    resultPreview: resultPreview ? resultPreview.value : null,
+    resultPreviewTruncated: resultPreview ? resultPreview.truncated : false,
     durationMs,
     timestamp,
-    filesModified: redactEach(filesModifiedResult ? filesModifiedResult.items : []),
+    filesModified: filesModifiedResult ? filesModifiedResult.items : [],
     filesModifiedTruncated: filesModifiedResult ? filesModifiedResult.truncated : false,
     repeatedAttemptNumber,
     isRepeatedAttempt,
@@ -390,13 +423,12 @@ function parseUserStep(
   if (content === null) {
     return null;
   }
-  const truncated = content.length > MAX_USER_CONTENT_LENGTH;
-  const bounded = truncated ? content.slice(0, MAX_USER_CONTENT_LENGTH) : content;
+  const bounded = truncateRedactedString(content, MAX_USER_CONTENT_LENGTH);
   return {
     type: 'user',
     stepNumber,
-    content: redactTextSecrets(bounded),
-    contentTruncated: truncated,
+    content: bounded.value,
+    contentTruncated: bounded.truncated,
     timestamp,
   };
 }
@@ -410,8 +442,7 @@ function parseRetryStep(
   if (reason === null) {
     return null;
   }
-  const reasonTruncated = reason.length > MAX_REASON_LENGTH;
-  const boundedReason = reasonTruncated ? reason.slice(0, MAX_REASON_LENGTH) : reason;
+  const boundedReason = truncateRedactedString(reason, MAX_REASON_LENGTH);
 
   const retryType =
     raw.retryType === 'api' || raw.retryType === 'permission'
@@ -427,9 +458,9 @@ function parseRetryStep(
     attempt: optionalNonNegativeInt(raw.attempt),
     maxRetries: optionalNonNegativeInt(raw.maxRetries),
     retryDelayMs: optionalNonNegativeInt(raw.retryDelayMs),
-    reason: redactTextSecrets(boundedReason),
-    reasonTruncated,
-    commands: redactEach(commandsResult ? commandsResult.items : []),
+    reason: boundedReason.value,
+    reasonTruncated: boundedReason.truncated,
+    commands: commandsResult ? commandsResult.items : [],
     commandsTruncated: commandsResult ? commandsResult.truncated : false,
     timestamp,
   };
@@ -444,13 +475,12 @@ function parseErrorStep(
   if (error === null) {
     return null;
   }
-  const truncated = error.length > MAX_REASON_LENGTH;
-  const bounded = truncated ? error.slice(0, MAX_REASON_LENGTH) : error;
+  const bounded = truncateRedactedString(error, MAX_REASON_LENGTH);
   return {
     type: 'error',
     stepNumber,
-    error: redactTextSecrets(bounded),
-    errorTruncated: truncated,
+    error: bounded.value,
+    errorTruncated: bounded.truncated,
     timestamp,
   };
 }
@@ -484,19 +514,61 @@ function parseStringArray(
   if (valid.length !== value.length) {
     return null;
   }
-  const truncated = valid.length > maxItems;
+  let truncated = valid.length > maxItems;
   const bounded = truncated ? valid.slice(0, maxItems) : valid;
-  const mapped = bounded.map((item) =>
-    item.length > maxLength ? item.slice(0, maxLength) : item,
-  );
+  const mapped: string[] = [];
+  for (const item of bounded) {
+    const normalized = truncateRedactedString(item, maxLength);
+    if (normalized.truncated) {
+      truncated = true;
+    }
+    mapped.push(normalized.value);
+  }
+  return { items: mapped, truncated };
+}
+
+function parseReplayFilePathArray(
+  value: unknown,
+  maxItems: number,
+  maxLength: number,
+  diagnostics: Diagnostic[],
+): { items: string[]; truncated: boolean } | null {
+  if (!Array.isArray(value)) {
+    if (value === undefined || value === null) {
+      return { items: [], truncated: false };
+    }
+    return null;
+  }
+  const valid = value.filter((item): item is string => typeof item === 'string');
+  if (valid.length !== value.length) {
+    return null;
+  }
+  let truncated = valid.length > maxItems;
+  const bounded = truncated ? valid.slice(0, maxItems) : valid;
+  const mapped: string[] = [];
+  for (const item of bounded) {
+    const normalized = normalizeReplayFilePath(item, maxLength);
+    if (!normalized) {
+      truncated = true;
+      diagnostics.push({
+        level: 'warn',
+        message: 'Unsafe replay file path was omitted from the response.',
+      });
+      continue;
+    }
+    if (normalized.truncated) {
+      truncated = true;
+    }
+    mapped.push(normalized.value);
+  }
   return { items: mapped, truncated };
 }
 
 function parseNonNegativeInt(value: unknown): number | null {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     return null;
   }
-  return Math.floor(value);
+  return value;
 }
 
 function optionalNonNegativeInt(value: unknown): number | null {
@@ -521,13 +593,58 @@ function parseCreatedAt(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null;
   }
-  const bounded =
-    value.length > MAX_CREATED_AT_LENGTH ? value.slice(0, MAX_CREATED_AT_LENGTH) : value;
-  return redactTextSecrets(bounded);
+  return truncateRedactedString(value, MAX_CREATED_AT_LENGTH).value;
 }
 
-function redactEach(items: string[]): string[] {
-  return items.map((item) => redactTextSecrets(item));
+function truncateRedactedString(
+  value: string,
+  maxLength: number,
+): { value: string; truncated: boolean } {
+  const redacted = redactTextSecrets(value);
+  const truncated = value.length > maxLength || redacted.length > maxLength;
+  if (redacted.length <= maxLength) {
+    return { value: redacted, truncated };
+  }
+
+  return {
+    value: trimPartialRedactionMarker(redacted.slice(0, maxLength)),
+    truncated,
+  };
+}
+
+function trimPartialRedactionMarker(value: string): string {
+  const redactionMarker = '<redacted>';
+  for (let length = redactionMarker.length - 1; length > 0; length -= 1) {
+    if (value.endsWith(redactionMarker.slice(0, length))) {
+      return value.slice(0, -length);
+    }
+  }
+  return value;
+}
+
+function normalizeReplayFilePath(
+  value: string,
+  maxLength: number,
+): { value: string; truncated: boolean } | null {
+  const normalizedSeparators = value.replace(/\\/g, '/');
+  if (!isSafeReplayFilePath(normalizedSeparators)) {
+    return null;
+  }
+  const redacted = truncateRedactedString(normalizedSeparators, maxLength);
+  if (!isSafeReplayFilePath(redacted.value)) {
+    return null;
+  }
+  return redacted;
+}
+
+function isSafeReplayFilePath(value: string): boolean {
+  if (!value || value.startsWith('/') || /^[A-Za-z]:\//.test(value) || value.includes('\0')) {
+    return false;
+  }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    return false;
+  }
+  return value.split('/').every((part) => part !== '' && part !== '.' && part !== '..');
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -541,6 +658,19 @@ function unavailable(sessionId: string, message: string): SessionReplayResponse 
     available: false,
     sessionId,
     diagnostics: [{ level: 'info', message }],
+  };
+}
+
+function unavailableWithDiagnostics(
+  sessionId: string,
+  diagnostics: Diagnostic[],
+): SessionReplayResponse {
+  return {
+    status: 'unavailable',
+    supported: true,
+    available: false,
+    sessionId,
+    diagnostics,
   };
 }
 

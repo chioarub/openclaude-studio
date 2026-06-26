@@ -424,7 +424,7 @@ describe('readBackgroundSessionLogs', () => {
     expect(result.totalLines).toBe(3);
     expect(result.entries).toHaveLength(3);
     expect(result.entries[1]?.text).toBe('OPENAI_API_KEY=<redacted> calling api');
-    expect(result.entries[2]?.text).toBe('Authorization: Bearer <redacted>');
+    expect(result.entries[2]?.text).toBe('Authorization: <redacted>');
   });
 
   test('returns a bounded stderr window', async () => {

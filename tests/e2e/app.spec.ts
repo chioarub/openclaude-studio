@@ -133,6 +133,31 @@ test.beforeAll(async () => {
     ].join('\n'),
     'utf8',
   );
+  await writeFile(
+    join(paths.projectsDir, encodeProjectPath(projectPath), 'session-2.jsonl'),
+    [
+      JSON.stringify({
+        type: 'user',
+        sessionId: 'session-2',
+        timestamp: '2026-05-28T08:03:00.000Z',
+        cwd: projectPath,
+        message: { role: 'user', content: 'Inspect missing replay' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'session-2',
+        timestamp: '2026-05-28T08:03:30.000Z',
+        cwd: projectPath,
+        message: {
+          role: 'assistant',
+          model: 'claude-sonnet',
+          usage: { input_tokens: 4, output_tokens: 6 },
+          content: [{ type: 'text', text: 'No replay sidecar exists.' }],
+        },
+      }),
+    ].join('\n'),
+    'utf8',
+  );
   await mkdir(paths.plansDir, { recursive: true });
   await writeFile(
     join(paths.plansDir, 'release-plan.md'),
@@ -231,6 +256,12 @@ test('loads project overview, sessions, provider, and logs', async ({ page }) =>
   await detailsDialog.getByRole('tab', { name: /Replay/i }).click();
   await expect(detailsDialog.getByRole('tabpanel', { name: /Replay/i })).toBeVisible();
   await expect(detailsDialog.getByText('Edit src/api.ts')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(detailsDialog).toBeHidden();
+  await page.locator('tr[aria-label="Open details for Inspect missing replay"]').click();
+  await expect(detailsDialog).toBeVisible();
+  await detailsDialog.getByRole('tab', { name: /Replay/i }).click();
+  await expect(detailsDialog.getByText('No replay data available for this session.')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(detailsDialog).toBeHidden();
   await page.getByRole('link', { name: /^Logs$/ }).click();
