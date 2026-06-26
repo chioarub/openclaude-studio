@@ -53,6 +53,8 @@ import type {
   LogsSearchResponse,
   LogsWindowResponse,
   OverviewResponse,
+  ProviderCredentialMode,
+  ProviderCredentialState,
   ProviderCustomHeaderSummary,
   ProviderProfileField,
   ProviderProfileTemplate,
@@ -61,6 +63,13 @@ import type {
   ProjectSummary,
   SafeProviderProfile,
   SessionSummary,
+  StartupProviderCredential,
+  StartupProviderProfileSummary,
+  StudioProviderAuthKind,
+  StudioProviderCategory,
+  StudioProviderDiscoveryMode,
+  StudioProviderRecognition,
+  StudioProviderTransport,
 } from '@openclaude-studio/shared';
 
 import { ApiRequestError, createApiClient, normalizeBaseUrl, type ApiClient } from './api';
@@ -1487,7 +1496,7 @@ function ProviderPage({
   );
 }
 
-function normalizeProviderProfilesResponse(response: unknown): ProviderProfilesResponse {
+export function normalizeProviderProfilesResponse(response: unknown): ProviderProfilesResponse {
   const payload = isRecord(response) ? response : {};
   const profiles = Array.isArray(payload.profiles)
     ? payload.profiles.map((profile, index) => normalizeSafeProviderProfile(profile, index))
@@ -1498,9 +1507,11 @@ function normalizeProviderProfilesResponse(response: unknown): ProviderProfilesR
   const diagnostics = Array.isArray(payload.diagnostics)
     ? payload.diagnostics.map(normalizeDiagnostic)
     : [];
+  const startupProfile = normalizeStartupProviderProfile(payload.startupProfile);
   const summary: Record<string, unknown> = isRecord(payload.summary) ? payload.summary : {};
   const warningCount = profiles.filter((profile) => profile.validation?.status === 'warning').length;
   const errorCount = profiles.filter((profile) => profile.validation?.status === 'error').length;
+  const recognizedCount = profiles.filter((profile) => profile.recognizedProvider.id !== 'custom').length;
 
   return {
     path: stringOrFallback(payload.path, ''),
@@ -1508,6 +1519,7 @@ function normalizeProviderProfilesResponse(response: unknown): ProviderProfilesR
     activeProviderProfileId: stringOrNull(payload.activeProviderProfileId),
     sensitiveFieldsRedacted: true,
     profiles,
+    startupProfile,
     templates,
     summary: {
       total: finiteNumberOr(summary.total, profiles.length),
@@ -1515,6 +1527,10 @@ function normalizeProviderProfilesResponse(response: unknown): ProviderProfilesR
       valid: finiteNumberOr(summary.valid, profiles.filter((profile) => profile.validation?.status === 'valid').length),
       warnings: finiteNumberOr(summary.warnings, warningCount),
       errors: finiteNumberOr(summary.errors, errorCount),
+      recognized: finiteNumberOr(summary.recognized, recognizedCount),
+      startupProfileConfigured: typeof summary.startupProfileConfigured === 'boolean'
+        ? summary.startupProfileConfigured
+        : startupProfile.exists && startupProfile.profile !== null,
       templates: finiteNumberOr(summary.templates, templates.length),
     },
     diagnostics,
@@ -1541,6 +1557,42 @@ const providerProfileFields: readonly ProviderProfileField[] = [
   'activeProviderProfileId',
 ];
 const validationSeverities: ReadonlyArray<ProviderProfileValidationIssue['severity']> = ['info', 'warn', 'error'];
+const studioProviderCategories: ReadonlyArray<StudioProviderCategory> = [
+  'hosted',
+  'local',
+  'aggregating',
+  'subscription',
+  'cloud',
+  'custom',
+  'unknown',
+];
+const studioProviderAuthKinds: ReadonlyArray<StudioProviderAuthKind> = [
+  'api-key',
+  'oauth',
+  'token',
+  'adc',
+  'none',
+  'unknown',
+];
+const studioProviderTransports: ReadonlyArray<StudioProviderTransport> = [
+  'anthropic-native',
+  'anthropic-proxy',
+  'openai-compatible',
+  'local',
+  'gemini-native',
+  'bedrock',
+  'vertex',
+  'foundry',
+  'unknown',
+];
+const studioProviderDiscoveryModes: ReadonlyArray<StudioProviderDiscoveryMode> = [
+  'static',
+  'dynamic',
+  'hybrid',
+  'local',
+  'unknown',
+];
+const providerCredentialModes: ReadonlyArray<ProviderCredentialMode> = ['none', 'single', 'pool', 'unknown'];
 
 function normalizeSafeProviderProfile(input: unknown, index: number): SafeProviderProfile {
   const profile = isRecord(input) ? input : {};
@@ -1548,6 +1600,17 @@ function normalizeSafeProviderProfile(input: unknown, index: number): SafeProvid
   const validationIssues = Array.isArray(validation.issues)
     ? validation.issues.map(normalizeProviderProfileValidationIssue)
     : [];
+  const apiKeySet = profile.apiKeySet === true;
+  const authHeaderValueSet = profile.authHeaderValueSet === true;
+  const legacyCredentialFallback: ProviderCredentialState | undefined = apiKeySet || authHeaderValueSet
+    ? {
+        credentialMode: 'single',
+        credentialCount: 1,
+        credentialConfigured: true,
+        credentialInvalid: false,
+        credentialSources: [],
+      }
+    : undefined;
 
   return {
     id: stringOrFallback(profile.id, `provider_${index + 1}`),
@@ -1556,20 +1619,108 @@ function normalizeSafeProviderProfile(input: unknown, index: number): SafeProvid
     model: stringOrFallback(profile.model, ''),
     baseUrl: stringOrNull(profile.baseUrl),
     active: profile.active === true,
-    apiKeySet: profile.apiKeySet === true,
-    authHeaderValueSet: profile.authHeaderValueSet === true,
+    apiKeySet,
+    authHeaderValueSet,
     apiFormat: stringOrNull(profile.apiFormat),
     authHeader: stringOrNull(profile.authHeader),
     authScheme: stringOrNull(profile.authScheme),
     customHeaders: Array.isArray(profile.customHeaders)
       ? profile.customHeaders.map(normalizeProviderCustomHeader).filter((header) => header.name.length > 0)
       : [],
+    recognizedProvider: normalizeStudioProviderRecognition(profile.recognizedProvider, {
+      ...defaultStudioProviderRecognition(),
+      label: stringOrFallback(profile.templateLabel, 'Custom OpenAI-compatible'),
+    }),
+    credential: normalizeProviderCredentialState(profile.credential, legacyCredentialFallback),
     templateId: providerTemplateIdOr(profile.templateId, 'custom-openai'),
     templateLabel: stringOrFallback(profile.templateLabel, 'Custom OpenAI-compatible'),
     validation: {
       status: providerValidationStatusOr(validation.status, 'valid'),
       issues: validationIssues,
     },
+  };
+}
+
+function normalizeStartupProviderProfile(input: unknown): StartupProviderProfileSummary {
+  const profile = isRecord(input) ? input : {};
+
+  return {
+    path: stringOrFallback(profile.path, ''),
+    exists: profile.exists === true,
+    profile: stringOrNull(profile.profile),
+    createdAt: stringOrNull(profile.createdAt),
+    configuredNonSecretFields: stringArrayOrEmpty(profile.configuredNonSecretFields),
+    credentials: Array.isArray(profile.credentials)
+      ? profile.credentials.map(normalizeStartupProviderCredential).filter((credential) => credential.name.length > 0)
+      : [],
+    credential: normalizeProviderCredentialState(profile.credential),
+    recognizedProvider: normalizeStudioProviderRecognition(profile.recognizedProvider),
+    diagnostics: Array.isArray(profile.diagnostics) ? profile.diagnostics.map(normalizeDiagnostic) : [],
+  };
+}
+
+function normalizeStartupProviderCredential(input: unknown): StartupProviderCredential {
+  const credential = isRecord(input) ? input : {};
+
+  return {
+    name: stringOrFallback(credential.name, ''),
+    configured: credential.configured === true,
+  };
+}
+
+function normalizeStudioProviderRecognition(
+  input: unknown,
+  fallback: StudioProviderRecognition = defaultStudioProviderRecognition(),
+): StudioProviderRecognition {
+  const provider = isRecord(input) ? input : {};
+  const id = stringOrFallback(provider.id, fallback.id).trim();
+
+  return {
+    id: id.length > 0 ? id : fallback.id,
+    label: stringOrFallback(provider.label, fallback.label),
+    category: studioProviderCategoryOr(provider.category, fallback.category),
+    defaultBaseUrl: stringOrNull(provider.defaultBaseUrl),
+    authKind: studioProviderAuthKindOr(provider.authKind, fallback.authKind),
+    credentialEnvVars: stringArrayOrEmpty(provider.credentialEnvVars),
+    transport: studioProviderTransportOr(provider.transport, fallback.transport),
+    discoveryMode: studioProviderDiscoveryModeOr(provider.discoveryMode, fallback.discoveryMode),
+    safeTemplateAvailable: provider.safeTemplateAvailable === true,
+    inspectionOnly: provider.inspectionOnly === true,
+  };
+}
+
+function defaultStudioProviderRecognition(): StudioProviderRecognition {
+  return {
+    id: 'custom',
+    label: 'Custom OpenAI-compatible',
+    category: 'custom',
+    defaultBaseUrl: null,
+    authKind: 'unknown',
+    credentialEnvVars: [],
+    transport: 'openai-compatible',
+    discoveryMode: 'unknown',
+    safeTemplateAvailable: false,
+    inspectionOnly: false,
+  };
+}
+
+function normalizeProviderCredentialState(input: unknown, fallback?: ProviderCredentialState): ProviderCredentialState {
+  const credential = isRecord(input) ? input : {};
+
+  return {
+    credentialMode: providerCredentialModeOr(credential.credentialMode, fallback?.credentialMode ?? 'unknown'),
+    credentialCount: typeof credential.credentialCount === 'number' && Number.isFinite(credential.credentialCount)
+      ? Math.max(0, Math.trunc(credential.credentialCount))
+      : fallback?.credentialCount ?? null,
+    credentialConfigured: typeof credential.credentialConfigured === 'boolean'
+      ? credential.credentialConfigured
+      : fallback?.credentialConfigured ?? false,
+    credentialInvalid: typeof credential.credentialInvalid === 'boolean'
+      ? credential.credentialInvalid
+      : fallback?.credentialInvalid ?? false,
+    credentialSources: Array.isArray(credential.credentialSources)
+      ? stringArrayOrEmpty(credential.credentialSources)
+      : fallback?.credentialSources ?? [],
   };
 }
 
@@ -1650,6 +1801,12 @@ function finiteNumberOr(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
+function stringArrayOrEmpty(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+}
+
 function stringOrFallback(value: unknown, fallback: string): string {
   return typeof value === 'string' ? value : fallback;
 }
@@ -1695,6 +1852,39 @@ function validationSeverityOr(
     : fallback;
 }
 
+function studioProviderCategoryOr(value: unknown, fallback: StudioProviderCategory): StudioProviderCategory {
+  return studioProviderCategories.includes(value as StudioProviderCategory)
+    ? value as StudioProviderCategory
+    : fallback;
+}
+
+function studioProviderAuthKindOr(value: unknown, fallback: StudioProviderAuthKind): StudioProviderAuthKind {
+  return studioProviderAuthKinds.includes(value as StudioProviderAuthKind)
+    ? value as StudioProviderAuthKind
+    : fallback;
+}
+
+function studioProviderTransportOr(value: unknown, fallback: StudioProviderTransport): StudioProviderTransport {
+  return studioProviderTransports.includes(value as StudioProviderTransport)
+    ? value as StudioProviderTransport
+    : fallback;
+}
+
+function studioProviderDiscoveryModeOr(
+  value: unknown,
+  fallback: StudioProviderDiscoveryMode,
+): StudioProviderDiscoveryMode {
+  return studioProviderDiscoveryModes.includes(value as StudioProviderDiscoveryMode)
+    ? value as StudioProviderDiscoveryMode
+    : fallback;
+}
+
+function providerCredentialModeOr(value: unknown, fallback: ProviderCredentialMode): ProviderCredentialMode {
+  return providerCredentialModes.includes(value as ProviderCredentialMode)
+    ? value as ProviderCredentialMode
+    : fallback;
+}
+
 function providerProfileFieldOrNull(value: unknown): ProviderProfileField | null {
   return providerProfileFields.includes(value as ProviderProfileField) ? value as ProviderProfileField : null;
 }
@@ -1728,6 +1918,9 @@ function ProviderProfilesPanel({
             <DiagnosticNotice diagnostic={diagnostic} key={`${diagnostic.level}-${index}`} />
           ))}
         </div>
+      ) : null}
+      {response.startupProfile.exists || response.startupProfile.diagnostics.length > 0 ? (
+        <StartupProviderProfilePanel startupProfile={response.startupProfile} />
       ) : null}
       <div className="grid items-stretch gap-4 lg:grid-cols-2 2xl:grid-cols-3">
         {response.profiles.length === 0 ? (
@@ -1800,12 +1993,18 @@ function ProviderProfileCard({
         </div>
         <div className="flex shrink-0 flex-wrap justify-end gap-2">
           {profile.active ? <Badge label="active" tone="success" /> : null}
+          {profile.recognizedProvider.inspectionOnly ? <Badge label="inspection only" tone="warning" /> : null}
           <Badge label={validationStatusLabel(profile.validation.status)} tone={statusTone} />
         </div>
       </div>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <Info label="Template" value={profile.templateLabel} />
+        <Info label="Provider" value={profile.recognizedProvider.label} />
+        <Info label="Route" value={providerRouteLabel(profile.recognizedProvider)} />
+        <Info label="Discovery" value={providerDiscoveryLabel(profile.recognizedProvider.discoveryMode)} />
+        {profile.templateLabel !== profile.recognizedProvider.label ? (
+          <Info label="Template" value={profile.templateLabel} />
+        ) : null}
         <Info label="Base URL" value={profile.baseUrl ?? 'default'} />
         <Info label="API format" value={profile.apiFormat ?? 'provider default'} />
         <Info label="Auth header" value={profile.authHeader ?? 'provider default'} />
@@ -1841,8 +2040,15 @@ function ProviderProfileCard({
       ) : null}
 
       <div className="mt-4 flex flex-wrap gap-2">
-        <Badge label={profile.apiKeySet ? 'credential saved' : 'no saved credential'} tone={profile.apiKeySet ? 'success' : 'muted'} />
-        <Badge label={profile.authHeaderValueSet ? 'auth value saved' : 'no auth value'} tone={profile.authHeaderValueSet ? 'success' : 'muted'} />
+        <Badge label={providerCredentialLabel(profile.credential)} tone={providerCredentialTone(profile.credential)} />
+        {profile.credential.credentialSources.map((source) => (
+          <span
+            className="rounded-md border border-hairline-soft bg-surface-soft px-2 py-1 text-xs text-muted"
+            key={source}
+          >
+            {source}
+          </span>
+        ))}
       </div>
 
       <div className="mt-auto pt-4">
@@ -1871,6 +2077,77 @@ function ProviderProfileCard({
         />
       </div>
     </article>
+  );
+}
+
+function StartupProviderProfilePanel({ startupProfile }: { startupProfile: StartupProviderProfileSummary }) {
+  return (
+    <section className="rounded-lg border border-hairline-soft bg-canvas p-4 shadow-[0_1px_0_rgb(0_0_0/0.03)]">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <SectionHeading icon={KeyRound} label="Startup Launch Profile" />
+          <p className="mt-2 truncate text-sm text-muted" title={startupProfile.path}>
+            {startupProfile.exists ? startupProfile.path : 'No startup launch profile detected'}
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {startupProfile.recognizedProvider.inspectionOnly ? <Badge label="inspection only" tone="warning" /> : null}
+          <Badge label={providerCredentialLabel(startupProfile.credential)} tone={providerCredentialTone(startupProfile.credential)} />
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Info label="Provider" value={startupProfile.recognizedProvider.label} />
+        <Info label="Profile" value={startupProfile.profile ?? 'unknown'} />
+        <Info label="Route" value={providerRouteLabel(startupProfile.recognizedProvider)} />
+        <Info label="Discovery" value={providerDiscoveryLabel(startupProfile.recognizedProvider.discoveryMode)} />
+      </div>
+
+      {startupProfile.configuredNonSecretFields.length > 0 ? (
+        <div className="mt-4">
+          <div className="text-xs font-medium text-muted">Configured Fields</div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {startupProfile.configuredNonSecretFields.map((field) => (
+              <span className="rounded-md border border-hairline-soft bg-surface-soft px-2 py-1 font-mono text-xs text-muted" key={field}>
+                {field}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {startupProfile.credentials.length > 0 || startupProfile.credential.credentialSources.length > 0 ? (
+        <div className="mt-4">
+          <div className="text-xs font-medium text-muted">Credential State</div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {startupProfile.credentials.map((credential) => (
+              <span
+                className="rounded-md border border-hairline-soft bg-surface-soft px-2 py-1 font-mono text-xs text-muted"
+                key={credential.name}
+              >
+                {credential.name} {credential.configured ? 'configured' : 'not configured'}
+              </span>
+            ))}
+            {startupProfile.credential.credentialSources.map((source) => (
+              <span
+                className="rounded-md border border-hairline-soft bg-surface-soft px-2 py-1 text-xs text-muted"
+                key={source}
+              >
+                {source}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {startupProfile.diagnostics.length > 0 ? (
+        <div className="mt-4 space-y-2">
+          {startupProfile.diagnostics.map((diagnostic, index) => (
+            <DiagnosticNotice diagnostic={diagnostic} key={`${diagnostic.level}-${index}`} />
+          ))}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -1908,6 +2185,48 @@ function validationStatusLabel(status: SafeProviderProfile['validation']['status
   if (status === 'error') return 'Needs fix';
   if (status === 'warning') return 'Needs review';
   return 'Ready';
+}
+
+function providerRouteLabel(provider: StudioProviderRecognition): string {
+  return `${provider.category} / ${provider.transport}`;
+}
+
+function providerDiscoveryLabel(discoveryMode: StudioProviderDiscoveryMode): string {
+  return `${discoveryMode} discovery`;
+}
+
+function providerCredentialLabel(credential: ProviderCredentialState): string {
+  if (credential.credentialInvalid) {
+    return credential.credentialMode === 'pool' && credential.credentialCount !== null
+      ? `credential pool invalid (${credential.credentialCount})`
+      : 'credential invalid';
+  }
+
+  if (credential.credentialMode === 'pool') {
+    if (!credential.credentialConfigured) {
+      return 'credential pool not configured';
+    }
+    return credential.credentialCount !== null
+      ? `credential pool (${credential.credentialCount})`
+      : 'credential pool';
+  }
+
+  if (credential.credentialMode === 'single') {
+    return credential.credentialConfigured ? 'credential configured' : 'credential not configured';
+  }
+
+  if (credential.credentialMode === 'none') {
+    return 'no credential';
+  }
+
+  return 'credential state unavailable';
+}
+
+function providerCredentialTone(credential: ProviderCredentialState): 'danger' | 'muted' | 'success' | 'warning' {
+  if (credential.credentialInvalid) return 'danger';
+  if (credential.credentialConfigured) return 'success';
+  if (credential.credentialMode === 'unknown') return 'warning';
+  return 'muted';
 }
 
 const providerApiFormatOptions: ProviderOption[] = [

@@ -35,6 +35,64 @@ export type ProjectsResponse = {
   diagnostics: Diagnostic[];
 };
 
+export type StudioProviderCategory =
+  | 'hosted'
+  | 'local'
+  | 'aggregating'
+  | 'subscription'
+  | 'cloud'
+  | 'custom'
+  | 'unknown';
+
+export type StudioProviderAuthKind =
+  | 'api-key'
+  | 'oauth'
+  | 'token'
+  | 'adc'
+  | 'none'
+  | 'unknown';
+
+export type StudioProviderTransport =
+  | 'anthropic-native'
+  | 'anthropic-proxy'
+  | 'openai-compatible'
+  | 'local'
+  | 'gemini-native'
+  | 'bedrock'
+  | 'vertex'
+  | 'foundry'
+  | 'unknown';
+
+export type StudioProviderDiscoveryMode =
+  | 'static'
+  | 'dynamic'
+  | 'hybrid'
+  | 'local'
+  | 'unknown';
+
+export type StudioProviderRecognition = {
+  id: string;
+  label: string;
+  category: StudioProviderCategory;
+  defaultBaseUrl: string | null;
+  authKind: StudioProviderAuthKind;
+  credentialEnvVars: string[];
+  transport: StudioProviderTransport;
+  discoveryMode: StudioProviderDiscoveryMode;
+  safeTemplateAvailable: boolean;
+  inspectionOnly: boolean;
+};
+
+export type ProviderCredentialMode = 'none' | 'single' | 'pool' | 'unknown';
+
+export type ProviderCredentialState = {
+  credentialMode: ProviderCredentialMode;
+  credentialCount: number | null;
+  credentialConfigured: boolean;
+  credentialInvalid: boolean;
+  credentialSources: string[];
+};
+
 export type ProviderSummary = {
   id: string;
   name: string;
@@ -114,9 +172,28 @@ export type SafeProviderProfile = ProviderSummary & {
   authHeader: string | null;
   authScheme: 'bearer' | 'raw' | string | null;
   customHeaders: ProviderCustomHeaderSummary[];
+  recognizedProvider: StudioProviderRecognition;
+  credential: ProviderCredentialState;
   templateId: ProviderTemplateId;
   templateLabel: string;
   validation: ProviderProfileValidation;
+};
+
+export type StartupProviderCredential = {
+  name: string;
+  configured: boolean;
+};
+
+export type StartupProviderProfileSummary = {
+  path: string;
+  exists: boolean;
+  profile: string | null;
+  createdAt: string | null;
+  configuredNonSecretFields: string[];
+  credentials: StartupProviderCredential[];
+  credential: ProviderCredentialState;
+  recognizedProvider: StudioProviderRecognition;
+  diagnostics: Diagnostic[];
 };
 
 export type ProviderProfilesResponse = {
@@ -125,6 +202,7 @@ export type ProviderProfilesResponse = {
   activeProviderProfileId: string | null;
   sensitiveFieldsRedacted: true;
   profiles: SafeProviderProfile[];
+  startupProfile: StartupProviderProfileSummary;
   templates: ProviderProfileTemplate[];
   summary: {
     total: number;
@@ -132,6 +210,8 @@ export type ProviderProfilesResponse = {
     valid: number;
     warnings: number;
     errors: number;
+    recognized: number;
+    startupProfileConfigured: boolean;
     templates: number;
   };
   diagnostics: Diagnostic[];

@@ -24,6 +24,7 @@ Local API on 127.0.0.1:43110
 ~/.openclaude/file-history/
 ~/.openclaude/debug/
 ~/.openclaude/bg-sessions/
+~/.openclaude/.openclaude-profile.json
 ```
 
 ## Server Responsibilities
@@ -34,7 +35,7 @@ The server is intentionally narrow:
 - Read session summaries and rich session details from local project session files.
 - Produce read-only per-session change reviews from selected-session mutation events, bounded current project file reads, and scoped file-history backups.
 - Read project-scoped plans and tasks, plus session file-history context.
-- Read provider configuration with secret fields redacted, profile validation, and safe templates.
+- Read provider configuration with secret fields redacted, route recognition, credential-state metadata, profile validation, startup launch profile diagnostics, and safe templates.
 - Read debug logs through bounded, indexed windows.
 - Read background session metadata and bounded, redacted stdout/stderr logs.
 - Scope logs and diagnostics to the selected project where possible.
@@ -50,7 +51,7 @@ The web app is a read-only dashboard:
 - Control center overview
 - Session table and session details inspector
 - Plans & Tasks route with linked session context
-- Provider summary and read-only provider profile management
+- Provider summary and read-only provider profile management with safe credential diagnostics
 - System logs with filtering, search, virtualization, and copy-to-clipboard
 - Background session monitoring with status counters, filters, project linking, and bounded log inspection
 - Diagnostics
@@ -68,6 +69,7 @@ All public API response shapes should be defined in `packages/shared/src/api.ts`
 - Keep file reads bounded.
 - Avoid following symlinks for sensitive local file reads.
 - Redact likely secrets before sending data to the browser.
+- Represent provider credentials as booleans, counts, source labels, and diagnostics only; never return values, masked values, fingerprints, or pool order.
 - Build change review diffs only from bounded, redacted text content; report diagnostics instead of returning unsupported or oversized content.
 - Scope project-specific views by project/session identifiers when available.
 - Prefer explicit diagnostics over silent failure when local data is missing or malformed.
