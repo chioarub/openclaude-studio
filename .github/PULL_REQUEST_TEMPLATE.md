@@ -1,7 +1,5 @@
 ## Summary
 
-@coderabbitai summary
-
 ## Why
 
 ## Screenshots / recordings
