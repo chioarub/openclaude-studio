@@ -81,7 +81,7 @@ Local server on 127.0.0.1:43110
 ~/.openclaude/file-history/
 ~/.openclaude/debug/
 ~/.openclaude/bg-sessions/
-~/.openclaude/.openclaude-profile.json
+<resolved OpenClaude config root>/.openclaude-profile.json
 ```
 
 The web UI can run locally during development or be hosted as static assets. The server should run on the same machine as OpenClaude because it reads local OpenClaude files.

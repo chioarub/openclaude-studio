@@ -293,10 +293,14 @@ function toSafeProviderProfile(
   const provider = trimmedString(profile.provider) ?? 'unknown';
   const model = trimmedString(profile.model) ?? 'default';
   const baseUrlRaw = trimmedString(profile.baseUrl);
+  const apiKeySet =
+    hasNonEmptyString(profile.apiKey) ||
+    hasNonEmptyString(profile.authHeaderValue) ||
+    hasNonEmptyString(env.CODEX_API_KEY);
   const recognizedProvider = recognizeStudioProvider({
     provider,
     baseUrl: baseUrlRaw,
-    apiKeySet: hasNonEmptyString(profile.apiKey) || hasNonEmptyString(profile.authHeaderValue),
+    apiKeySet,
   });
   const credential = summarizeProviderCredentialState({
     savedApiKey: profile.apiKey,
@@ -310,7 +314,7 @@ function toSafeProviderProfile(
   const apiFormat = trimmedString(profile.apiFormat);
   const authHeader = trimmedString(profile.authHeader);
   const authScheme = trimmedString(profile.authScheme);
-  const validation = validateProfile(profile, index, context);
+  const validation = validateProfile(profile, index, context, credential);
 
   return {
     id,
@@ -362,7 +366,7 @@ async function readStartupProviderProfile(paths: OpenClaudePaths): Promise<Start
     return unavailableSummary([
       {
         level: 'warn',
-        message: `Unable to read startup profile: ${errorMessage(error)}`,
+        message: `Unable to read startup profile: ${startupProfileReadFailureMessage(error)}`,
         path,
       },
     ]);
@@ -406,7 +410,7 @@ async function readStartupProviderProfile(paths: OpenClaudePaths): Promise<Start
   let parsed: unknown;
   try {
     parsed = JSON.parse(result.content);
-  } catch (error) {
+  } catch {
     return {
       path,
       exists: true,
@@ -419,7 +423,7 @@ async function readStartupProviderProfile(paths: OpenClaudePaths): Promise<Start
       diagnostics: [
         {
           level: 'error',
-          message: `Unable to parse startup profile: ${errorMessage(error)}`,
+          message: 'Unable to parse startup profile as JSON.',
           path,
         },
       ],
@@ -472,6 +476,7 @@ function validateProfile(
   profile: UnknownRecord,
   index: number,
   context: ProfileContext,
+  credential: ProviderCredentialState,
 ): ProviderProfileValidation {
   const issues: ProviderProfileValidationIssue[] = [];
   const id = profileId(profile, index);
@@ -552,7 +557,19 @@ function validateProfile(
       });
     }
   }
-  if (template?.requiresSecret && !hasNonEmptyString(profile.apiKey) && !hasNonEmptyString(profile.authHeaderValue)) {
+  if (credential.credentialInvalid) {
+    issues.push({
+      severity: 'warn',
+      field: 'credential',
+      message: 'Configured credential appears to be invalid or a placeholder.',
+    });
+  }
+  if (
+    template?.requiresSecret &&
+    !hasNonEmptyString(profile.apiKey) &&
+    !hasNonEmptyString(profile.authHeaderValue) &&
+    !credential.credentialConfigured
+  ) {
     issues.push({
       severity: 'warn',
       field: 'credential',
@@ -733,6 +750,16 @@ function isRecord(value: unknown): value is UnknownRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function startupProfileReadFailureMessage(error: unknown): string {
+  const code = isRecord(error) && typeof error.code === 'string' ? error.code : null;
+
+  switch (code) {
+    case 'EACCES':
+    case 'EPERM':
+      return 'Permission denied.';
+    case 'ENOTDIR':
+      return 'Startup profile path is unavailable.';
+    default:
+      return 'Startup profile is unavailable.';
+  }
 }

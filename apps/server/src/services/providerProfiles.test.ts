@@ -334,7 +334,7 @@ describe('Provider profile management data', () => {
         category: 'hosted',
         transport: 'openai-compatible',
         discoveryMode: 'static',
-        credentialEnvVars: ['FIREWORKS_API_KEY', 'OPENAI_API_KEYS', 'OPENAI_API_KEY'],
+        credentialEnvVars: ['FIREWORKS_API_KEY', 'OPENAI_API_KEYS', 'OPENAI_API_KEY', 'OPENAI_AUTH_HEADER_VALUE'],
         safeTemplateAvailable: false,
         inspectionOnly: false,
       },
@@ -398,6 +398,10 @@ describe('Provider profile management data', () => {
       credentialInvalid: false,
       credentialSources: ['Studio server env: OPENAI_API_KEYS'],
     });
+    expect(pooled.profiles[0]?.validation).toEqual({
+      status: 'valid',
+      issues: [],
+    });
 
     const delimiterOnlyPool = await readProviderProfiles(paths, {
       OPENAI_API_KEYS: ', ,',
@@ -441,6 +445,63 @@ describe('Provider profile management data', () => {
     expect(JSON.stringify(placeholderPool)).not.toContain('SUA_CHAVE');
   });
 
+  test('uses environment auth-header values for OpenAI-compatible credential diagnostics', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [
+          {
+            id: 'openai-profile',
+            name: 'OpenAI Team',
+            provider: 'openai',
+            baseUrl: 'https://api.openai.com/v1',
+            model: 'gpt-example',
+          },
+          {
+            id: 'custom-profile',
+            name: 'Custom Team',
+            provider: 'openai',
+            baseUrl: 'https://api.example.com/v1',
+            model: 'custom-model',
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const result = await readProviderProfiles(paths, {
+      OPENAI_AUTH_HEADER: 'X-Provider-Key',
+      OPENAI_AUTH_HEADER_VALUE: 'Bearer env-header-private',
+    });
+
+    expect(result.profiles[0]?.credential).toEqual({
+      credentialMode: 'single',
+      credentialCount: 1,
+      credentialConfigured: true,
+      credentialInvalid: false,
+      credentialSources: ['Studio server env: OPENAI_AUTH_HEADER_VALUE'],
+    });
+    expect(result.profiles[0]?.validation).toEqual({
+      status: 'valid',
+      issues: [],
+    });
+    expect(result.profiles[1]?.recognizedProvider.id).toBe('custom');
+    expect(result.profiles[1]?.credential).toEqual({
+      credentialMode: 'single',
+      credentialCount: 1,
+      credentialConfigured: true,
+      credentialInvalid: false,
+      credentialSources: ['Studio server env: OPENAI_AUTH_HEADER_VALUE'],
+    });
+    expect(result.profiles[1]?.validation).toEqual({
+      status: 'valid',
+      issues: [],
+    });
+    expect(JSON.stringify(result)).not.toContain('Bearer env-header-private');
+  });
+
   test('reports invalid saved credentials without falling back to lower-precedence environment credentials', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
     const paths = createOpenClaudePaths({ home, env: {} });
@@ -470,8 +531,52 @@ describe('Provider profile management data', () => {
       credentialInvalid: true,
       credentialSources: ['saved profile apiKey'],
     });
+    expect(result.profiles[0]?.validation).toEqual({
+      status: 'warning',
+      issues: [
+        {
+          field: 'credential',
+          severity: 'warn',
+          message: 'Configured credential appears to be invalid or a placeholder.',
+        },
+      ],
+    });
     expect(JSON.stringify(result)).not.toContain('SUA_CHAVE');
     expect(JSON.stringify(result)).not.toContain('sk-env-c');
+  });
+
+  test('recognizes Codex API-key mode from the Studio server environment', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ocs-providers-'));
+    const paths = createOpenClaudePaths({ home, env: {} });
+    await writeFile(
+      paths.openClaudeConfig,
+      JSON.stringify({
+        providerProfiles: [
+          {
+            id: 'codex-profile',
+            name: 'Codex API Key',
+            provider: 'codex',
+            baseUrl: 'https://chatgpt.com/backend-api/codex',
+            model: 'codexplan',
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const result = await readProviderProfiles(paths, { CODEX_API_KEY: 'codex-env-private' });
+
+    expect(result.profiles[0]).toMatchObject({
+      recognizedProvider: { id: 'codex' },
+      credential: {
+        credentialMode: 'single',
+        credentialCount: 1,
+        credentialConfigured: true,
+        credentialInvalid: false,
+        credentialSources: ['Studio server env: CODEX_API_KEY'],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('codex-env-private');
   });
 
   test('exposes startup profile metadata from the config root without returning env values', async () => {
@@ -694,6 +799,24 @@ describe('Provider profile management data', () => {
       diagnostics: [expect.objectContaining({ level: 'error', message: 'Startup profile must contain a non-empty profile string, env object, and optional createdAt string.' })],
     });
 
+    const invalidJsonHome = await mkdtemp(join(tmpdir(), 'ocs-providers-invalid-json-'));
+    const invalidJsonPaths = createOpenClaudePaths({ home: invalidJsonHome, env: {} });
+    await mkdir(invalidJsonPaths.openClaudeHome, { recursive: true });
+    await writeFile(invalidJsonPaths.openClaudeConfig, JSON.stringify({ providerProfiles: [] }), 'utf8');
+    await writeFile(
+      join(invalidJsonPaths.openClaudeHome, '.openclaude-profile.json'),
+      '{"profile":"openai","env":{"OPENAI_API_KEY":"sk-startup-private",',
+      'utf8',
+    );
+    const invalidJson = await readProviderProfiles(invalidJsonPaths);
+    expect(invalidJson.startupProfile).toMatchObject({
+      exists: true,
+      profile: null,
+      diagnostics: [expect.objectContaining({ level: 'error', message: 'Unable to parse startup profile as JSON.' })],
+    });
+    expect(JSON.stringify(invalidJson.startupProfile.diagnostics)).not.toContain('sk-startup-private');
+    expect(JSON.stringify(invalidJson.startupProfile.diagnostics)).not.toContain('OPENAI_API_KEY');
+
     const symlinkHome = await mkdtemp(join(tmpdir(), 'ocs-providers-symlink-'));
     const symlinkPaths = createOpenClaudePaths({ home: symlinkHome, env: {} });
     await mkdir(symlinkPaths.openClaudeHome, { recursive: true });
@@ -719,7 +842,7 @@ describe('Provider profile management data', () => {
     expect(unreadable.startupProfile).toMatchObject({
       exists: true,
       profile: null,
-      diagnostics: [expect.objectContaining({ level: 'warn', message: expect.stringContaining('Unable to read startup profile:') })],
+      diagnostics: [expect.objectContaining({ level: 'warn', message: 'Unable to read startup profile: Permission denied.' })],
     });
 
     const oversizedHome = await mkdtemp(join(tmpdir(), 'ocs-providers-oversized-'));

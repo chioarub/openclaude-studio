@@ -566,7 +566,7 @@ describe('App', () => {
         category: 'hosted',
         defaultBaseUrl: 'https://api.fireworks.ai/inference/v1',
         authKind: 'api-key',
-        credentialEnvVars: ['FIREWORKS_API_KEY', 'OPENAI_API_KEYS', 'OPENAI_API_KEY'],
+        credentialEnvVars: ['FIREWORKS_API_KEY', 'OPENAI_API_KEYS', 'OPENAI_API_KEY', 'OPENAI_AUTH_HEADER_VALUE'],
         transport: 'openai-compatible',
         discoveryMode: 'static',
         safeTemplateAvailable: false,
@@ -603,14 +603,17 @@ describe('App', () => {
         category: 'hosted',
         defaultBaseUrl: 'https://api.openai.com/v1',
         authKind: 'api-key',
-        credentialEnvVars: ['OPENAI_API_KEYS', 'OPENAI_API_KEY'],
+        credentialEnvVars: ['OPENAI_API_KEYS', 'OPENAI_API_KEY', 'OPENAI_AUTH_HEADER_VALUE'],
         transport: 'openai-compatible',
         discoveryMode: 'static',
         safeTemplateAvailable: true,
         inspectionOnly: false,
       },
       diagnostics: [],
-    };
+      rawEnv: {
+        OPENAI_API_KEY: 'sk-startup-private-canary',
+      },
+    } as typeof providerProfiles.startupProfile & { rawEnv: { OPENAI_API_KEY: string } };
     vi.stubGlobal('fetch', mockApi({ providerProfilesResponse: providerProfiles }));
     const user = userEvent.setup();
 
@@ -634,7 +637,7 @@ describe('App', () => {
     expect(within(startupSection!).getByText('OPENAI_MODEL')).toBeInTheDocument();
     expect(within(startupSection!).getByText('OPENAI_API_KEYS configured')).toBeInTheDocument();
     expect(within(startupSection!).getByText('OPENAI_AUTH_HEADER_VALUE configured')).toBeInTheDocument();
-    expect(startupSection!.textContent).not.toContain('secret');
+    expect(startupSection!.textContent).not.toContain('sk-startup-private-canary');
   });
 
   test('shows an accessible provider profile loading indicator while provider profiles are pending', async () => {
@@ -770,6 +773,7 @@ describe('App', () => {
     expect(screen.getByText('No provider profiles configured')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /add provider profile/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Provider profile management requires a newer local server')).not.toBeInTheDocument();
+    expect(screen.queryByText('Startup Launch Profile')).not.toBeInTheDocument();
   });
 
   test('normalizes older provider profiles missing recognition and credential fields', async () => {

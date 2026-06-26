@@ -29,7 +29,8 @@ type CredentialStateInput = {
   envSourceLabel: string;
 };
 
-const openAiCredentialEnvVars = ['OPENAI_API_KEYS', 'OPENAI_API_KEY'] as const;
+const openAiCredentialEnvVars = ['OPENAI_API_KEYS', 'OPENAI_API_KEY', 'OPENAI_AUTH_HEADER_VALUE'] as const;
+const openAiCredentialEnvVarSet = new Set<string>(openAiCredentialEnvVars);
 
 // Keep this static and re-check upstream route descriptors plus providerProfile
 // PROFILE_ENV_KEYS when updating recognition; Studio must not import OpenClaude
@@ -642,10 +643,25 @@ function provider(input: Omit<StudioProviderDescriptor, 'providerIds' | 'inspect
 }): StudioProviderDescriptor {
   return {
     ...input,
+    credentialEnvVars: expandOpenAiCredentialEnvVars(input.credentialEnvVars),
     inspectionOnly: input.inspectionOnly ?? false,
     safeTemplateAvailable: input.safeTemplateAvailable ?? false,
     providerIds: input.providerIds ?? [input.id],
   };
+}
+
+function expandOpenAiCredentialEnvVars(credentialEnvVars: string[]): string[] {
+  if (!credentialEnvVars.some((envVar) => openAiCredentialEnvVarSet.has(envVar))) {
+    return [...credentialEnvVars];
+  }
+
+  const expanded = [...credentialEnvVars];
+  for (const envVar of openAiCredentialEnvVars) {
+    if (!expanded.includes(envVar)) {
+      expanded.push(envVar);
+    }
+  }
+  return expanded;
 }
 
 function toRecognition(descriptor: StudioProviderDescriptor): StudioProviderRecognition {
