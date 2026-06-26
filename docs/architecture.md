@@ -33,6 +33,7 @@ The server is intentionally narrow:
 
 - Discover OpenClaude projects from local config and bounded transcript metadata.
 - Read session summaries and rich session details from local project session files.
+- Read optional session replay sidecars (`<sessionId>.replay.json`) to produce a structured, redacted execution timeline.
 - Produce read-only per-session change reviews from selected-session mutation events, bounded current project file reads, and scoped file-history backups.
 - Read project-scoped plans and tasks, plus session file-history context.
 - Read provider configuration with secret fields redacted, route recognition, credential-state metadata, profile validation, startup launch profile diagnostics, and safe templates.
@@ -49,7 +50,7 @@ The web app is a read-only dashboard:
 
 - Project selector and route navigation
 - Control center overview
-- Session table and session details inspector
+- Session table and session details inspector with optional replay timeline tab
 - Plans & Tasks route with linked session context
 - Provider summary and read-only provider profile management with safe credential diagnostics
 - System logs with filtering, search, virtualization, and copy-to-clipboard

@@ -63,12 +63,25 @@ export function redactTextSecrets(content: string): string {
       `$1${redactedValue}`,
     )
     .replace(
-      /\b(sk-[A-Za-z0-9_-]{8,}|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|AIza[0-9A-Za-z_-]{20,})\b/g,
+      /(sk-[A-Za-z0-9_-]{8,}|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|AIza[0-9A-Za-z_-]{20,})\b/g,
       redactedValue,
     )
     .replace(
-      /\b(((?:OPENAI|ANTHROPIC|GEMINI|MISTRAL|MIMO|CODEX|XAI|GITHUB)[A-Z0-9_]*KEY|token)\s*=\s*)(["']?)([^\s"']+)/gi,
-      `$1$3${redactedValue}`,
+      /\b((?:authorization|auth[_-]?header[_-]?value)\s*:\s*)(["']?)(?:(Bearer|Basic)\s+)?[A-Za-z0-9._~+/=-]{4,}\2/gi,
+      (_match: string, prefix: string, quote: string, scheme: string | undefined) =>
+        `${prefix}${quote}${scheme ? `${scheme} ` : ''}${redactedValue}${quote}`,
+    )
+    .replace(
+      /\b((?:authorization|auth[_-]?header[_-]?value)\s*=\s*)(["']?)(?:Bearer|Basic)?\s*[A-Za-z0-9._~+/=-]{4,}\2/gi,
+      `$1$2${redactedValue}$2`,
+    )
+    .replace(
+      /\b((?:(?:(?:OPENAI|ANTHROPIC|GEMINI|MISTRAL|MIMO|CODEX|XAI|GITHUB)[A-Z0-9_]{0,128}KEY)|[A-Za-z0-9_-]{0,128}(?:api[_-]?key|token|secret|password|credential)[A-Za-z0-9_-]{0,128})\s*=\s*)(["'])([^\r\n]*?)\2/gi,
+      `$1$2${redactedValue}$2`,
+    )
+    .replace(
+      /\b((?:(?:(?:OPENAI|ANTHROPIC|GEMINI|MISTRAL|MIMO|CODEX|XAI|GITHUB)[A-Z0-9_]{0,128}KEY)|[A-Za-z0-9_-]{0,128}(?:api[_-]?key|token|secret|password|credential)[A-Za-z0-9_-]{0,128})\s*=\s*)([^\s"'&#]+)/gi,
+      `$1${redactedValue}`,
     )
     .replace(/\b(bearer\s+)([A-Za-z0-9._~+/=-]{8,})\b/gi, `$1${redactedValue}`)
     .replace(/\b(https?:\/\/[^\s"'#]+)#([^\s"']+)/gi, (match: string, url: string, fragment: string) => {
