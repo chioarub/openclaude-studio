@@ -196,31 +196,34 @@ describe('readSessionReplay', () => {
     }
   });
 
-  test('surfaces transcript read diagnostics before reading a replay sidecar', async () => {
-    const { projectPath, projectDir, paths, cleanup } = await setup();
-    const transcriptPath = join(projectDir, 'session-1.jsonl');
-    try {
-      await writeTranscript(projectDir, projectPath, 'session-1');
-      await writeFile(
-        join(projectDir, 'session-1.replay.json'),
-        JSON.stringify(validReplay('session-1')),
-        'utf8',
-      );
-      await chmod(transcriptPath, 0);
+  test.runIf(process.platform !== 'win32' && process.getuid?.() !== 0)(
+    'surfaces transcript read diagnostics before reading a replay sidecar',
+    async () => {
+      const { projectPath, projectDir, paths, cleanup } = await setup();
+      const transcriptPath = join(projectDir, 'session-1.jsonl');
+      try {
+        await writeTranscript(projectDir, projectPath, 'session-1');
+        await writeFile(
+          join(projectDir, 'session-1.replay.json'),
+          JSON.stringify(validReplay('session-1')),
+          'utf8',
+        );
+        await chmod(transcriptPath, 0);
 
-      const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
+        const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
 
-      expect(result.status).toBe('unavailable');
-      expect(result.diagnostics).toContainEqual(expect.objectContaining({
-        level: 'warn',
-        message: 'Transcript file could not be read.',
-      }));
-      expect(result.diagnostics[0]).not.toHaveProperty('path');
-    } finally {
-      await chmod(transcriptPath, 0o600).catch(() => undefined);
-      await cleanup();
-    }
-  });
+        expect(result.status).toBe('unavailable');
+        expect(result.diagnostics).toContainEqual(expect.objectContaining({
+          level: 'warn',
+          message: 'Transcript file could not be read.',
+        }));
+        expect(result.diagnostics[0]).not.toHaveProperty('path');
+      } finally {
+        await chmod(transcriptPath, 0o600).catch(() => undefined);
+        await cleanup();
+      }
+    },
+  );
 
   test('returns unsupported_version for an unknown schema version', async () => {
     const { projectPath, projectDir, paths, cleanup } = await setup();
@@ -365,6 +368,23 @@ describe('readSessionReplay', () => {
       await expect(
         readSessionReplay(paths.projectsDir, { path: projectPath }, '../../etc/passwd'),
       ).rejects.toThrow();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('accepts dotted session IDs while rejecting dot-dot traversal markers', async () => {
+    const { projectPath, projectDir, paths, cleanup } = await setup();
+    try {
+      await writeReplay(projectDir, projectPath, 'session.v1', validReplay('session.v1'));
+
+      const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session.v1');
+
+      expect(result.status).toBe('available');
+      expect(result.sessionId).toBe('session.v1');
+      await expect(
+        readSessionReplay(paths.projectsDir, { path: projectPath }, 'session..v1'),
+      ).rejects.toThrow('Session ID contains invalid characters.');
     } finally {
       await cleanup();
     }

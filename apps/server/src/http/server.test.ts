@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
@@ -744,7 +744,7 @@ describe('HTTP server', () => {
     });
 
     expect(response.statusCode).toBe(404);
-    expect(response.json()).toMatchObject({ code: 'NOT_FOUND' });
+    expect(response.json()).toMatchObject({ error: 'Session not found', code: 'NOT_FOUND' });
   });
 
   test('returns 404 for nonexistent session change review', async () => {
@@ -928,7 +928,7 @@ describe('HTTP server', () => {
     });
 
     expect(response.statusCode).toBe(404);
-    expect(response.json()).toMatchObject({ code: 'NOT_FOUND' });
+    expect(response.json()).toMatchObject({ error: 'Session not found', code: 'NOT_FOUND' });
   });
 
   test('returns malformed replay diagnostics through the read-only endpoint', async () => {
@@ -977,6 +977,80 @@ describe('HTTP server', () => {
       diagnostics: [{ level: 'warn', message: 'Replay file is not valid JSON.' }],
     });
   });
+
+  test.runIf(process.platform !== 'win32' && process.getuid?.() !== 0)(
+    'returns replay diagnostics when the session transcript cannot be read',
+    async () => {
+      const home = await mkdtemp(join(tmpdir(), 'ocs-replay-transcript-diagnostic-'));
+      const projectPath = join(home, 'my-project');
+      const paths = createOpenClaudePaths({ home, env: {} });
+      await mkdir(projectPath, { recursive: true });
+      await writeFile(
+        paths.openClaudeConfig,
+        JSON.stringify({
+          providerProfiles: [],
+          projects: { [projectPath]: { lastGracefulShutdown: '2026-06-01T00:00:00.000Z' } },
+        }),
+        'utf8',
+      );
+      const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
+      await mkdir(projectDir, { recursive: true });
+      const transcriptPath = join(projectDir, 'session-1.jsonl');
+      await writeFile(
+        transcriptPath,
+        `${JSON.stringify({
+          type: 'user',
+          sessionId: 'session-1',
+          timestamp: '2026-06-01T00:00:00.000Z',
+          cwd: projectPath,
+          message: { role: 'user', content: 'Read README.md' },
+        })}\n`,
+        'utf8',
+      );
+      await writeFile(
+        join(projectDir, 'session-1.replay.json'),
+        JSON.stringify({
+          sessionId: 'session-1',
+          version: 1,
+          createdAt: '2026-06-01T00:00:00.000Z',
+          summary: {
+            totalSteps: 1,
+            toolBreakdown: { Read: 1 },
+            filesModified: [],
+            durationMs: 100,
+            startTimestamp: '2026-06-01T00:00:00.000Z',
+            endTimestamp: '2026-06-01T00:00:00.100Z',
+            userRequests: 1,
+          },
+          steps: [],
+        }),
+        'utf8',
+      );
+      await chmod(transcriptPath, 0);
+      const server = await testServer(home);
+      const headers = tokenHeaders();
+
+      try {
+        const projects = await server.inject({ method: 'GET', url: '/api/projects', headers });
+        const projectId = projects.json().projects[0].id;
+        const response = await server.inject({
+          method: 'GET',
+          url: `/api/projects/${projectId}/sessions/session-1/replay`,
+          headers,
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toMatchObject({
+          status: 'unavailable',
+          available: false,
+          sessionId: 'session-1',
+          diagnostics: [{ level: 'warn', message: 'Transcript file could not be read.' }],
+        });
+      } finally {
+        await chmod(transcriptPath, 0o600).catch(() => undefined);
+      }
+    },
+  );
 
   test('surfaces a config-dir conflict warning through /api/projects diagnostics', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ocs-conflict-'));

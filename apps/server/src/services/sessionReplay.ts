@@ -37,7 +37,8 @@ const MAX_COMMAND_LENGTH = 480;
 const MAX_COMMANDS = 10;
 const MAX_CREATED_AT_LENGTH = 64;
 
-const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+const MISSING_SESSION_TRANSCRIPT_MESSAGE = 'No project-scoped transcript found for this session.';
 
 /**
  * Read the replay sidecar for a session, if present.
@@ -64,7 +65,7 @@ export async function readSessionReplay(
     if (diagnostics.length > 0) {
       return unavailableWithDiagnostics(sessionId, diagnostics);
     }
-    return unavailable(sessionId, 'No project-scoped transcript found for this session.');
+    return unavailable(sessionId, MISSING_SESSION_TRANSCRIPT_MESSAGE);
   }
 
   const candidateRoots = uniqueRoots(sessionEntries.map((entry) => dirname(entry.sourcePath)));
@@ -117,11 +118,22 @@ export async function readSessionReplay(
   return parseReplayIndex(sessionId, parsed);
 }
 
+export function isReplaySessionMissing(response: SessionReplayResponse): boolean {
+  return (
+    response.status === 'unavailable' &&
+    response.diagnostics.some(
+      (diagnostic) =>
+        diagnostic.level === 'info' &&
+        diagnostic.message === MISSING_SESSION_TRANSCRIPT_MESSAGE,
+    )
+  );
+}
+
 function validateSessionId(sessionId: string): void {
   if (!sessionId || typeof sessionId !== 'string') {
     throw invalidRequest('Session ID is required.');
   }
-  if (!SESSION_ID_PATTERN.test(sessionId)) {
+  if (!SESSION_ID_PATTERN.test(sessionId) || sessionId.includes('..')) {
     throw invalidRequest('Session ID contains invalid characters.');
   }
 }

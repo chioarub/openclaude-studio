@@ -26,7 +26,7 @@ import { createOpenClaudePaths, type PathOptions } from '../services/paths.js';
 import { readSessionChangeReview } from '../services/sessionChangeReview.js';
 import { readSessionSummaries } from '../services/sessions.js';
 import { readSessionDetails } from '../services/sessionDetails.js';
-import { readSessionReplay } from '../services/sessionReplay.js';
+import { isReplaySessionMissing, readSessionReplay } from '../services/sessionReplay.js';
 import { listProjectTasks, readProjectTask } from '../services/tasks.js';
 import { ApiError } from './errors.js';
 
@@ -174,11 +174,11 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
     '/api/projects/:projectId/sessions/:sessionId/replay',
     async (request, reply) => {
       const project = await resolveProject(paths, request.params.projectId);
-      const session = await readSessionDetails(paths, project, request.params.sessionId);
-      if (!session) {
+      const replay = await readSessionReplay(paths.projectsDir, project, request.params.sessionId);
+      if (isReplaySessionMissing(replay)) {
         return reply.code(404).send({ error: 'Session not found', code: 'NOT_FOUND', diagnostics: [] } satisfies ApiErrorResponse);
       }
-      return readSessionReplay(paths.projectsDir, project, request.params.sessionId);
+      return replay;
     },
   );
 
