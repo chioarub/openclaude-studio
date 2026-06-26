@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { BackgroundSessionSummary, ProjectSummary, ProviderProfilesResponse } from '@openclaude-studio/shared';
 
-import App from './App';
+import App, { normalizeProviderProfilesResponse } from './App';
 
 const serverUrlStorageKey = 'openclaude-studio:server-url';
 const legacyConnectionStorageKey = 'openclaude-studio.connection';
@@ -841,6 +841,27 @@ describe('App', () => {
     const savedProviderCard = (await screen.findByText('Legacy Saved Provider')).closest('article');
     expect(savedProviderCard).not.toBeNull();
     expect(within(savedProviderCard!).getByText('credential configured')).toBeInTheDocument();
+  });
+
+  test('normalizes missing startup profile summary as unconfigured without a profile name', () => {
+    const response = normalizeProviderProfilesResponse({
+      path: '/tmp/.openclaude.json',
+      exists: true,
+      activeProviderProfileId: null,
+      sensitiveFieldsRedacted: true,
+      profiles: [],
+      templates: [],
+      startupProfile: {
+        path: '/tmp/.openclaude/.openclaude-profile.json',
+        exists: true,
+        profile: null,
+        diagnostics: [],
+      },
+      summary: { total: 0, active: 0, valid: 0, warnings: 0, errors: 0, recognized: 0, templates: 0 },
+      diagnostics: [],
+    });
+
+    expect(response.summary.startupProfileConfigured).toBe(false);
   });
 
   test('renders non-object provider profile payloads without crashing', async () => {
@@ -3063,7 +3084,7 @@ function providerProfilesFixture(): ProviderProfilesResponse {
           defaultBaseUrl: 'http://127.0.0.1:11434/v1',
           authKind: 'none',
           credentialEnvVars: [],
-          transport: 'openai-compatible',
+          transport: 'local',
           discoveryMode: 'local',
           safeTemplateAvailable: true,
           inspectionOnly: false,

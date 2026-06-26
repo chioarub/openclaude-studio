@@ -1496,7 +1496,7 @@ function ProviderPage({
   );
 }
 
-function normalizeProviderProfilesResponse(response: unknown): ProviderProfilesResponse {
+export function normalizeProviderProfilesResponse(response: unknown): ProviderProfilesResponse {
   const payload = isRecord(response) ? response : {};
   const profiles = Array.isArray(payload.profiles)
     ? payload.profiles.map((profile, index) => normalizeSafeProviderProfile(profile, index))
@@ -1530,7 +1530,7 @@ function normalizeProviderProfilesResponse(response: unknown): ProviderProfilesR
       recognized: finiteNumberOr(summary.recognized, recognizedCount),
       startupProfileConfigured: typeof summary.startupProfileConfigured === 'boolean'
         ? summary.startupProfileConfigured
-        : startupProfile.exists,
+        : startupProfile.exists && startupProfile.profile !== null,
       templates: finiteNumberOr(summary.templates, templates.length),
     },
     diagnostics,
