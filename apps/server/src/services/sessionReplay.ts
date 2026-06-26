@@ -14,7 +14,7 @@ import type {
 import { invalidRequest } from '../http/errors.js';
 import { redactTextSecrets } from './redaction.js';
 import { readBoundedTextFile } from './safeFile.js';
-import { findTranscriptFilesForProject } from './sessions.js';
+import { findTranscriptFilesForProject, parseTranscriptFilesForProject } from './sessions.js';
 
 type SessionProject = { path: string };
 
@@ -50,7 +50,13 @@ export async function readSessionReplay(
   validateSessionId(sessionId);
 
   const transcriptFiles = await findTranscriptFilesForProject(projectsDir, project.path);
-  const candidateRoots = uniqueRoots(transcriptFiles.map((file) => dirname(file)));
+  const sessionEntries = (await parseTranscriptFilesForProject(transcriptFiles, project.path))
+    .filter((entry) => entry.sessionId === sessionId);
+  if (sessionEntries.length === 0) {
+    return unavailable(sessionId, 'No project-scoped transcript found for this session.');
+  }
+
+  const candidateRoots = uniqueRoots(sessionEntries.map((entry) => dirname(entry.sourcePath)));
 
   const candidates: { path: string; stats: { mtimeMs: number; size: number } }[] = [];
   for (const root of candidateRoots) {

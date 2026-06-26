@@ -84,14 +84,32 @@ function validReplay(sessionId: string, overrides: Record<string, unknown> = {})
 
 async function writeReplay(
   projectDir: string,
+  projectPath: string,
   sessionId: string,
   data: unknown,
 ): Promise<void> {
-  // A .jsonl transcript must exist so the authorized transcript root is discovered.
-  await writeFile(join(projectDir, `${sessionId}.jsonl`), '{}\n', 'utf8');
+  await writeTranscript(projectDir, projectPath, sessionId);
   await writeFile(
     join(projectDir, `${sessionId}.replay.json`),
     JSON.stringify(data),
+    'utf8',
+  );
+}
+
+async function writeTranscript(
+  projectDir: string,
+  projectPath: string,
+  sessionId: string,
+): Promise<void> {
+  await writeFile(
+    join(projectDir, `${sessionId}.jsonl`),
+    `${JSON.stringify({
+      type: 'user',
+      sessionId,
+      timestamp: '2026-06-01T00:00:00.000Z',
+      cwd: projectPath,
+      message: { role: 'user', content: `Session ${sessionId}` },
+    })}\n`,
     'utf8',
   );
 }
@@ -100,7 +118,7 @@ describe('readSessionReplay', () => {
   test('returns available with parsed summary and steps for a valid v1 replay', async () => {
     const { projectPath, projectDir, paths, cleanup } = await setup();
     try {
-      await writeReplay(projectDir, 'session-1', validReplay('session-1'));
+      await writeReplay(projectDir, projectPath, 'session-1', validReplay('session-1'));
 
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
 
@@ -127,9 +145,32 @@ describe('readSessionReplay', () => {
   test('returns unavailable when no replay file exists', async () => {
     const { projectPath, projectDir, paths, cleanup } = await setup();
     try {
-      await writeFile(join(projectDir, 'session-1.jsonl'), '{}\n', 'utf8');
+      await writeTranscript(projectDir, projectPath, 'session-1');
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
       expect(result.status).toBe('unavailable');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('does not read a replay sidecar without a project-scoped session transcript', async () => {
+    const { projectPath, projectDir, paths, cleanup } = await setup();
+    try {
+      await writeTranscript(projectDir, projectPath, 'session-1');
+      await writeFile(
+        join(projectDir, 'orphan-session.replay.json'),
+        JSON.stringify(validReplay('orphan-session')),
+        'utf8',
+      );
+
+      const result = await readSessionReplay(
+        paths.projectsDir,
+        { path: projectPath },
+        'orphan-session',
+      );
+
+      expect(result.status).toBe('unavailable');
+      expect(result.diagnostics[0]?.message).toContain('transcript');
     } finally {
       await cleanup();
     }
@@ -138,7 +179,7 @@ describe('readSessionReplay', () => {
   test('returns unsupported_version for an unknown schema version', async () => {
     const { projectPath, projectDir, paths, cleanup } = await setup();
     try {
-      await writeReplay(projectDir, 'session-1', {
+      await writeReplay(projectDir, projectPath, 'session-1', {
         ...validReplay('session-1'),
         version: 99,
       });
@@ -155,7 +196,7 @@ describe('readSessionReplay', () => {
   test('returns malformed for invalid JSON', async () => {
     const { projectPath, projectDir, paths, cleanup } = await setup();
     try {
-      await writeFile(join(projectDir, 'session-1.jsonl'), '{}\n', 'utf8');
+      await writeTranscript(projectDir, projectPath, 'session-1');
       await writeFile(
         join(projectDir, 'session-1.replay.json'),
         '{ not json',
@@ -171,7 +212,7 @@ describe('readSessionReplay', () => {
   test('returns malformed when sessionId inside file does not match', async () => {
     const { projectPath, projectDir, paths, cleanup } = await setup();
     try {
-      await writeReplay(projectDir, 'session-1', validReplay('different-session'));
+      await writeReplay(projectDir, projectPath, 'session-1', validReplay('different-session'));
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
       expect(result.status).toBe('malformed');
     } finally {
@@ -184,7 +225,7 @@ describe('readSessionReplay', () => {
     try {
       const data = validReplay('session-1');
       (data.steps as unknown[]).push({ type: 'unknown-type', stepNumber: 99 });
-      await writeReplay(projectDir, 'session-1', data);
+      await writeReplay(projectDir, projectPath, 'session-1', data);
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
       expect(result.status).toBe('malformed');
     } finally {
@@ -197,7 +238,7 @@ describe('readSessionReplay', () => {
     try {
       const data = validReplay('session-1');
       (data.summary as Record<string, unknown>).startTimestamp = 'not-a-date';
-      await writeReplay(projectDir, 'session-1', data);
+      await writeReplay(projectDir, projectPath, 'session-1', data);
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
       expect(result.status).toBe('available');
       if (result.status !== 'available') return;
@@ -212,7 +253,7 @@ describe('readSessionReplay', () => {
     const { projectPath, projectDir, paths, cleanup } = await setup();
     try {
       const large = { ...validReplay('session-1'), padding: 'x'.repeat(1024 * 1024 + 10) };
-      await writeReplay(projectDir, 'session-1', large);
+      await writeReplay(projectDir, projectPath, 'session-1', large);
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
       expect(result.status).toBe('malformed');
     } finally {
@@ -232,7 +273,7 @@ describe('readSessionReplay', () => {
       }));
       data.steps = manySteps;
       (data.summary as Record<string, unknown>).totalSteps = 600;
-      await writeReplay(projectDir, 'session-1', data);
+      await writeReplay(projectDir, projectPath, 'session-1', data);
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
       expect(result.status).toBe('available');
       if (result.status !== 'available') return;
@@ -248,7 +289,7 @@ describe('readSessionReplay', () => {
     try {
       const target = join(root, 'evil.json');
       await writeFile(target, JSON.stringify(validReplay('session-1')), 'utf8');
-      await writeFile(join(projectDir, 'session-1.jsonl'), '{}\n', 'utf8');
+      await writeTranscript(projectDir, projectPath, 'session-1');
       await symlink(target, join(projectDir, 'session-1.replay.json'));
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
       // Symlink is explicitly rejected as malformed, not silently unavailable
@@ -272,12 +313,12 @@ describe('readSessionReplay', () => {
   test('returns conflict when conflicting replay files exist in multiple roots', async () => {
     const { projectPath, paths, projectDir, cleanup } = await setup();
     try {
-      await writeReplay(projectDir, 'session-1', validReplay('session-1'));
+      await writeReplay(projectDir, projectPath, 'session-1', validReplay('session-1'));
       // Create an alias directory that matches the project path encoding
       const aliasDir = join(paths.projectsDir, encodeProjectPath(projectPath) + '-alias');
       await mkdir(aliasDir, { recursive: true });
-      await writeFile(join(aliasDir, 'session-1.jsonl'), '{}\n', 'utf8');
-      await writeReplay(aliasDir, 'session-1', validReplay('session-1'));
+      await writeTranscript(aliasDir, projectPath, 'session-1');
+      await writeReplay(aliasDir, projectPath, 'session-1', validReplay('session-1'));
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
       // May be conflict or available depending on alias detection — verify no crash
       expect(['conflict', 'available', 'unavailable']).toContain(result.status);
@@ -314,7 +355,7 @@ describe('readSessionReplay', () => {
           timestamp: '2026-06-01T00:00:02.000Z',
         },
       ];
-      await writeReplay(projectDir, 'session-1', data);
+      await writeReplay(projectDir, projectPath, 'session-1', data);
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
       expect(result.status).toBe('available');
       if (result.status !== 'available') return;
@@ -350,7 +391,7 @@ describe('readSessionReplay', () => {
           filesModified: Array.from({ length: 100 }, (_, i) => `file-${i}.ts`),
         },
       ];
-      await writeReplay(projectDir, 'session-1', data);
+      await writeReplay(projectDir, projectPath, 'session-1', data);
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
       expect(result.status).toBe('available');
       if (result.status !== 'available') return;
@@ -393,7 +434,7 @@ describe('readSessionReplay', () => {
           timestamp: '2026-06-01T00:00:01.000Z',
         },
       ];
-      await writeReplay(projectDir, 'session-1', data);
+      await writeReplay(projectDir, projectPath, 'session-1', data);
       const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
       expect(result.status).toBe('available');
       if (result.status !== 'available') return;

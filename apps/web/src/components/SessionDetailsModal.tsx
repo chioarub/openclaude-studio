@@ -3166,20 +3166,115 @@ function normalizeReplayResponse(
       retryAttempts: summary.retryAttempts ?? null,
       repeatedAttempts: summary.repeatedAttempts ?? null,
     },
-    steps: Array.isArray(data.steps) ? data.steps.filter(isSessionReplayStep) : [],
+    steps: Array.isArray(data.steps)
+      ? data.steps
+          .map(normalizeReplayStep)
+          .filter((step): step is SessionReplayStep => step !== null)
+      : [],
   };
 }
 
-const REPLAY_STEP_TYPES = new Set(['tool', 'user', 'retry', 'error']);
+type ReplayToolStep = Extract<SessionReplayStep, { type: 'tool' }>;
+type ReplayRetryStep = Extract<SessionReplayStep, { type: 'retry' }>;
 
-function isSessionReplayStep(value: unknown): value is SessionReplayStep {
-  if (typeof value !== 'object' || value === null) return false;
-  const step = value as { type?: unknown; stepNumber?: unknown };
-  return (
-    typeof step.type === 'string' &&
-    REPLAY_STEP_TYPES.has(step.type) &&
-    typeof step.stepNumber === 'number'
-  );
+const REPLAY_RESULT_STATUSES = new Set<ReplayToolStep['resultStatus']>([
+  'success',
+  'error',
+  'cancelled',
+  'permission_denied',
+  'unknown',
+]);
+
+const REPLAY_RETRY_TYPES = new Set<ReplayRetryStep['retryType']>([
+  'api',
+  'permission',
+  'unknown',
+]);
+
+function normalizeReplayStep(value: unknown): SessionReplayStep | null {
+  if (!isRecord(value)) return null;
+  const stepNumber = finiteNumberOrNull(value.stepNumber);
+  if (stepNumber === null) return null;
+  const timestamp = typeof value.timestamp === 'string' ? value.timestamp : null;
+
+  if (value.type === 'tool') {
+    const toolName = typeof value.toolName === 'string' && value.toolName.trim()
+      ? value.toolName
+      : null;
+    if (!toolName) return null;
+    return {
+      type: 'tool',
+      stepNumber,
+      toolName,
+      toolUseId: typeof value.toolUseId === 'string' ? value.toolUseId : null,
+      inputSummary: typeof value.inputSummary === 'string' ? value.inputSummary : '',
+      inputSummaryTruncated: value.inputSummaryTruncated === true,
+      resultStatus: normalizeReplayResultStatus(value.resultStatus),
+      resultPreview: typeof value.resultPreview === 'string' ? value.resultPreview : null,
+      resultPreviewTruncated: value.resultPreviewTruncated === true,
+      durationMs: Math.max(0, finiteNumber(value.durationMs)),
+      timestamp,
+      filesModified: stringArray(value.filesModified),
+      filesModifiedTruncated: value.filesModifiedTruncated === true,
+      repeatedAttemptNumber: finiteNumberOrNull(value.repeatedAttemptNumber),
+      isRepeatedAttempt: value.isRepeatedAttempt === true,
+    };
+  }
+
+  if (value.type === 'user') {
+    if (typeof value.content !== 'string') return null;
+    return {
+      type: 'user',
+      stepNumber,
+      content: value.content,
+      contentTruncated: value.contentTruncated === true,
+      timestamp,
+    };
+  }
+
+  if (value.type === 'retry') {
+    return {
+      type: 'retry',
+      stepNumber,
+      retryType: normalizeReplayRetryType(value.retryType),
+      attempt: finiteNumberOrNull(value.attempt),
+      maxRetries: finiteNumberOrNull(value.maxRetries),
+      retryDelayMs: finiteNumberOrNull(value.retryDelayMs),
+      reason: typeof value.reason === 'string' ? value.reason : '',
+      reasonTruncated: value.reasonTruncated === true,
+      commands: stringArray(value.commands),
+      commandsTruncated: value.commandsTruncated === true,
+      timestamp,
+    };
+  }
+
+  if (value.type === 'error') {
+    return {
+      type: 'error',
+      stepNumber,
+      error: typeof value.error === 'string' ? value.error : '',
+      errorTruncated: value.errorTruncated === true,
+      timestamp,
+    };
+  }
+
+  return null;
+}
+
+function normalizeReplayResultStatus(value: unknown): ReplayToolStep['resultStatus'] {
+  return typeof value === 'string' && REPLAY_RESULT_STATUSES.has(value as ReplayToolStep['resultStatus'])
+    ? value as ReplayToolStep['resultStatus']
+    : 'unknown';
+}
+
+function normalizeReplayRetryType(value: unknown): ReplayRetryStep['retryType'] {
+  return typeof value === 'string' && REPLAY_RETRY_TYPES.has(value as ReplayRetryStep['retryType'])
+    ? value as ReplayRetryStep['retryType']
+    : 'unknown';
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
 function formatStepSummary(step: SessionReplayStep): string {

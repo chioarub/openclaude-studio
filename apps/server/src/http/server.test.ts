@@ -793,7 +793,17 @@ describe('HTTP server', () => {
     );
     const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
     await mkdir(projectDir, { recursive: true });
-    await writeFile(join(projectDir, 'session-1.jsonl'), '{}\n', 'utf8');
+    await writeFile(
+      join(projectDir, 'session-1.jsonl'),
+      `${JSON.stringify({
+        type: 'user',
+        sessionId: 'session-1',
+        timestamp: '2026-06-01T00:00:00.000Z',
+        cwd: projectPath,
+        message: { role: 'user', content: 'Read README.md' },
+      })}\n`,
+      'utf8',
+    );
     await writeFile(
       join(projectDir, 'session-1.replay.json'),
       JSON.stringify({
@@ -862,7 +872,17 @@ describe('HTTP server', () => {
     );
     const projectDir = join(paths.projectsDir, encodeProjectPath(projectPath));
     await mkdir(projectDir, { recursive: true });
-    await writeFile(join(projectDir, 'session-1.jsonl'), '{}\n', 'utf8');
+    await writeFile(
+      join(projectDir, 'session-1.jsonl'),
+      `${JSON.stringify({
+        type: 'user',
+        sessionId: 'session-1',
+        timestamp: '2026-06-01T00:00:00.000Z',
+        cwd: projectPath,
+        message: { role: 'user', content: 'Read README.md' },
+      })}\n`,
+      'utf8',
+    );
     const server = await testServer(home);
     const headers = tokenHeaders();
 
