@@ -2753,12 +2753,23 @@ function SessionReplayPanel({
   const diagnosticNote = replay.diagnostics?.[0]?.message;
 
   if (replay.status === 'unavailable') {
+    const unavailableWarning = replay.diagnostics?.find((diagnostic) => diagnostic.level !== 'info')?.message;
     return (
-      <div className="h-full min-h-64 flex flex-col items-center justify-center text-muted gap-4 p-6">
-        <History className="w-8 h-8 opacity-40" />
-        <p className="text-sm">No replay data available for this session.</p>
+      <div
+        className={`h-full min-h-64 flex flex-col items-center justify-center gap-4 p-6 ${
+          unavailableWarning ? 'text-warning' : 'text-muted'
+        }`}
+      >
+        {unavailableWarning ? (
+          <AlertTriangle className="w-8 h-8 opacity-40" />
+        ) : (
+          <History className="w-8 h-8 opacity-40" />
+        )}
+        <p className="text-sm">
+          {unavailableWarning ? 'Replay data is unavailable.' : 'No replay data available for this session.'}
+        </p>
         <p className="text-xs text-muted-soft">
-          Replay sidecars are produced by newer OpenClaude versions.
+          {unavailableWarning ?? 'Replay sidecars are produced by newer OpenClaude versions.'}
         </p>
       </div>
     );

@@ -1471,6 +1471,32 @@ describe('App', () => {
     expect(await within(dialog).findByText('No replay data available for this session.')).toBeInTheDocument();
   });
 
+  test('shows unavailable replay warning diagnostics', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      sessionReplayResponse: {
+        status: 'unavailable',
+        supported: true,
+        available: false,
+        sessionId: 'session-1',
+        diagnostics: [{ level: 'warn', message: 'Replay file could not be read.' }],
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText('Replay data is unavailable.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Replay file could not be read.')).toBeInTheDocument();
+    expect(within(dialog).queryByText(/Replay sidecars are produced/i)).not.toBeInTheDocument();
+  });
+
   test('shows unsupported version state', async () => {
     vi.stubGlobal('fetch', mockApi({ sessionReplayResponse: { status: 'unsupported_version', supported: false, available: true, sessionId: 'session-1', version: 99, diagnostics: [] } }));
     const user = userEvent.setup();
