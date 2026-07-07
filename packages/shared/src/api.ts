@@ -288,6 +288,132 @@ export type SessionDetailsResponse = {
   timeline: ConversationTimelineEvent[];
 };
 
+/**
+ * Replay timeline contract.
+ *
+ * Replay is an optional, versioned sidecar produced by newer OpenClaude
+ * versions. The response is a discriminated union on `status` so the web can
+ * render every state exhaustively. Optional fields must be normalized by the
+ * web client because a newer hosted UI may connect to an older local server.
+ */
+export type SessionReplayResultStatus =
+  | 'available'
+  | 'unavailable'
+  | 'unsupported_version'
+  | 'malformed'
+  | 'conflict';
+
+export type SessionReplaySummary = {
+  totalSteps: number;
+  toolBreakdown: { tool: string; count: number }[];
+  filesModified: string[];
+  filesModifiedTruncated: boolean;
+  durationMs: number;
+  startTimestamp: string | null;
+  endTimestamp: string | null;
+  userRequests: number;
+  retryAttempts: number | null;
+  repeatedAttempts: number | null;
+};
+
+export type SessionReplayToolStep = {
+  type: 'tool';
+  stepNumber: number;
+  toolName: string;
+  toolUseId: string | null;
+  inputSummary: string;
+  inputSummaryTruncated: boolean;
+  resultStatus: 'success' | 'error' | 'cancelled' | 'permission_denied' | 'unknown';
+  resultPreview: string | null;
+  resultPreviewTruncated: boolean;
+  durationMs: number;
+  timestamp: string | null;
+  filesModified: string[];
+  filesModifiedTruncated: boolean;
+  repeatedAttemptNumber: number | null;
+  isRepeatedAttempt: boolean;
+};
+
+export type SessionReplayUserStep = {
+  type: 'user';
+  stepNumber: number;
+  content: string;
+  contentTruncated: boolean;
+  timestamp: string | null;
+};
+
+export type SessionReplayRetryStep = {
+  type: 'retry';
+  stepNumber: number;
+  retryType: 'api' | 'permission' | 'unknown';
+  attempt: number | null;
+  maxRetries: number | null;
+  retryDelayMs: number | null;
+  reason: string;
+  reasonTruncated: boolean;
+  commands: string[];
+  commandsTruncated: boolean;
+  timestamp: string | null;
+};
+
+export type SessionReplayErrorStep = {
+  type: 'error';
+  stepNumber: number;
+  error: string;
+  errorTruncated: boolean;
+  timestamp: string | null;
+};
+
+export type SessionReplayStep =
+  | SessionReplayToolStep
+  | SessionReplayUserStep
+  | SessionReplayRetryStep
+  | SessionReplayErrorStep;
+
+export type SessionReplayResponse =
+  | {
+      status: 'available';
+      supported: true;
+      available: true;
+      sessionId: string;
+      version: number;
+      createdAt: string | null;
+      summary: SessionReplaySummary;
+      steps: SessionReplayStep[];
+      stepsTruncated: boolean;
+      diagnostics: Diagnostic[];
+    }
+  | {
+      status: 'unsupported_version';
+      supported: false;
+      available: true;
+      sessionId: string;
+      version: number | null;
+      diagnostics: Diagnostic[];
+    }
+  | {
+      status: 'malformed';
+      supported: true;
+      available: true;
+      sessionId: string;
+      version: number | null;
+      diagnostics: Diagnostic[];
+    }
+  | {
+      status: 'conflict';
+      supported: true;
+      available: true;
+      sessionId: string;
+      diagnostics: Diagnostic[];
+    }
+  | {
+      status: 'unavailable';
+      supported: true;
+      available: false;
+      sessionId: string;
+      diagnostics: Diagnostic[];
+    };
+
 export type SessionChangeStatus =
   | 'modified'
   | 'created'

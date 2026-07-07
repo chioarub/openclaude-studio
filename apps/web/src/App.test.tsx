@@ -1635,6 +1635,460 @@ describe('App', () => {
     expect(within(dialog).getByText('2 versions')).toBeInTheDocument();
   });
 
+  test('lazy-loads and renders a session replay timeline from the details modal', async () => {
+    const fetchMock = mockApi();
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    expect(fetchCountByPath(fetchMock, '/api/projects/project-1/sessions/session-1/replay')).toBe(0);
+
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText('Replay Timeline')).toBeInTheDocument();
+    expect(within(dialog).getByRole('tabpanel', { name: /replay/i })).toBeVisible();
+    expect(fetchCountByPath(fetchMock, '/api/projects/project-1/sessions/session-1/replay')).toBe(1);
+    expect(within(dialog).getByText('Create the API')).toBeInTheDocument();
+    expect(within(dialog).getByText('Write src/api.ts')).toBeInTheDocument();
+    expect(within(dialog).getAllByText(/Write/).length).toBeGreaterThan(0);
+    expect(within(dialog).getByText('success')).toBeInTheDocument();
+    expect(within(dialog).getByText('error')).toBeInTheDocument();
+  });
+
+  test('shows a replay loading state while replay data is pending', async () => {
+    const slowReplay = deferred<Response>();
+    const fetchMock = mockApi({ sessionReplayPromiseOnce: slowReplay.promise });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText('Loading session replay')).toBeInTheDocument();
+    expect(fetchCountByPath(fetchMock, '/api/projects/project-1/sessions/session-1/replay')).toBe(1);
+
+    await act(async () => {
+      slowReplay.resolve(jsonResponse(defaultReplayFixture()));
+      await slowReplay.promise;
+    });
+
+    expect(await within(dialog).findByText('Replay Timeline')).toBeInTheDocument();
+    expect(within(dialog).getByText('Write src/api.ts')).toBeInTheDocument();
+  });
+
+  test('shows unavailable state when no replay data exists', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionReplayResponse: { status: 'unavailable', supported: true, available: false, sessionId: 'session-1', diagnostics: [] } }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText('No replay data available for this session.')).toBeInTheDocument();
+  });
+
+  test('shows unavailable replay warning diagnostics', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      sessionReplayResponse: {
+        status: 'unavailable',
+        supported: true,
+        available: false,
+        sessionId: 'session-1',
+        diagnostics: [{ level: 'warn', message: 'Replay file could not be read.' }],
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText('Replay data is unavailable.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Replay file could not be read.')).toBeInTheDocument();
+    expect(within(dialog).queryByText(/Replay sidecars are produced/i)).not.toBeInTheDocument();
+  });
+
+  test('normalizes partial unavailable replay responses', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      sessionReplayResponse: {
+        status: 'unavailable',
+        sessionId: 'session-1',
+        diagnostics: 'not-an-array',
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText('No replay data available for this session.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Replay sidecars are produced by newer OpenClaude versions.')).toBeInTheDocument();
+  });
+
+  test('shows unsupported version state', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionReplayResponse: { status: 'unsupported_version', supported: false, available: true, sessionId: 'session-1', version: 99, diagnostics: [] } }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText(/version 99 is not supported/i)).toBeInTheDocument();
+  });
+
+  test('shows malformed state', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionReplayResponse: { status: 'malformed', supported: true, available: true, sessionId: 'session-1', version: null, diagnostics: [{ level: 'warn', message: 'Replay file is not valid JSON.' }] } }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText(/malformed and cannot be displayed/i)).toBeInTheDocument();
+  });
+
+  test('normalizes an unknown top-level replay payload without crashing', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionReplayResponse: { status: 'future_replay', sessionId: 'session-1' } }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText(/malformed and cannot be displayed/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Replay response status is not recognized/i)).toBeInTheDocument();
+  });
+
+  test('hides replay content on 404 from older server', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionReplayStatus: 404 }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText(/not available on this local server version/i)).toBeInTheDocument();
+  });
+
+  test('shows a replay loading error for missing-session 404 responses', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      sessionReplayStatus: 404,
+      sessionReplayErrorResponse: { error: 'Session not found', code: 'NOT_FOUND' },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText('Session not found')).toBeInTheDocument();
+    expect(within(dialog).queryByText(/not available on this local server version/i)).not.toBeInTheDocument();
+  });
+
+  test('shows a replay loading error for non-404 replay failures', async () => {
+    vi.stubGlobal('fetch', mockApi({ sessionReplayStatus: 500 }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText(/Injected replay 500/i)).toBeInTheDocument();
+  });
+
+  test('filters replay steps by type', async () => {
+    vi.stubGlobal('fetch', mockApi());
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+    await within(dialog).findByText('Create the API');
+
+    const typeFilter = within(dialog).getByLabelText('Filter by step type');
+    await user.selectOptions(typeFilter, 'user');
+
+    expect(within(dialog).getByText('Create the API')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Write src/api.ts')).not.toBeInTheDocument();
+  });
+
+  test('ignores stale tool filters when switching to non-tool replay step types', async () => {
+    vi.stubGlobal('fetch', mockApi());
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+    await within(dialog).findByText('Create the API');
+
+    await user.selectOptions(within(dialog).getByLabelText('Filter by result status'), 'success');
+    expect(within(dialog).getByText('Write src/api.ts')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Create the API')).not.toBeInTheDocument();
+
+    await user.selectOptions(within(dialog).getByLabelText('Filter by step type'), 'user');
+
+    expect(within(dialog).getByText('Create the API')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Write src/api.ts')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/No steps match/i)).not.toBeInTheDocument();
+  });
+
+  test('omits malformed replay timestamps', async () => {
+    const replay = defaultReplayFixture() as { steps: Array<Record<string, unknown>> };
+    replay.steps[0] = { ...replay.steps[0], timestamp: 'not-a-date' };
+    vi.stubGlobal('fetch', mockApi({ sessionReplayResponse: replay }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+    await within(dialog).findByText('Create the API');
+
+    const epochTime = new Date(0).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    expect(within(dialog).queryByText(epochTime)).not.toBeInTheDocument();
+  });
+
+  test('filters replay steps by tool result status without keeping non-tool steps', async () => {
+    vi.stubGlobal('fetch', mockApi());
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+    await within(dialog).findByText('Create the API');
+
+    await user.selectOptions(within(dialog).getByLabelText('Filter by result status'), 'success');
+
+    expect(within(dialog).getByText('Write src/api.ts')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Create the API')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Read src/api.ts')).not.toBeInTheDocument();
+  });
+
+  test('renders retry and error steps', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      sessionReplayResponse: {
+        status: 'available',
+        supported: true,
+        available: true,
+        sessionId: 'session-1',
+        version: 1,
+        createdAt: '2026-06-01T00:00:00.000Z',
+        summary: {
+          totalSteps: 2,
+          toolBreakdown: [],
+          filesModified: [],
+          filesModifiedTruncated: false,
+          durationMs: 1000,
+          startTimestamp: '2026-06-01T00:00:00.000Z',
+          endTimestamp: '2026-06-01T00:00:01.000Z',
+          userRequests: 0,
+          retryAttempts: 1,
+          repeatedAttempts: 0,
+        },
+        steps: [
+          {
+            type: 'retry',
+            stepNumber: 1,
+            retryType: 'api',
+            attempt: 2,
+            maxRetries: 3,
+            retryDelayMs: 500,
+            reason: 'Rate limited by provider',
+            reasonTruncated: false,
+            commands: [],
+            commandsTruncated: false,
+            timestamp: '2026-06-01T00:00:00.000Z',
+          },
+          {
+            type: 'error',
+            stepNumber: 2,
+            error: 'Connection refused',
+            errorTruncated: false,
+            timestamp: '2026-06-01T00:00:01.000Z',
+          },
+        ],
+        stepsTruncated: false,
+        diagnostics: [],
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText('Rate limited by provider')).toBeInTheDocument();
+    expect(within(dialog).getByText('Connection refused')).toBeInTheDocument();
+  });
+
+  test('shows conflict state when multiple replay files collide', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      sessionReplayResponse: {
+        status: 'conflict',
+        supported: true,
+        available: true,
+        sessionId: 'session-1',
+        diagnostics: [{ level: 'warn', message: 'Multiple conflicting replay files found.' }],
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    expect(await within(dialog).findByText(/Multiple conflicting replay files were found/i)).toBeInTheDocument();
+  });
+
+  test('normalizes a legacy partial replay payload without crashing', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      sessionReplayResponse: {
+        status: 'available',
+        supported: true,
+        available: true,
+        sessionId: 'session-1',
+        version: 1,
+        createdAt: null,
+        // summary missing toolBreakdown; filesModified contains non-string; steps has null element
+        summary: {
+          totalSteps: 1,
+          durationMs: 100,
+          startTimestamp: '2026-06-01T00:00:00.000Z',
+          endTimestamp: '2026-06-01T00:00:00.100Z',
+          userRequests: 1,
+          filesModified: [42, 'valid.ts', null],
+        },
+        steps: [
+          null,
+          { type: 'unknown-future-type', stepNumber: 99 },
+          { type: 'tool', stepNumber: 2 },
+          {
+            type: 'tool',
+            stepNumber: 1,
+            toolName: 'Read',
+            toolUseId: 'tool-1',
+            inputSummary: 'Read file',
+            inputSummaryTruncated: false,
+            resultStatus: 'success',
+            resultPreview: null,
+            resultPreviewTruncated: false,
+            durationMs: 10,
+            timestamp: '2026-06-01T00:00:00.000Z',
+            filesModified: [],
+            filesModifiedTruncated: false,
+            repeatedAttemptNumber: null,
+            isRepeatedAttempt: false,
+          },
+        ],
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /project-a main/i });
+    await user.click(screen.getAllByRole('link', { name: /^Sessions$/i })[0]!);
+    await user.click(screen.getByLabelText('Open details for Build the API'));
+
+    const dialog = await screen.findByRole('dialog', { name: /session details/i });
+    await user.click(within(dialog).getByRole('tab', { name: /replay/i }));
+
+    // Should not crash — renders the timeline panel with defaults
+    expect(await within(dialog).findByText('Replay Timeline')).toBeInTheDocument();
+    expect(within(dialog).getByText('Read file')).toBeInTheDocument();
+  });
+
   test('debounces additional log window requests as the log view scrolls', async () => {
     const fetchMock = mockApi({ logTotalLines: 1200 });
     vi.stubGlobal('fetch', fetchMock);
@@ -2632,6 +3086,10 @@ type MockApiOptions = {
   sessionChangesPromiseOnce?: Promise<Response>;
   sessionChangesStatus?: number;
   sessionChangesResponse?: unknown;
+  sessionReplayStatus?: number;
+  sessionReplayErrorResponse?: unknown;
+  sessionReplayPromiseOnce?: Promise<Response>;
+  sessionReplayResponse?: unknown;
   sessionDetailsPromiseOnce?: Promise<Response>;
   sessionDetails?: unknown;
   sessionsPromiseOnce?: Promise<Response>;
@@ -2650,6 +3108,7 @@ function mockApi(options: MockApiOptions = {}) {
   let usedProviderProfilesPromise = false;
   let usedSessionChangesPromise = false;
   let usedSessionDetailsPromise = false;
+  let usedSessionReplayPromise = false;
   let usedSessionsPromise = false;
   let usedTasksPromise = false;
 
@@ -2763,6 +3222,23 @@ function mockApi(options: MockApiOptions = {}) {
         return jsonResponse({ error: `Injected change review ${options.sessionChangesStatus}` }, options.sessionChangesStatus);
       }
       return jsonResponse(options.sessionChangesResponse ?? sessionChangesFixture());
+    }
+
+    if (path === '/api/projects/project-1/sessions/session-1/replay') {
+      if (options.sessionReplayPromiseOnce && !usedSessionReplayPromise) {
+        usedSessionReplayPromise = true;
+        return options.sessionReplayPromiseOnce;
+      }
+      if (options.sessionReplayStatus) {
+        return jsonResponse(
+          options.sessionReplayErrorResponse ?? { error: `Injected replay ${options.sessionReplayStatus}` },
+          options.sessionReplayStatus,
+        );
+      }
+      if (options.sessionReplayResponse !== undefined) {
+        return jsonResponse(options.sessionReplayResponse);
+      }
+      return jsonResponse(defaultReplayFixture());
     }
 
     if (path === '/api/projects/project-1/plans') {
@@ -2900,6 +3376,77 @@ function mockApi(options: MockApiOptions = {}) {
 
     return jsonResponse({ error: 'Not found' }, 404);
   });
+}
+
+function defaultReplayFixture(): unknown {
+  return {
+    status: 'available',
+    supported: true,
+    available: true,
+    sessionId: 'session-1',
+    version: 1,
+    createdAt: '2026-06-01T00:00:00.000Z',
+    summary: {
+      totalSteps: 3,
+      toolBreakdown: [
+        { tool: 'Write', count: 1 },
+        { tool: 'Read', count: 1 },
+      ],
+      filesModified: ['src/api.ts'],
+      filesModifiedTruncated: false,
+      durationMs: 5000,
+      startTimestamp: '2026-06-01T00:00:00.000Z',
+      endTimestamp: '2026-06-01T00:00:05.000Z',
+      userRequests: 1,
+      retryAttempts: 0,
+      repeatedAttempts: 0,
+    },
+    steps: [
+      {
+        type: 'user',
+        stepNumber: 1,
+        content: 'Create the API',
+        contentTruncated: false,
+        timestamp: '2026-06-01T00:00:00.000Z',
+      },
+      {
+        type: 'tool',
+        stepNumber: 2,
+        toolName: 'Write',
+        toolUseId: 'tool-1',
+        inputSummary: 'Write src/api.ts',
+        inputSummaryTruncated: false,
+        resultStatus: 'success',
+        resultPreview: 'File written successfully',
+        resultPreviewTruncated: false,
+        durationMs: 100,
+        timestamp: '2026-06-01T00:00:02.000Z',
+        filesModified: ['src/api.ts'],
+        filesModifiedTruncated: false,
+        repeatedAttemptNumber: null,
+        isRepeatedAttempt: false,
+      },
+      {
+        type: 'tool',
+        stepNumber: 3,
+        toolName: 'Read',
+        toolUseId: 'tool-2',
+        inputSummary: 'Read src/api.ts',
+        inputSummaryTruncated: false,
+        resultStatus: 'error',
+        resultPreview: 'File not found',
+        resultPreviewTruncated: false,
+        durationMs: 50,
+        timestamp: '2026-06-01T00:00:03.000Z',
+        filesModified: [],
+        filesModifiedTruncated: false,
+        repeatedAttemptNumber: null,
+        isRepeatedAttempt: false,
+      },
+    ],
+    stepsTruncated: false,
+    diagnostics: [],
+  };
 }
 
 function backgroundSessionFixture(overrides: Partial<BackgroundSessionSummary> = {}): BackgroundSessionSummary {

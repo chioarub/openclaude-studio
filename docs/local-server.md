@@ -123,6 +123,32 @@ Endpoints:
 
 Studio reports `recordedStatus` from the metadata file. It does not probe processes or claim a session is live; `processPresence` is always `unknown` in this version. Studio never manages, kills, or spawns processes — there are no write or control endpoints.
 
+## Session Replay
+
+The local server exposes an optional, read-only replay timeline for sessions that have a structured replay sidecar file. Replay sidecars (`<sessionId>.replay.json`) are produced by newer OpenClaude versions alongside transcript files.
+
+Read scope is limited to:
+
+```text
+<authorized transcript directory>/<validated-session-id>.replay.json
+```
+
+The server derives the replay filename from a strictly validated session ID and the already-authorized transcript roots for that project. It never accepts a replay path from the browser, never uses a path embedded in replay JSON as read authorization, and rejects symlinks and non-regular files.
+
+Endpoint:
+
+- `GET /api/projects/:projectId/sessions/:sessionId/replay` — returns a redacted, bounded replay timeline.
+
+The response is a discriminated union on `status`:
+
+- `available` — the replay file was parsed successfully; summary and steps are included.
+- `unavailable` — no replay file exists for this session (common for sessions created by older OpenClaude versions).
+- `unsupported_version` — a replay file exists but its schema version is not recognized by this server.
+- `malformed` — a replay file exists but is corrupt, oversized, or fails validation.
+- `conflict` — multiple conflicting replay files were found across authorized transcript roots.
+
+The server caps the replay file size (1 MiB), the number of steps (500), preview and summary string lengths, and the files-modified list size. All string fields are redacted for likely secrets before being returned. Raw tool input objects are never returned — only the upstream `inputSummary` field. Replay availability depends on the OpenClaude version and whether a sidecar was generated for that session.
+
 ## Troubleshooting
 
 See [Troubleshooting](troubleshooting.md) for connection failures, custom ports, token mode, missing projects, and safe bug-reporting guidance.

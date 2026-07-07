@@ -32,6 +32,7 @@ The current MVP line includes:
 - Conversation timeline with user messages, assistant messages, tool calls, tool results, and errors
 - Read-only Session Change Review with bounded, redacted diffs from file-history backups and current project files
 - Changed files, token usage, cost summary, linked plans, linked tasks, and file-history context for sessions
+- Optional session replay timeline with structured execution steps, tool breakdowns, retry tracking, and redacted summaries (requires a newer OpenClaude version that produces replay sidecar files and a Studio server that exposes the replay endpoint)
 - Plans & Tasks view with checklist progress, linked sessions, task status groups, and detail panes
 - Read-only provider profile management with active profile inspection, provider recognition, credential-pool metadata, validation diagnostics, and safe templates
 - Project-scoped diagnostics
@@ -238,6 +239,7 @@ Shipped in the MVP line:
 - [x] Session Change Review with read-only per-session diffs, backup status, diagnostics, and risk flags
 - [x] Plans and tasks views linked back to sessions
 - [x] File history and backup context for selected sessions
+- [x] Session replay timeline with structured steps, tool breakdowns, retry tracking, and redacted summaries (when replay sidecars and a replay-capable Studio server are available)
 - [x] Active provider inspection with recognition and credential metadata
 - [x] Project-scoped diagnostics
 - [x] Debug log viewing, filtering, search, virtualized scrolling, and log-message copy
