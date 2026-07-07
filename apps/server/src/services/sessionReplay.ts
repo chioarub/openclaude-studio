@@ -35,9 +35,11 @@ const MAX_USER_CONTENT_LENGTH = 1000;
 const MAX_REASON_LENGTH = 480;
 const MAX_COMMAND_LENGTH = 480;
 const MAX_COMMANDS = 10;
-const MAX_CREATED_AT_LENGTH = 64;
+const MAX_TIMESTAMP_LENGTH = 64;
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+const ISO_TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 const MISSING_SESSION_TRANSCRIPT_MESSAGE = 'No project-scoped transcript found for this session.';
 
 /**
@@ -264,7 +266,7 @@ function parseReplayIndex(sessionId: string, raw: unknown): SessionReplayRespons
     available: true,
     sessionId,
     version,
-    createdAt: parseCreatedAt(raw.createdAt),
+    createdAt: parseTimestamp(raw.createdAt),
     summary: summaryResult.summary,
     steps: boundedSteps,
     stepsTruncated: truncated,
@@ -610,18 +612,16 @@ function parseTimestamp(value: unknown): string | null {
   if (typeof value !== 'string' || value.length === 0) {
     return null;
   }
-  const parsed = Date.parse(value);
-  if (Number.isNaN(parsed)) {
+  const trimmed = value.trim();
+  const sanitized = truncateRedactedString(trimmed, MAX_TIMESTAMP_LENGTH);
+  if (sanitized.truncated || sanitized.value !== trimmed || !ISO_TIMESTAMP_PATTERN.test(trimmed)) {
     return null;
   }
-  return value;
-}
-
-function parseCreatedAt(value: unknown): string | null {
-  if (typeof value !== 'string') {
+  const parsed = Date.parse(trimmed);
+  if (!Number.isFinite(parsed)) {
     return null;
   }
-  return truncateRedactedString(value, MAX_CREATED_AT_LENGTH).value;
+  return new Date(parsed).toISOString();
 }
 
 function truncateRedactedString(

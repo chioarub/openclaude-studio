@@ -380,6 +380,41 @@ describe('readSessionReplay', () => {
     }
   });
 
+  test('does not return parseable timestamp strings with embedded secrets', async () => {
+    const { projectPath, projectDir, paths, cleanup } = await setup();
+    try {
+      const parseableSecretTimestamp = '2026-06-01 (token=secret123)';
+      const highPrecisionTimestamp = '2026-06-01T00:00:00.123456789Z';
+      const data = validReplay('session-1');
+      data.createdAt = parseableSecretTimestamp;
+      (data.summary as Record<string, unknown>).startTimestamp = parseableSecretTimestamp;
+      (data.summary as Record<string, unknown>).endTimestamp = parseableSecretTimestamp;
+      const steps = data.steps as Record<string, unknown>[];
+      steps[0] = {
+        ...steps[0],
+        timestamp: parseableSecretTimestamp,
+      };
+      steps[1] = {
+        ...steps[1],
+        timestamp: highPrecisionTimestamp,
+      };
+      await writeReplay(projectDir, projectPath, 'session-1', data);
+
+      const result = await readSessionReplay(paths.projectsDir, { path: projectPath }, 'session-1');
+
+      expect(result.status).toBe('available');
+      if (result.status !== 'available') return;
+      expect(result.createdAt).toBeNull();
+      expect(result.summary.startTimestamp).toBeNull();
+      expect(result.summary.endTimestamp).toBeNull();
+      expect(result.steps[0]?.timestamp).toBeNull();
+      expect(result.steps[1]?.timestamp).toBe('2026-06-01T00:00:00.123Z');
+      expect(JSON.stringify(result)).not.toContain('secret123');
+    } finally {
+      await cleanup();
+    }
+  });
+
   test('returns malformed for an oversized file', async () => {
     const { projectPath, projectDir, paths, cleanup } = await setup();
     try {
