@@ -20,8 +20,8 @@
     "test:e2e": "playwright test"
   },
   "devDependencies": {
-    "@playwright/test": "^1.61.1",
-    "concurrently": "^9.2.3",
+    "@playwright/test": "^1.62.0",
+    "concurrently": "^9.2.4",
     "typescript": "^5.9.0"
   }
 }
