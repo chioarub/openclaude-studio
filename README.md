@@ -1,3 +1,5 @@
+
+
 # OpenClaude Studio
 
 [![CI](https://github.com/chioarub/openclaude-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/chioarub/openclaude-studio/actions/workflows/ci.yml)
@@ -125,6 +127,8 @@ https://openclaude-studio.pages.dev/
 The browser UI connects to `http://127.0.0.1:43110` by default. If the local server is not running, the app will show the command above and the API URL it expected to reach. See [Troubleshooting](docs/troubleshooting.md) for common setup and connection issues.
 
 ## Local Development
+
+Run these commands from the repository root.
 
 Install dependencies:
 
